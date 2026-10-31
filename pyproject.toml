@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdfsummary"
+version = "0.1.0"
+description = "PDF 책에 형광펜·밑줄·손글씨로 표시한 부분만 뽑아 요약본을 만듭니다."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pymupdf>=1.24",
+    "numpy>=1.24",
+    "anthropic>=2.3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+pdfsummary = "pdfsummary.cli:main"
+
+[tool.setuptools]
+packages = ["pdfsummary"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

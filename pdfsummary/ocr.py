@@ -106,7 +106,7 @@ class OcrEngine:
         self._engine = None
         self._lock = threading.Lock()
         try:
-            from rapidocr import RapidOCR
+            from rapidocr import LangRec, ModelType, OCRVersion, RapidOCR
         except ImportError:
             self.error = "글자 인식 엔진(rapidocr)이 설치되어 있지 않습니다: pip install rapidocr onnxruntime"
             return
@@ -118,9 +118,9 @@ class OcrEngine:
             "Global.log_level": "error",
             "Global.return_word_box": True,
             "Global.return_single_char_box": True,
-            "Rec.lang_type": "korean",
-            "Rec.ocr_version": "PP-OCRv5",
-            "Rec.model_type": "mobile",
+            "Rec.lang_type": LangRec.KOREAN,
+            "Rec.ocr_version": OCRVersion.PPOCRV5,
+            "Rec.model_type": ModelType.MOBILE,
             "Rec.model_path": str(model),
         })
 

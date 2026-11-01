@@ -65,7 +65,7 @@ test("full flow: upload → colors → run → result", async () => {
   assert.deepEqual(colors.map((x) => x.name), ["노랑", "분홍", "초록"]);
   const flags = colors.map((x) => ({ ...x, on: x.name !== "초록" }));
   const job = await c.run(main.id, orig.id, {
-    group_by: "chapter", context: "sentence", handwriting: "image",
+    style: "list", scope: "focus", group_by: "chapter", context: "sentence", handwriting: "image",
     colors: colorFilters(flags), labels: { yellow: "핵심" }, title: "효소",
   });
   let st2 = await c.job(job);

@@ -42,19 +42,44 @@ def find_highlights(page: pymupdf.Page, page_index: int) -> list[Mark]:
     cells = mask[: gh * CELL, : gw * CELL].reshape(gh, CELL, gw, CELL).mean(axis=(1, 3)) > 0.3
 
     marks = []
+    H, W = mask.shape
     for (y0, x0, y1, x1), fill in highlight_boxes(cells):
         bh, bw = y1 - y0, x1 - x0
         # 글자 줄 모양의 띠만 (너무 작거나, 사진처럼 큰 덩어리는 제외)
         if bh < 2 or bw < 5 or fill < 0.45:
             continue
-        if bh * CELL / zoom > 60 and bw < 2 * bh:
-            continue
         px0, py0, px1, py1 = x0 * CELL, y0 * CELL, x1 * CELL, y1 * CELL
+        if not looks_like_highlighter(img, mask, (px0, py0, px1, py1), (W, H), zoom):
+            continue
         region = img[py0:py1, px0:px1][mask[py0:py1, px0:px1]]
         rgb = tuple(float(v) for v in region.mean(axis=0)) if len(region) else (1, 1, 0)
         rect: Rect = (px0 / zoom, py0 / zoom, px1 / zoom, py1 / zoom)
         marks.append(Mark(page_index, HIGHLIGHT, rect, SRC_SCAN, color=_saturate(rgb), parts=[rect]))
     return _merge_lines(marks)
+
+
+def looks_like_highlighter(img: np.ndarray, mask: np.ndarray, box, size, zoom: float) -> bool:
+    """색 영역이 '형광펜'인지, 책에 원래 인쇄된 것(색 글씨·머리 띠·뱃지)인지 가른다.
+
+    - 형광펜은 글자 '뒤 바탕'을 칠한다 → 상자 안 대부분이 색이고(채움 50% 이상), 그 밑에 검은 글자가 있다.
+    - 책의 색 글씨는 글자 획만 색이다 → 상자 안 색은 35% 이하, 검은 글자는 거의 없다.
+    - 머리 띠·쪽 장식은 페이지 가장자리에 붙어 있거나, 글자 없이 크게 칠해져 있다.
+    """
+    x0, y0, x1, y1 = box
+    W, H = size
+    sub = mask[y0:y1, x0:x1]
+    if sub.size == 0:
+        return False
+    fill = float(sub.mean())
+    region = img[y0:y1, x0:x1]
+    lum = 0.299 * region[..., 0] + 0.587 * region[..., 1] + 0.114 * region[..., 2]
+    tint_lum = float(np.median(lum[sub])) if sub.any() else 1.0
+    # 글자 픽셀 = 형광펜 색보다 확연히 어두운 픽셀 (형광펜 밑 검은 글자, 앱이 색을 덮어 칠해 살짝 물든 글자 모두)
+    dark = float((lum < tint_lum * 0.65).mean())
+    edge = 0.015
+    touches_edge = x0 <= W * edge or y0 <= H * edge or x1 >= W * (1 - edge) or y1 >= H * (1 - edge)
+    too_tall = (y1 - y0) / zoom > 50   # 한 번 그은 형광펜은 한두 줄 높이
+    return fill >= 0.5 and dark >= 0.03 and not touches_edge and not too_tall
 
 
 def is_highlighter_color(img: np.ndarray) -> np.ndarray:

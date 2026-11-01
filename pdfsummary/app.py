@@ -162,6 +162,8 @@ def build_argv(main: Upload, original: Optional[Upload], out_dir: Path, o: dict)
         "handwriting": ("--handwriting", {"auto", "ai", "image", "both"}),
         "headings": ("--headings", {"auto", "toc", "font"}),
         "scan": ("--scan", {"auto", "on", "off"}),
+        "style": ("--style", {"booklet", "list"}),
+        "scope": ("--scope", {"focus", "all"}),
     }
     for key, (flag, allowed) in choice.items():
         v = o.get(key)

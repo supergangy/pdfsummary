@@ -23,6 +23,14 @@ type Slot = { picked: Picked; info?: UploadInfo; ratio: number; error?: string }
 type ColorRow = ColorInfo & { on: boolean };
 
 const NOTES = {
+  style: {
+    booklet: "AI가 책 내용과 내 표시로 주제별 핵심 정리를 만들어요: 개념 → 구조(비교 표) → 예상 문제 → 시험 포인트(출제 빈도 ★).",
+    list: "내가 칠한 부분을 목차·쪽·색별로 그대로 모아요. AI 없이도 돼요.",
+  },
+  scope: {
+    focus: "내가 표시한 주제만 정리하고, 이해에 필요한 앞뒤 설명을 곁들여요.",
+    all: "넣은 쪽 전체를 정리해요. 표시한 부분은 형광펜으로 강조돼요.",
+  },
   group_by: {
     chapter: "큰 제목 › 작은 제목 아래에 모아요. 맨 위에 목차가 붙어요.",
     page: "쪽 순서대로 모아요. 표시마다 어느 단원인지 적어 줘요.",
@@ -66,8 +74,8 @@ function Main() {
   const [colorsBusy, setColorsBusy] = useState(false);
   const [colorsErr, setColorsErr] = useState("");
   const [labels, setLabels] = useState<Record<string, string>>({});
-  const [opts, setOpts] = useState<Pick<RunOptions, "group_by" | "context" | "handwriting">>({
-    group_by: "chapter", context: "sentence", handwriting: "image",
+  const [opts, setOpts] = useState<Pick<RunOptions, "style" | "scope" | "group_by" | "context" | "handwriting">>({
+    style: "list", scope: "focus", group_by: "chapter", context: "sentence", handwriting: "image",
   });
 
   const [job, setJob] = useState<{ id: string; state?: JobState } | null>(null);
@@ -101,6 +109,7 @@ function Main() {
   useEffect(() => {
     setOpts((o) => ({
       ...o,
+      style: aiOk ? "booklet" : "list",
       context: aiOk ? (o.context === "sentence" ? "ai" : o.context) : o.context === "ai" ? "sentence" : o.context,
       handwriting: aiOk ? (o.handwriting === "image" ? "auto" : o.handwriting) : "image",
     }));
@@ -303,6 +312,23 @@ function Main() {
         {mainId && (
           <Card step={3} title="정리 방법">
             <Segmented
+              label="결과 모양"
+              value={opts.style}
+              onChange={(v) => setOpts({ ...opts, style: v })}
+              options={[{ value: "booklet", label: "핵심 정리 요약집", disabled: !aiOk }, { value: "list", label: "표시 모음" }]}
+              note={NOTES.style[opts.style]}
+            />
+            {opts.style === "booklet" ? (
+              <Segmented
+                label="정리 범위"
+                value={opts.scope}
+                onChange={(v) => setOpts({ ...opts, scope: v })}
+                options={[{ value: "focus", label: "내가 표시한 주제 중심" }, { value: "all", label: "책 내용 전체" }]}
+                note={NOTES.scope[opts.scope]}
+              />
+            ) : (
+            <>
+            <Segmented
               label="묶는 방식"
               value={opts.group_by}
               onChange={(v) => setOpts({ ...opts, group_by: v })}
@@ -331,6 +357,8 @@ function Main() {
               ]}
               note={NOTES.handwriting[opts.handwriting]}
             />
+            </>
+            )}
             {!aiOk && <Hint>설정에 Claude API 키를 넣으면 AI 기능을 쓸 수 있어요.</Hint>}
             <Button kind="primary" label="요약 만들기" onPress={run} disabled={!canRun} busy={running} style={{ marginTop: 16, alignSelf: "flex-start", paddingHorizontal: 28 }} />
           </Card>

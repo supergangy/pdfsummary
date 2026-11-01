@@ -75,6 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
                    help="문맥 보충: sentence=표시한 부분이 든 문장 전체를 같이 보여 줌, "
                         "ai=거기에 더해 AI가 단원 개요와 표시마다 연결 설명을 붙임, "
                         "auto=AI를 쓸 수 있으면 ai, 아니면 sentence(기본), none=표시한 부분만")
+    p.add_argument("--style", choices=["auto", "booklet", "list"], default="auto",
+                   help="결과 모양: booklet=AI가 책 내용과 내 표시로 만든 핵심 정리 요약집(표·목록·출제 빈도), "
+                        "list=표시한 부분 모음, auto=AI를 쓸 수 있으면 booklet(기본)")
+    p.add_argument("--scope", choices=["auto", "focus", "all"], default="auto",
+                   help="요약집 범위: focus=내가 표시한 주제 중심, all=책 내용 전체(표시는 강조), auto=표시가 있으면 focus(기본)")
     p.add_argument("--headings", choices=["auto", "toc", "font"], default="auto",
                    help="목차 찾기: toc=PDF 책갈피만, font=글자 크기·굵기로 찾은 제목만, auto=둘 다(기본)")
     p.add_argument("--label", action="append", default=[], metavar="색=이름",
@@ -202,11 +207,22 @@ def _main(argv, log, progress, api_key, opened: list) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     marks = merge_adjacent(marks, line_heights)
 
+    style = args.style
+    if style == "auto":
+        from .ai import has_credentials
+
+        style = "booklet" if not args.no_ai and (api_key or has_credentials()) else "list"
     mode = "image" if args.no_ai else args.handwriting
     context = args.context
+    if style == "booklet":
+        # 요약집은 쪽 이미지와 표시 그림을 한 번에 보고 정리하므로 손글씨·문맥을 따로 AI에 묻지 않는다
+        mode, context = "image", ("sentence" if context in ("auto", "ai") else context)
     need_ai = [m for m in marks if m.image and (m.kind == HANDWRITING or not m.text)]
-    wants_ai = (mode != "image" and need_ai) or (not args.no_ai and context in ("auto", "ai"))
-    reader = _make_reader(args, out_dir, log, api_key) if wants_ai else None
+    wants_ai = style == "booklet" or (mode != "image" and need_ai) or (not args.no_ai and context in ("auto", "ai"))
+    reader = _make_reader(args, out_dir, log, api_key) if wants_ai and not args.no_ai else None
+    if style == "booklet" and reader is None:
+        log("ℹ️  요약집은 AI(Claude)가 있어야 만들 수 있어요. 대신 표시한 부분 모음을 만듭니다.")
+        style = "list"
     if context == "auto":
         context = "ai" if reader is not None else "sentence"
     elif context == "ai" and reader is None:
@@ -249,6 +265,35 @@ def _main(argv, log, progress, api_key, opened: list) -> int:
 
     show_path = args.group_by != "chapter"   # 쪽별·색별로 볼 때는 표시마다 어느 단원인지 적어 준다
     written = []
+
+    if style == "booklet":
+        units = _make_booklet(args, doc, marks, pages, reader, opts, log, prog)
+        if units:
+            from . import render_booklet as rb
+
+            mark_css = _dominant_mark_color(marks)
+            if "html" in formats:
+                path = out_dir / "요약.html"
+                path.write_text(rb.to_html(title, units, args.pdf.name, mark_css), encoding="utf-8")
+                written.append(path)
+            if "md" in formats:
+                path = out_dir / "요약.md"
+                path.write_text(rb.to_markdown(title, units, args.pdf.name), encoding="utf-8")
+                written.append(path)
+            if "json" in formats:
+                path = out_dir / "요약.json"
+                path.write_text(rb.to_json(title, units), encoding="utf-8")
+                written.append(path)
+            # 무엇을 표시로 찾았는지 확인용
+            path = out_dir / "표시모음.html"
+            path.write_text(to_html(title, sections, labels, args.pdf.name, show_path), encoding="utf-8")
+            written.append(path)
+            log(f"✅ 요약집: 주제 {len(units)}개 · {stats_line(marks) or '표시 없음'}")
+            for p in written:
+                log(f"   → {p}")
+            return 0
+        log("ℹ️  요약집을 만들지 못해 표시한 부분 모음으로 대신합니다.")
+
     if "html" in formats:
         path = out_dir / "요약.html"
         path.write_text(to_html(title, sections, labels, args.pdf.name, show_path), encoding="utf-8")
@@ -327,6 +372,33 @@ def _make_reader(args, out_dir: Path, log, api_key: str | None = None):
         log(f"ℹ️  {reader.disabled_reason} — AI 없이 정리합니다.")
         return None
     return reader
+
+
+def _make_booklet(args, doc, marks, pages, reader, opts, log, prog):
+    from .booklet import estimate_cost, plan_chunks, write_booklet
+
+    scope = args.scope
+    if scope == "auto" or (scope == "focus" and not marks):
+        if not marks:
+            log("ℹ️  표시한 부분을 찾지 못해 이 쪽들 전체를 요약집으로 정리합니다.")
+        scope = "focus" if marks else "all"
+    chunks = plan_chunks(doc.page_count, marks, scope, pages)
+    if not chunks:
+        return []
+    n_pages, cost = estimate_cost(chunks)
+    log(f"🧠 AI로 요약집 만드는 중: {n_pages}쪽, 요청 {len(chunks)}번 (예상 비용 약 ${cost:.2f}, 다시 만들면 캐시로 무료)")
+    return write_booklet(reader, doc, chunks, scope, opts.texts.get, prog("   요약집"))
+
+
+def _dominant_mark_color(marks) -> str:
+    """요약집의 ==형광펜== 색: 내가 가장 많이 쓴 형광펜 색 (연하게)."""
+    from collections import Counter
+
+    from .colors import COLOR_NAMES, color_key
+
+    c = Counter(color_key(m.color) for m in marks if m.kind == HIGHLIGHT and m.color)
+    key = c.most_common(1)[0][0] if c else "yellow"
+    return {"black": "#e2e2e2", "gray": "#e8e8e8"}.get(key, COLOR_NAMES[key][1])
 
 
 def _read_with_ai(reader, todo, prog) -> None:

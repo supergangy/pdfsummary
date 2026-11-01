@@ -295,3 +295,46 @@ def make_textbook(path: str) -> None:
                 a.update()
                 break
     doc.saveIncr()
+
+
+# ── 문제집처럼 책에 원래 색 글씨·머리 띠·뱃지가 인쇄된 스캔 (형광펜과 구분 시험용) ──────────
+
+def make_printed_color_scan(path: str) -> None:
+    """책 자체의 청록색 강조 글씨, 하늘색 머리 띠, '23년.기사' 뱃지 + 학생이 그은 노란·하늘색 형광펜 하나씩.
+    형광펜은 실제 펜처럼 '곱하기'로 칠한다 (밑의 검은 글자는 그대로 검정)."""
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    tmp = pymupdf.open()
+    p = tmp.new_page()
+    teal = (0.0, 0.55, 0.65)
+    p.draw_rect(pymupdf.Rect(0, 0, p.rect.width, 60), color=None, fill=(0.47, 0.82, 0.97))   # 머리 띠
+    p.insert_text((60, 100), "4) SNMP 접근 제한 설정", fontname=FONT, fontsize=14, color=teal)
+    p.insert_text((230, 100), "23년.기사", fontname=FONT, fontsize=8, color=teal)          # 기출 뱃지
+    lines = [
+        ("보안 기능이 없으며 community string만 일치하면 모든 정보를 얻을 수 있음", None),
+        ("community string은 SNMP 데몬과 클라이언트가 인증을 위해 쓰는 패스워드", teal),   # 책의 색 글씨
+        ("가장 많이 사용되는 SNMPv2c는 SNMPv2에 복잡한 보안 기능을 제거한 버전", None),
+        ("SNMPv3는 데이터 인증, 암호 기능, 재사용 방지 등 개선된 보안 서비스를 제공", None),
+    ]
+    y = 140
+    for text, color in lines:
+        p.insert_text((60, y), text, fontname=FONT, fontsize=11, color=color or (0, 0, 0))
+        y += 30
+    pix = p.get_pixmap(dpi=150)
+    a = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[..., :3].astype(np.float32) / 255
+    z = 150 / 72
+
+    def marker(x0, y0, x1, y1, rgb):
+        a[int(y0 * z):int(y1 * z), int(x0 * z):int(x1 * z)] *= np.array(rgb)
+
+    marker(58, 128, 390, 144, (1.0, 0.93, 0.35))     # 1번 줄 노랑
+    marker(58, 218, 400, 234, (0.62, 0.85, 1.0))     # 4번 줄 하늘색 (책의 청록 글씨와 헷갈리기 쉬운 색)
+    buf = io.BytesIO()
+    Image.fromarray((np.clip(a, 0, 1) * 255).astype(np.uint8)).save(buf, "JPEG", quality=90)
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_image(page.rect, stream=buf.getvalue())
+    doc.save(path)

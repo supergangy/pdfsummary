@@ -60,3 +60,15 @@ def test_scanned_page(sample_pdf):
 def test_scan_off(sample_pdf):
     marks, _ = _marks(sample_pdf, pages=[2], scan="off")
     assert marks == []
+
+
+def test_printed_color_is_not_highlight(tmp_path):
+    """문제집에 원래 인쇄된 색 글씨·머리 띠·뱃지는 형광펜이 아니다. 학생이 그은 형광펜만 찾는다."""
+    import make_sample
+
+    path = tmp_path / "printed.pdf"
+    make_sample.make_printed_color_scan(str(path))
+    marks, _ = extract(pymupdf.open(path), Options())
+    got = sorted((round(m.rect[1]), color_key(m.color)) for m in marks)
+    assert [c for _, c in got] == ["yellow", "blue"]
+    assert 125 <= got[0][0] <= 135 and 215 <= got[1][0] <= 225

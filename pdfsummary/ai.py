@@ -273,7 +273,14 @@ class AIReader:
         self.save_cache()
 
     def _ask(self, png: Optional[bytes], prompt: str, schema: dict, max_tokens: int) -> Optional[dict]:
-        key = hashlib.sha256(self.model.encode() + b"\0" + prompt.encode() + b"\0" + (png or b"")).hexdigest()
+        return self.ask_content(_content(png, prompt), schema, max_tokens)
+
+    def ask_content(self, content: list[dict], schema: dict, max_tokens: int, effort: str = "medium",
+                    stream: bool = False) -> Optional[dict]:
+        """이미지·글 블록 여러 개를 한 번에 보내고 JSON(스키마대로) 답을 받는다. 같은 요청은 캐시에서."""
+        key = hashlib.sha256(
+            json.dumps([self.model, effort, schema, content], ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
         with self._lock:
             if key in self._cache:
                 return self._cache[key]
@@ -283,17 +290,19 @@ class AIReader:
         if self.model in FALLBACK_MODELS:
             # 안전 분류기가 드물게 거절하면 서버가 알아서 다른 모델로 다시 시도한다
             extra = {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
+        params = dict(
+            model=self.model,
+            max_tokens=max_tokens,
+            **extra,
+            output_config={"effort": effort, "format": {"type": "json_schema", "schema": schema}},
+            messages=[{"role": "user", "content": content}],
+        )
         try:
-            resp = self.client.beta.messages.create(
-                model=self.model,
-                max_tokens=max_tokens,
-                **extra,
-                output_config={
-                    "effort": "medium",
-                    "format": {"type": "json_schema", "schema": schema},
-                },
-                messages=[{"role": "user", "content": _content(png, prompt)}],
-            )
+            if stream:   # 긴 답(요약집)은 스트리밍으로 받아야 시간 초과가 안 난다
+                with self.client.beta.messages.stream(**params) as st:
+                    resp = st.get_final_message()
+            else:
+                resp = self.client.beta.messages.create(**params)
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as e:
             self._disable(f"Claude API 인증 실패 ({e.status_code}). API 키를 확인하세요.")
             return None
@@ -301,10 +310,10 @@ class AIReader:
             self._disable(f"모델 {self.model!r}을(를) 찾을 수 없습니다. --model 값을 확인하세요.")
             return None
         except anthropic.RateLimitError:
-            _warn("요청 한도 초과로 한 부분을 건너뜁니다 (원본 이미지로 남깁니다).")
+            _warn("요청 한도 초과로 한 부분을 건너뜁니다.")
             return None
         except anthropic.APIStatusError as e:
-            _warn(f"Claude API 오류 {e.status_code}: 한 부분을 원본 이미지로 남깁니다.")
+            _warn(f"Claude API 오류 {e.status_code}: 한 부분을 건너뜁니다.")
             return None
         except anthropic.APIConnectionError:
             self._disable("Claude API에 연결할 수 없습니다 (네트워크 확인).")
@@ -314,7 +323,10 @@ class AIReader:
             return None
 
         self.calls += 1
-        if resp.stop_reason in ("refusal", "max_tokens"):
+        if resp.stop_reason == "max_tokens":
+            _warn("AI 답이 너무 길어 잘렸습니다. 이 부분은 건너뜁니다.")
+            return None
+        if resp.stop_reason == "refusal":
             return None
         text = next((b.text for b in resp.content if b.type == "text"), None)
         if not text:
@@ -334,19 +346,17 @@ class AIReader:
                 _warn(reason + " 남은 부분은 AI 없이 원본 이미지로 정리합니다.")
 
 
+def image_block(data: bytes, media_type: str = "image/png") -> dict:
+    return {
+        "type": "image",
+        "source": {"type": "base64", "media_type": media_type, "data": base64.standard_b64encode(data).decode("ascii")},
+    }
+
+
 def _content(png: Optional[bytes], prompt: str) -> list[dict]:
     blocks: list[dict] = []
     if png:
-        blocks.append(
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/png",
-                    "data": base64.standard_b64encode(png).decode("ascii"),
-                },
-            }
-        )
+        blocks.append(image_block(png))
     blocks.append({"type": "text", "text": prompt})
     return blocks
 

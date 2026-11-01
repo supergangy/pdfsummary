@@ -137,6 +137,21 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;margin-top:30px}
 <section class="card hidden" id="optCard">
   <h2><span class="step">3</span>정리 방법</h2>
   <div class="opt">
+    <label>결과 모양</label>
+    <div><div class="seg" data-name="style">
+      <button data-v="booklet" aria-pressed="false" data-needs-ai>핵심 정리 요약집</button>
+      <button data-v="list" aria-pressed="true">표시 모음</button>
+    </div><div class="seg-note" id="noteStyle"></div></div>
+  </div>
+  <div class="opt" id="scopeOpt">
+    <label>정리 범위</label>
+    <div><div class="seg" data-name="scope">
+      <button data-v="focus" aria-pressed="true">내가 표시한 주제 중심</button>
+      <button data-v="all" aria-pressed="false">책 내용 전체</button>
+    </div><div class="seg-note" id="noteScope"></div></div>
+  </div>
+  <div id="listOpts">
+  <div class="opt">
     <label>묶는 방식</label>
     <div><div class="seg" data-name="group_by">
       <button data-v="chapter" aria-pressed="true">목차별</button>
@@ -159,6 +174,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;margin-top:30px}
       <button data-v="image" aria-pressed="true">원본 이미지</button>
       <button data-v="both" aria-pressed="false" data-needs-ai>글 + 원본 같이</button>
     </div><div class="seg-note" id="noteHand"></div></div>
+  </div>
   </div>
 
   <details>
@@ -360,15 +376,21 @@ $("optPages").addEventListener("change", () => { if (S.main) loadColors(); });
 
 // ── 선택지 ────────────────────────────────────────────────────
 const NOTES = {
+  style: { booklet: "AI가 책 내용과 내 표시로 주제별 핵심 정리를 만들어요: 개념 → 구조(비교 표) → 예상 문제 → 시험 포인트(출제 빈도 ★). 내가 칠한 말은 요약집에서도 형광펜으로 보여요.", list: "내가 칠한 부분을 목차·쪽·색별로 그대로 모아요. AI 없이도 돼요." },
+  scope: { focus: "내가 표시한 주제만 정리하고, 이해에 필요한 앞뒤 설명을 곁들여요.", all: "넣은 쪽 전체를 정리해요. 표시한 부분은 형광펜으로 강조돼요. (쪽이 많으면 비용이 늘어요)" },
   group_by: { chapter: "큰 제목 › 작은 제목 아래에 모아요. 맨 위에 목차가 붙어요.", page: "쪽 순서대로 모아요. 표시마다 어느 단원인지 적어 줘요.", color: "색마다 모아요 (예: 노랑=핵심만 따로 복습). 표시마다 단원을 적어 줘요." },
   context: { ai: "칠한 문장이 든 문장 전체 + AI가 단원 개요와 표시마다 1~2문장 연결 설명을 붙여요. AI 글에는 AI 표시가 붙어요.", sentence: "칠한 부분이 든 문장 전체를 보여 주고 칠한 부분만 굵게 해요.", none: "칠한 부분만 그대로 모아요." },
   handwriting: { auto: "AI가 손글씨를 글로 바꿔요. 애매한 글씨는 원본 이미지도 같이 넣어요.", image: "손글씨를 잘라낸 원본 이미지 그대로 넣어요.", both: "AI가 읽은 글과 원본 이미지를 항상 같이 넣어요." },
 };
-const noteId = { group_by: "noteGroup", context: "noteContext", handwriting: "noteHand" };
+const noteId = { style: "noteStyle", scope: "noteScope", group_by: "noteGroup", context: "noteContext", handwriting: "noteHand" };
 function segValue(name) { const b = document.querySelector(`.seg[data-name="${name}"] button[aria-pressed=true]`); return b && b.dataset.v; }
 function setSeg(name, v) {
   document.querySelectorAll(`.seg[data-name="${name}"] button`).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === v)));
   $(noteId[name]).textContent = NOTES[name][v] || "";
+  if (name === "style") {
+    $("listOpts").classList.toggle("hidden", v === "booklet");
+    $("scopeOpt").classList.toggle("hidden", v !== "booklet");
+  }
 }
 document.querySelectorAll(".seg").forEach((seg) => {
   seg.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b && !b.disabled) setSeg(seg.dataset.name, b.dataset.v); });
@@ -382,6 +404,8 @@ function applyKeyState(st) {
   $("aiToggle").textContent = st.has_key ? "키 바꾸기" : "API 키 넣기";
   $("keyClear").classList.toggle("hidden", !st.saved);
   document.querySelectorAll("[data-needs-ai]").forEach((b) => { b.disabled = !st.has_key; b.title = st.has_key ? "" : "API 키를 넣으면 쓸 수 있어요"; });
+  setSeg("style", st.has_key ? "booklet" : "list");
+  setSeg("scope", "focus");
   setSeg("context", st.has_key ? "ai" : "sentence");
   setSeg("handwriting", st.has_key ? "auto" : "image");
 }
@@ -405,6 +429,7 @@ $("runBtn").onclick = async () => {
   const labels = {};
   document.querySelectorAll(".labelInput").forEach((i) => { if (i.value.trim()) labels[i.dataset.family] = i.value.trim(); });
   const options = {
+    style: segValue("style"), scope: segValue("scope"),
     group_by: segValue("group_by"), context: segValue("context"), handwriting: segValue("handwriting"),
     headings: $("optHeadings").value, scan: $("optScan").value, pages: $("optPages").value.trim(),
     title: $("optTitle").value.trim(), no_drawings: $("optNoDraw").checked, no_attach: $("optNoAttach").checked,
@@ -469,6 +494,8 @@ if (DESKTOP) {
 }
 api("/api/state").then(applyKeyState).catch(() => { $("aiText").textContent = "실행 창과 연결이 끊겼어요."; });
 setSeg("group_by", "chapter");
+setSeg("style", "list");
+setSeg("scope", "focus");
 </script>
 </body>
 </html>

@@ -28,6 +28,8 @@ export type ColorInfo = {
 };
 
 export type RunOptions = {
+  style: "booklet" | "list"; // booklet = AI 핵심 정리 요약집
+  scope: "focus" | "all";
   group_by: "chapter" | "page" | "color";
   context: "ai" | "sentence" | "none";
   handwriting: "auto" | "image" | "both";

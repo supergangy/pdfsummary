@@ -11,7 +11,7 @@ import numpy as np
 import pymupdf
 
 from .models import HIGHLIGHT, SRC_DIFF, Mark, Rect, area
-from .pagetext import PageText, join_chars
+from .pagetext import PageText, join_chars, span_of
 from .scan import CELL, _components, _merge_lines, _saturate, highlight_boxes, is_highlighter_color
 from .strokes import Stroke, classify_pen_group, cluster_strokes
 
@@ -75,7 +75,8 @@ def added_marks(
         marks.append(Mark(index, HIGHLIGHT, rect, SRC_DIFF, color=_saturate(rgb), parts=[rect]))
     marks = _merge_lines(marks)
     for m in marks:
-        m.text = join_chars(pt.in_rects(m.parts))
+        chars = pt.in_rects(m.parts)
+        m.text, m.span = join_chars(chars), span_of(chars)
 
     # ── 펜 자국 ───────────────────────────────────────────────
     strokes: list[Stroke] = []

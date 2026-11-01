@@ -21,6 +21,34 @@ pdfsummary 생명과학.pdf
 | `요약.md` + `images/` | 노션 · 옵시디언 · 깃허브에 붙여 넣기 |
 | `요약.json` | 다른 프로그램에서 쓰기 (`--format json`) |
 
+## 요약본은 이렇게 정리됩니다
+
+형광펜 친 문장만 떼어 놓으면 문맥이 끊겨 무슨 말인지 모르기 쉬워서, 세 가지를 같이 붙입니다.
+
+**1. 목차대로 정리** — 큰 제목 › 중간 제목 › 작은 제목 아래에 표시를 모으고, 맨 위에 목차(제목마다 표시 개수)를 붙입니다.
+제목은 PDF 책갈피가 있으면 그것을, 없거나 부족하면 **본문보다 큰 글자·짧은 굵은 줄**을 찾아 씁니다. 매 쪽 반복되는 머리말·쪽 번호는 제목으로 보지 않습니다.
+쪽별·색별로 볼 때(`--group-by page/color`)도 표시마다 `Ⅰ. 세포와 에너지 › 2. 세포 호흡 › 해당 과정`처럼 어느 단원인지 적어 줍니다.
+
+**2. 앞뒤 문장 (AI 없이)** — 표시한 부분이 들어 있는 문장 전체를 보여 주고, 칠한 부분만 굵게 강조합니다.
+
+> 해당 과정은 세포질에서 일어나며 **산소가 필요 없다**.
+
+**3. AI 개요·연결 설명** — Claude가 단원 본문을 읽고
+- 단원마다 **개요** (이 단원이 무엇을 다루고, 표시한 내용이 그 흐름에서 어디쯤인지),
+- 표시마다 **연결 설명** (무엇에 대한 이야기인지, 앞 표시와 어떻게 이어지는지)을 1~2문장으로 붙입니다.
+
+AI가 쓴 글에는 항상 **AI** 표시(Markdown은 💡)가 붙어 내가 칠한 원문과 섞이지 않습니다. 표시한 문장은 AI가 고쳐 쓰지 않고 원문 그대로 둡니다.
+HTML에서는 위쪽 버튼으로 "앞뒤 문장", "AI 개요·설명"을 켜고 끌 수 있습니다.
+
+| `--context` | 결과 |
+|---|---|
+| `auto` (기본) | AI를 쓸 수 있으면 `ai`, 아니면 `sentence` |
+| `ai` | 앞뒤 문장 + AI 개요·연결 설명 |
+| `sentence` | 앞뒤 문장만 |
+| `none` | 표시한 부분만 |
+
+AI 요청은 표시가 있는 단원마다 1번, 하위 단원이 여럿인 상위 단원마다 1번입니다(실행할 때 횟수를 알려 줍니다). 결과는 캐시에 저장되어 다시 실행하면 비용이 들지 않습니다.
+
 ## 무엇을 찾나
 
 필기 앱마다 PDF에 필기를 저장하는 방식이 달라서, 세 가지를 모두 봅니다.
@@ -156,7 +184,9 @@ pdfsummary 책.pdf --no-ai
 | `--handwriting auto/ai/image/both` | 손글씨 처리 방식 (위 표) |
 | `--no-ai` | AI 쓰지 않음 |
 | `--model` | 손글씨를 읽을 Claude 모델 |
-| `--group-by chapter/page/color` | 단원별(기본) / 쪽별 / 색별 |
+| `--group-by chapter/page/color` | 목차별(기본) / 쪽별 / 색별 |
+| `--context auto/ai/sentence/none` | 문맥 보충 (위 표) |
+| `--headings auto/toc/font` | 목차 찾기: 책갈피+글자 모양(기본) / 책갈피만 / 글자 모양만 |
 | `--label 색=이름` | 색 의미. 색 이름은 노랑·주황·빨강·분홍·보라·파랑·초록 또는 yellow·orange·red·pink·purple·blue·green |
 | `--no-attach` | 메모를 형광펜 밑에 붙이지 않고 따로 둠 |
 | `--no-drawings` | 페이지에 굳어진 펜 획은 찾지 않음 (책 속 그림이 손글씨로 잘못 잡힐 때) |
@@ -171,12 +201,15 @@ pdfsummary 책.pdf --no-ai
 - 원본 없이 쓰면, 책 자체의 **반투명한** 색 강조는 내 형광펜과 구분되지 않을 수 있습니다 → `--original` 또는 `--color`.
 - 책 자체에 손그림 같은 곡선 그림이 많으면 손글씨로 잘못 잡힐 수 있습니다 → `--no-drawings`.
 - 밑줄·동그라미 판정은 모양을 보고 추정하는 것이라 가끔 손글씨로 분류될 수 있습니다 (그래도 원본 이미지가 남습니다).
+- 글자 모양으로 찾는 제목은 책 디자인에 따라 빠지거나 본문 강조 줄이 제목으로 잡힐 수 있습니다 → `--headings toc`.
+- 두 단으로 된 책은 읽기 순서·단원 경계가 어긋날 수 있습니다.
 
 ## 개발
 
 ```bash
 pip install -e '.[dev]'
 python examples/make_sample.py sample.pdf   # 세 가지 필기 방식이 담긴 시험용 PDF
+python -c "import sys; sys.path.insert(0,'examples'); import make_sample; make_sample.make_textbook('textbook.pdf')"   # 제목 구조가 있는 교과서
 pdfsummary sample.pdf
 pytest
 ```
@@ -188,6 +221,7 @@ pytest
 | `pdfsummary/scan.py` | 스캔 페이지에서 형광펜 색 영역 찾기 |
 | `pdfsummary/diff.py` | 원본 PDF와 겹쳐 보고 필기본에만 있는 형광펜·펜 자국 찾기 |
 | `pdfsummary/pagetext.py` | 영역 안의 인쇄 글자를 글자 단위로 읽기 순서대로 꺼내기 |
-| `pdfsummary/ai.py` | Claude로 손글씨·스캔 글자 읽기 (구조화된 출력, 캐시) |
-| `pdfsummary/organize.py` | 이어진 형광펜 합치기, 메모 붙이기, 단원/쪽/색별 나누기 |
+| `pdfsummary/ai.py` | Claude로 손글씨·스캔 글자 읽기, 단원 개요·연결 설명 (구조화된 출력, 캐시) |
+| `pdfsummary/outline.py` | 제목 찾기(책갈피 + 글자 크기·굵기), 목차 나무 만들기, 단원 본문 자르기 |
+| `pdfsummary/organize.py` | 이어진 형광펜 합치기, 메모 붙이기, 앞뒤 문장 붙이기, 목차/쪽/색별 나누기 |
 | `pdfsummary/render.py` | HTML · Markdown · JSON 쓰기 |

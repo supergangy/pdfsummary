@@ -27,7 +27,7 @@ from .models import (
     intersects,
     union,
 )
-from .pagetext import PageText, join_chars
+from .pagetext import PageText, join_chars, span_of
 
 
 @dataclass
@@ -146,6 +146,7 @@ def highlight_from_stroke(s: Stroke, pt: PageText, page_index: int) -> Mark:
         source=s.source,
         color=s.color,
         text=join_chars(chars),
+        span=span_of(chars),
     )
 
 
@@ -180,13 +181,13 @@ def classify_pen_group(group: list[Stroke], pt: PageText, page_index: int, line_
     if len(group) <= 2 and h <= max(0.5 * line_h, 4) and w >= 3 * max(h, 1):
         chars = pt.above_line(r, max_gap=0.6 * line_h)
         if chars:
-            return Mark(page_index, UNDERLINE, r, source, color, text=join_chars(chars))
+            return Mark(page_index, UNDERLINE, r, source, color, text=join_chars(chars), span=span_of(chars))
 
     # 2) 동그라미/네모: 안쪽에 인쇄 글자가 있고 획이 테두리를 따라감
     if len(group) <= 3 and w >= 0.8 * line_h and h >= 0.8 * line_h:
         inner = pt.select(lambda c: _in_rect(c.cx, c.cy, r))
         if len([c for c in inner if not c.c.isspace()]) >= 2 and _mostly_on_border(group, r):
-            return Mark(page_index, CIRCLE, r, source, color, text=join_chars(inner))
+            return Mark(page_index, CIRCLE, r, source, color, text=join_chars(inner), span=span_of(inner))
 
     # 3) 나머지는 손글씨 (또는 별표·화살표 같은 기호)
     return Mark(page_index, HANDWRITING, r, source, color, context=pt.context_around(r))

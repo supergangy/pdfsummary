@@ -13,15 +13,18 @@ from .colors import COLOR_NAMES, ColorFilter, color_key, parse_label, to_hex
 from .extract import Options, extract
 from .models import HANDWRITING, HIGHLIGHT
 from .organize import (
+    add_sentences,
     attach_notes,
-    by_chapter,
     by_color,
     by_page,
     decide_images,
     drop_empty,
+    from_tree,
     merge_adjacent,
+    number_marks,
     reading_order,
 )
+from .outline import build_tree, font_headings, merge_headings, section_text, toc_headings
 from .render import stats_line, to_html, to_json, to_markdown
 
 
@@ -67,7 +70,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-ai", action="store_true", help="Claude AI를 쓰지 않음 (--handwriting image와 같음)")
     p.add_argument("--model", default=None, help="손글씨를 읽을 Claude 모델 (기본: claude-opus-5-5)")
     p.add_argument("--group-by", choices=["chapter", "page", "color"], default="chapter",
-                   help="정리 방식: chapter=목차 단원별(기본, 목차 없으면 페이지 순), page=쪽별, color=색별")
+                   help="정리 방식: chapter=목차(큰 제목 > 작은 제목)별(기본), page=쪽별, color=색별")
+    p.add_argument("--context", choices=["auto", "ai", "sentence", "none"], default="auto",
+                   help="문맥 보충: sentence=표시한 부분이 든 문장 전체를 같이 보여 줌, "
+                        "ai=거기에 더해 AI가 단원 개요와 표시마다 연결 설명을 붙임, "
+                        "auto=AI를 쓸 수 있으면 ai, 아니면 sentence(기본), none=표시한 부분만")
+    p.add_argument("--headings", choices=["auto", "toc", "font"], default="auto",
+                   help="목차 찾기: toc=PDF 책갈피만, font=글자 크기·굵기로 찾은 제목만, auto=둘 다(기본)")
     p.add_argument("--label", action="append", default=[], metavar="색=이름",
                    help="색에 의미 붙이기. 예: --label 노랑=핵심 --label pink=정의 (여러 번 가능)")
     p.add_argument("--no-attach", action="store_true", help="손글씨·메모를 가까운 형광펜 밑에 붙이지 않고 따로 둠")
@@ -153,30 +162,59 @@ def main(argv: list[str] | None = None) -> int:
     marks = merge_adjacent(marks, line_heights)
 
     mode = "image" if args.no_ai else args.handwriting
+    context = args.context
     need_ai = [m for m in marks if m.image and (m.kind == HANDWRITING or not m.text)]
-    if mode != "image" and need_ai:
-        _run_ai(need_ai, args, out_dir, log)
+    wants_ai = (mode != "image" and need_ai) or (not args.no_ai and context in ("auto", "ai"))
+    reader = _make_reader(args, out_dir, log) if wants_ai else None
+    if context == "auto":
+        context = "ai" if reader is not None else "sentence"
+    elif context == "ai" and reader is None:
+        log("ℹ️  AI를 쓸 수 없어 단원 개요·연결 설명 없이 앞뒤 문장만 붙입니다.")
+        context = "sentence"
+
+    if reader is not None and mode != "image" and need_ai:
+        _read_with_ai(reader, need_ai)
 
     if not args.no_attach:
         marks = attach_notes(marks, line_heights)
     decide_images(marks, mode)
+    number_marks(marks)
+    if context != "none":
+        add_sentences(marks, opts.texts.get)
+
+    # 목차 나무 (어느 정리 방식이든 표시마다 '어느 단원인지'를 알려 주려고 만든다)
+    log("📑 목차 정리 중…")
+    last_page = max((m.page for m in marks), default=0)
+    toc_h = toc_headings(doc.get_toc(), opts.texts.get) if args.headings in ("auto", "toc") else []
+    font_h = font_headings(opts.texts.all(upto=last_page + 1)) if args.headings in ("auto", "font") else []
+    tree = build_tree(merge_headings(toc_h, font_h), marks)
+
+    if context == "ai" and reader is not None and marks:
+        with_marks = [n for n in tree.walk() if n.marks]
+        parents = [n for n in tree.walk() if len(n.children) >= 2 or (n.children and n.marks)]
+        items = [(n, *section_text(n, opts.texts.get)) for n in with_marks]
+        log(f"🧠 AI로 단원 개요·연결 설명 만드는 중 (요청 {len(items) + len(parents)}번)…")
+        reader.explain_sections(title, items, parents, _progress("   단원"))
+        for n in tree.walk():
+            if not n.children and len(n.marks) < 2:
+                n.overview = ""   # 표시 하나뿐인 작은 단원은 개요가 그 표시 설명과 겹친다
 
     if args.group_by == "page":
         sections = by_page(marks)
     elif args.group_by == "color":
         sections = by_color(marks, labels)
     else:
-        toc = doc.get_toc()
-        sections = by_chapter(marks, toc) if toc else by_page(marks)
+        sections = from_tree(tree)
 
+    show_path = args.group_by != "chapter"   # 쪽별·색별로 볼 때는 표시마다 어느 단원인지 적어 준다
     written = []
     if "html" in formats:
         path = out_dir / "요약.html"
-        path.write_text(to_html(title, sections, labels, args.pdf.name), encoding="utf-8")
+        path.write_text(to_html(title, sections, labels, args.pdf.name, show_path), encoding="utf-8")
         written.append(path)
     if "md" in formats:
         path = out_dir / "요약.md"
-        path.write_text(to_markdown(title, sections, labels, out_dir / "images", "images"), encoding="utf-8")
+        path.write_text(to_markdown(title, sections, labels, out_dir / "images", "images", show_path), encoding="utf-8")
         written.append(path)
     if "json" in formats:
         path = out_dir / "요약.json"
@@ -213,26 +251,31 @@ def print_colors(marks) -> None:
     print("(괄호로 된 '계열'은 원본 비교·스캔에서 찾은 것이라 정확한 코드 대신 색 이름으로 거르세요. 예: --color 노랑)")
 
 
-def _run_ai(todo, args, out_dir: Path, log) -> None:
+def _make_reader(args, out_dir: Path, log):
     from .ai import DEFAULT_MODEL, AIReader, has_credentials
 
     if not has_credentials():
-        log("ℹ️  ANTHROPIC_API_KEY가 없어 손글씨는 원본 이미지로 넣습니다. (AI로 읽으려면 README의 'AI 설정'을 보세요)")
-        return
+        log("ℹ️  ANTHROPIC_API_KEY가 없어 AI 없이 정리합니다 (손글씨는 원본 이미지, 문맥은 앞뒤 문장). "
+            "AI를 쓰려면 README의 'AI 설정'을 보세요.")
+        return None
     reader = AIReader(model=args.model or DEFAULT_MODEL, cache_path=out_dir / ".ai_cache.json")
     if not reader.available:
-        log(f"ℹ️  {reader.disabled_reason} — 원본 이미지로 넣습니다.")
-        return
+        log(f"ℹ️  {reader.disabled_reason} — AI 없이 정리합니다.")
+        return None
+    return reader
+
+
+def _progress(label):
+    return lambda d, n: print(f"\r{label} {d}/{n}", end="" if d < n else "\n", file=sys.stderr)
+
+
+def _read_with_ai(reader, todo) -> None:
     hand = [m for m in todo if m.kind == HANDWRITING]
     rest = [m for m in todo if m.kind != HANDWRITING]
-
-    def prog(label):
-        return lambda d, n: print(f"\r  {label} {d}/{n}", end="" if d < n else "\n", file=sys.stderr)
-
     if hand:
-        reader.transcribe_handwriting(hand, prog("✍️  손글씨 읽는 중"))
+        reader.transcribe_handwriting(hand, _progress("  ✍️  손글씨 읽는 중"))
     if rest:
-        reader.read_highlighted(rest, prog("🔎 스캔 글자 읽는 중"))
+        reader.read_highlighted(rest, _progress("  🔎 스캔 글자 읽는 중"))
 
 
 if __name__ == "__main__":

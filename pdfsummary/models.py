@@ -50,6 +50,12 @@ class Mark:
     is_symbol: bool = False         # 글자가 아니라 별표·체크·화살표 같은 기호
     notes: list["Mark"] = field(default_factory=list)  # 이 표시에 딸린 메모
     parts: list[Rect] = field(default_factory=list)    # 여러 줄에 걸친 경우 줄별 영역
+    span: Optional[tuple[int, int]] = None   # 페이지 글 흐름에서 표시한 글자 범위 (앞뒤 문장 찾기용)
+    spans: list[tuple[int, int]] = field(default_factory=list)  # 여러 표시를 합친 경우 각각의 범위
+    sentence: list[tuple[str, bool]] = field(default_factory=list)  # 앞뒤 문장 포함 [(글, 표시했는지)]
+    heading_path: list[str] = field(default_factory=list)  # 이 표시가 속한 목차 (큰 제목 → 작은 제목)
+    ai_context: str = ""            # AI가 붙인 연결 설명
+    uid: int = 0                    # 요약본 안에서의 번호
 
     @property
     def page_no(self) -> int:

@@ -21,7 +21,7 @@ from .models import (
     Rect,
     expand,
 )
-from .pagetext import PageText, join_chars
+from .pagetext import PageText, join_chars, span_of
 from .strokes import (
     Stroke,
     classify_pen_group,
@@ -40,6 +40,32 @@ TEXT_MARKUP = {
 }
 
 
+class TextCache:
+    """쪽마다 인쇄 글자를 한 번만 읽어 둔다. 필기본에 글자층이 없으면 원본의 글자층을 쓴다."""
+
+    def __init__(self, doc: pymupdf.Document, original: Optional[pymupdf.Document] = None):
+        self.doc = doc
+        self.original = original
+        self._cache: dict[int, PageText] = {}
+
+    def get(self, i: int) -> Optional[PageText]:
+        if i < 0 or i >= self.doc.page_count:
+            return None
+        if i not in self._cache:
+            page = self.doc[i]
+            pt = PageText(page)
+            if not pt.has_text and self.original is not None and i < self.original.page_count:
+                orig = self.original[i]
+                if _same_size(page, orig):
+                    pt = PageText(orig)   # 필기본이 그림으로 굳어졌어도 원본에는 글자층이 있을 수 있다
+            self._cache[i] = pt
+        return self._cache[i]
+
+    def all(self, upto: Optional[int] = None) -> dict[int, PageText]:
+        n = self.doc.page_count if upto is None else min(upto + 1, self.doc.page_count)
+        return {i: self.get(i) for i in range(n)}
+
+
 @dataclass
 class Options:
     pages: Optional[list[int]] = None   # 0부터 시작. None이면 전체
@@ -47,6 +73,7 @@ class Options:
     scan: str = "auto"                  # auto / on / off : 스캔 이미지에서 형광펜 색 찾기
     image_dpi: int = 200                # 원본 이미지로 잘라낼 때 해상도
     original: Optional[pymupdf.Document] = None  # 필기 전 원본 PDF (있으면 책 자체의 색칠·선은 뺀다)
+    texts: Optional[TextCache] = None             # 쪽 글자 캐시 (없으면 새로 만든다)
 
 
 @dataclass
@@ -59,6 +86,8 @@ class PageInfo:
 
 def extract(doc: pymupdf.Document, opts: Options, log: Callable[[str], None] = lambda s: None):
     pages = opts.pages if opts.pages is not None else range(doc.page_count)
+    if opts.texts is None:
+        opts.texts = TextCache(doc, opts.original)
     marks: list[Mark] = []
     infos: dict[int, PageInfo] = {}
     for i in pages:
@@ -79,9 +108,7 @@ def extract(doc: pymupdf.Document, opts: Options, log: Callable[[str], None] = l
 def extract_page(
     page: pymupdf.Page, index: int, opts: Options, original: Optional[pymupdf.Page] = None
 ) -> tuple[list[Mark], PageInfo]:
-    pt = PageText(page)
-    if original is not None and not pt.has_text and _same_size(page, original):
-        pt = PageText(original)   # 필기본이 그림으로 굳어졌어도 원본에는 글자층이 있을 수 있다
+    pt = opts.texts.get(index) if opts.texts is not None else PageText(page)
     lh = pt.line_height()
     scanned = scan.is_scanned_page(page)
     marks: list[Mark] = []
@@ -99,7 +126,8 @@ def extract_page(
 
         if t in TEXT_MARKUP:
             parts = _quad_rects(annot) or [rect]
-            m = Mark(index, TEXT_MARKUP[t], rect, SRC_ANNOT, color, text=join_chars(pt.in_rects(parts)), parts=parts)
+            chars = pt.in_rects(parts)
+            m = Mark(index, TEXT_MARKUP[t], rect, SRC_ANNOT, color, text=join_chars(chars), parts=parts, span=span_of(chars))
             if content and content != m.text:
                 m.notes.append(Mark(index, NOTE, rect, SRC_ANNOT, color, text=content))
             marks.append(m)
@@ -122,7 +150,7 @@ def extract_page(
         elif t in (pymupdf.PDF_ANNOT_SQUARE, pymupdf.PDF_ANNOT_CIRCLE):
             inner = pt.in_rects([rect])
             if inner:
-                marks.append(Mark(index, CIRCLE, rect, SRC_ANNOT, color, text=join_chars(inner)))
+                marks.append(Mark(index, CIRCLE, rect, SRC_ANNOT, color, text=join_chars(inner), span=span_of(inner)))
             if content:
                 marks.append(Mark(index, NOTE, rect, SRC_ANNOT, color, text=content))
 
@@ -153,7 +181,8 @@ def extract_page(
     elif opts.scan == "on" or (opts.scan == "auto" and scanned):
         for m in scan.find_highlights(page, index):
             if pt.has_text:   # OCR된 스캔본이면 글자층에서 바로 읽는다
-                m.text = join_chars(pt.in_rects(m.parts or [m.rect]))
+                chars = pt.in_rects(m.parts or [m.rect])
+                m.text, m.span = join_chars(chars), span_of(chars)
             marks.append(m)
 
     # 원본 이미지 잘라 두기: 손글씨, 그리고 글자를 못 읽은 표시

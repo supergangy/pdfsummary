@@ -220,3 +220,78 @@ def make_book_pair(original_path: str, annotated_path: str) -> None:
     pix = ip.get_pixmap(dpi=150, alpha=True)
     page.insert_image(page.rect, stream=pix.tobytes("png"), overlay=True)
     ann.save(annotated_path)
+
+
+# ── 목차 구조가 있는 교과서 (제목 찾기·문맥 보충 시험용) ───────────────────
+
+TEXTBOOK = [
+    ("h1", "Ⅰ. 세포와 에너지"),
+    ("h2", "1. 광합성"),
+    ("p", "식물은 빛 에너지를 화학 에너지로 바꾸어 저장한다. 광합성은 엽록체에서 일어나며 크게 두 단계로 나뉜다."),
+    ("h3", "명반응"),
+    ("p", "명반응은 틸라코이드 막에서 일어난다. 빛을 흡수한 엽록소에서 전자가 방출되고, 물이 분해되어 산소가 발생한다. 이 과정에서 ATP와 NADPH가 만들어진다."),
+    ("h3", "탄소 고정 반응"),
+    ("p", "탄소 고정 반응은 스트로마에서 일어나며 캘빈 회로라고도 한다. 명반응에서 만든 ATP와 NADPH를 사용하여 이산화탄소를 포도당으로 합성한다."),
+    ("h2", "2. 세포 호흡"),
+    ("p", "세포 호흡은 포도당을 분해하여 ATP를 얻는 과정이다. 해당 과정, TCA 회로, 산화적 인산화의 세 단계로 이루어진다."),
+    ("h3", "해당 과정"),
+    ("p", "해당 과정은 세포질에서 일어나며 산소가 필요 없다. 포도당 1분자가 피루브산 2분자로 분해되고 ATP 2분자가 순생성된다."),
+    ("h3", "산화적 인산화"),
+    ("p", "산화적 인산화는 미토콘드리아 내막에서 일어난다. 전자 전달계를 따라 전자가 이동하며 형성된 수소 이온 농도 기울기를 이용해 ATP 합성 효소가 ATP를 만든다. 최종 전자 수용체는 산소이다."),
+]
+SIZES = {"h1": 20, "h2": 15, "h3": 13, "p": 11}
+
+
+def make_textbook(path: str) -> None:
+    """책갈피 없이 글자 크기로만 제목을 구분하는 교과서 3쪽 + 형광펜."""
+    doc = pymupdf.open()
+    page = None
+    y = 0.0
+
+    def new_page():
+        nonlocal page, y
+        page = doc.new_page()
+        n = doc.page_count
+        page.insert_text((60, 40), "생명과학 Ⅰ · 핵심 개념", fontname=FONT, fontsize=9, color=(0.4, 0.4, 0.4))
+        page.insert_text((290, 815), str(n), fontname=FONT, fontsize=9, color=(0.4, 0.4, 0.4))
+        y = 80
+
+    new_page()
+    for kind, text in TEXTBOOK:
+        size = SIZES[kind]
+        if kind == "h1" and y > 80:
+            new_page()
+        if kind == "p":
+            need = 120
+        else:
+            need = size * 3
+        if y + need > 760:
+            new_page()
+        if kind == "p":
+            box = pymupdf.Rect(60, y, 430, y + 200)
+            rest = page.insert_textbox(box, text, fontname=FONT, fontsize=size, lineheight=1.6)
+            y = box.y1 - rest + 14
+        else:
+            y += size * 0.6
+            page.insert_text((60, y + size), text, fontname=FONT, fontsize=size)
+            y += size * 2
+    doc.save(path)
+
+    doc = pymupdf.open(path)
+    marks = [
+        ("ATP와 NADPH가 만들어진다", (1, 1, 0)),
+        ("캘빈 회로", (1, 1, 0)),
+        ("ATP와 NADPH를 사용하여 이산화탄소를 포도당으로 합성한다", (1, 1, 0)),
+        ("산소가 필요 없다", (1, 0.6, 0.8)),
+        ("ATP 2분자가 순생성된다", (1, 1, 0)),
+        ("최종 전자 수용체는 산소이다", (1, 0.6, 0.8)),
+    ]
+    for phrase, color in marks:
+        for page in doc:
+            q = page.search_for(phrase, quads=True)
+            if q:
+                a = page.add_highlight_annot(q)
+                a.set_colors(stroke=color)
+                a.update()
+                break
+    doc.saveIncr()

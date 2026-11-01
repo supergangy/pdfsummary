@@ -43,13 +43,26 @@ def _image_name(m: Mark, n: int) -> str:
 
 # ── Markdown ───────────────────────────────────────────────────────────
 
-def to_markdown(title: str, sections: list[Section], labels: dict[str, str], image_dir: Path, rel_dir: str) -> str:
+def to_markdown(title: str, sections: list[Section], labels: dict[str, str], image_dir: Path, rel_dir: str,
+                show_path: bool = False) -> str:
     image_dir.mkdir(parents=True, exist_ok=True)
     counter = [0]
     marks = [m for s in sections for m in s.marks]
     out = [f"# {title} — 필기 요약", "", f"> {stats_line(marks)}", ""]
     if labels:
         out.append("> 색 구분: " + ", ".join(f"{EMOJI[k]} {COLOR_NAMES[k][0]} = {v}" for k, v in labels.items()))
+        out.append("")
+    if any(s.overview for s in sections):
+        out.append("> 💡 표시는 AI가 책 본문을 바탕으로 붙인 설명입니다. 형광펜 원문과 구분해서 보세요.")
+        out.append("")
+
+    titled = [s for s in sections if s.title]
+    if len(titled) >= 2:
+        out.append("**목차**")
+        out.append("")
+        base = min(s.level for s in titled)
+        for s in titled:
+            out.append(f"{'  ' * (s.level - base)}- {s.title} ({s.count})")
         out.append("")
 
     def img(m: Mark) -> str:
@@ -60,18 +73,26 @@ def to_markdown(title: str, sections: list[Section], labels: dict[str, str], ima
 
     def item(m: Mark, indent: str) -> list[str]:
         lines = []
+        where = f"p.{m.page_no}"
+        if show_path and m.heading_path:
+            where = " > ".join(m.heading_path) + " · " + where
         if m.kind in (HANDWRITING, NOTE):
             icon = "✍️" if m.kind == HANDWRITING else "📝"
             body = m.body or ("(원본 이미지)" if m.image else "")
             if m.kind == HANDWRITING and m.transcription and m.confidence in ("medium", "low") and not m.is_symbol:
                 body += " ⚠️애매" + (f"({', '.join(m.unclear)})" if m.unclear else "")
-            lines.append(f"{indent}- {icon} {_md_inline(body)}  `p.{m.page_no}`")
+            lines.append(f"{indent}- {icon} {_md_inline(body)}  `{where}`")
         else:
             emoji = EMOJI[color_key(m.color)]
-            body = _md_inline(m.text) if m.text else "(원본 이미지)"
+            if m.sentence:
+                body = "".join(f"**{t.strip()}**" if hl else t for t, hl in _tight(m.sentence)).replace("\n", " ")
+            else:
+                body = f"**{_md_inline(m.text)}**" if m.text else "(원본 이미지)"
             if m.kind == "strikeout":
                 body = f"~~{body}~~"
-            lines.append(f"{indent}- {emoji} {body}  `p.{m.page_no} · {_label(m, labels)}`")
+            lines.append(f"{indent}- {emoji} {body}  `{where} · {_label(m, labels)}`")
+        if m.ai_context:
+            lines.append(f"{indent}  - 💡 {_md_inline(m.ai_context)}")
         if m.show_image and m.image:
             lines.append(f"{indent}  {img(m)}")
         for n in m.notes:
@@ -80,12 +101,33 @@ def to_markdown(title: str, sections: list[Section], labels: dict[str, str], ima
 
     for s in sections:
         if s.title:
-            out.append(f"{'#' * min(s.level + 1, 4)} {s.title}")
+            out.append(f"{'#' * min(s.level + 1, 5)} {s.title}")
+            out.append("")
+        if s.overview:
+            out.append(f"> 💡 **개요** {_md_inline(s.overview)}")
             out.append("")
         for m in s.marks:
             out.extend(item(m, ""))
-        out.append("")
+        if s.marks:
+            out.append("")
     return "\n".join(out).rstrip() + "\n"
+
+
+def _tight(runs: list[tuple[str, bool]]) -> list[tuple[str, bool]]:
+    """마크다운 굵게(**)는 안쪽 끝에 공백이 있으면 깨지므로, 표시 조각의 앞뒤 공백을 바깥 조각으로 옮긴다."""
+    out: list[tuple[str, bool]] = []
+    for t, hl in runs:
+        if hl:
+            lead = t[: len(t) - len(t.lstrip())]
+            trail = t[len(t.rstrip()):]
+            if lead:
+                out.append((lead, False))
+            out.append((t.strip(), True))
+            if trail:
+                out.append((trail, False))
+        else:
+            out.append((t, False))
+    return out
 
 
 def _md_inline(s: str) -> str:
@@ -123,12 +165,36 @@ h3{font-size:18px;margin:28px 0 10px}
 .warn{color:var(--warn);font-size:12.5px;margin-left:6px;white-space:nowrap}
 .orig{display:block;max-width:100%;max-height:340px;margin-top:8px;border:1px solid var(--line);border-radius:6px;background:#fff}
 .empty{color:var(--muted);text-align:center;padding:60px 0}
-@media print{.toolbar{display:none}.item,.note.solo{break-inside:avoid}body{background:#fff}}
+h4{font-size:16px;margin:22px 0 8px;color:var(--muted)}
+h2,h3,h4{scroll-margin-top:64px}
+.toc{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 18px;margin:20px 0}
+.toc b{font-size:14px}
+.toc ol{list-style:none;margin:6px 0 0;padding:0}
+.toc li{margin:2px 0;font-size:14px}
+.toc a{color:var(--ink);text-decoration:none}
+.toc a:hover{color:var(--accent);text-decoration:underline}
+.toc .n{color:var(--muted);font-size:12px;margin-left:4px}
+.overview{border-left:3px solid var(--accent);background:color-mix(in srgb,var(--accent) 7%,var(--card));padding:10px 14px;border-radius:0 8px 8px 0;margin:4px 0 14px;font-size:14.5px}
+.ai-badge{display:inline-block;font-size:11px;font-weight:600;color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 50%,transparent);border-radius:4px;padding:0 5px;margin-right:6px;vertical-align:1px}
+.aictx{color:var(--muted);font-size:14px;margin-top:6px}
+.ctx{color:var(--muted)}
+.item .text mark{font-weight:600}
+.path{color:var(--muted)}
+.hide-ctx .ctx{display:none}
+.hide-ai .aictx,.hide-ai .overview{display:none}
+@media print{.toolbar,.toc{display:none}.item,.note.solo{break-inside:avoid}body{background:#fff}}
 """
 
 JS = """
+document.querySelectorAll('.chip[data-toggle]').forEach(ch=>{
+  ch.addEventListener('click',()=>{
+    const on=ch.getAttribute('aria-pressed')!=='false';
+    ch.setAttribute('aria-pressed',on?'false':'true');
+    document.body.classList.toggle(ch.dataset.toggle,on);
+  });
+});
 const state={};
-document.querySelectorAll('.chip').forEach(ch=>{
+document.querySelectorAll('.chip[data-f]').forEach(ch=>{
   state[ch.dataset.f]=true;
   ch.addEventListener('click',()=>{
     const on=ch.getAttribute('aria-pressed')!=='false';
@@ -142,7 +208,7 @@ document.querySelectorAll('.chip').forEach(ch=>{
 """
 
 
-def to_html(title: str, sections: list[Section], labels: dict[str, str], source_name: str) -> str:
+def to_html(title: str, sections: list[Section], labels: dict[str, str], source_name: str, show_path: bool = False) -> str:
     marks = [m for s in sections for m in s.marks]
     everything = all_marks(marks)
     color_keys = []
@@ -162,14 +228,29 @@ def to_html(title: str, sections: list[Section], labels: dict[str, str], source_
     for kind, label in (("handwriting", "✍️ 손글씨"), ("note", "📝 메모")):
         if any(m.kind == kind for m in everything):
             chips.append(f'<button class="chip" data-f="k-{kind}" aria-pressed="true">{label}</button>')
+    if any(m.sentence for m in everything):
+        chips.append('<button class="chip" data-toggle="hide-ctx" aria-pressed="true">앞뒤 문장</button>')
+    if any(m.ai_context for m in everything) or any(s.overview for s in sections):
+        chips.append('<button class="chip" data-toggle="hide-ai" aria-pressed="true"><span class="ai-badge">AI</span>개요·설명</button>')
 
     body = []
+    titled = [s for s in sections if s.title]
+    if len(titled) >= 2:
+        base = min(s.level for s in titled)
+        rows = "".join(
+            f'<li style="padding-left:{(s.level - base) * 16}px"><a href="#{s.anchor}">{html.escape(s.title)}</a>'
+            f'<span class="n">{s.count}</span></li>'
+            for s in titled
+        )
+        body.append(f'<nav class="toc"><b>목차</b><ol>{rows}</ol></nav>')
     for s in sections:
         if s.title:
-            tag = "h2" if s.level <= 1 else "h3"
-            body.append(f"<{tag}>{html.escape(s.title)}</{tag}>")
+            tag = {1: "h2", 2: "h3"}.get(s.level, "h4")
+            body.append(f'<{tag} id="{s.anchor}">{html.escape(s.title)}</{tag}>')
+        if s.overview:
+            body.append(f'<div class="overview"><span class="ai-badge">AI</span><b>개요</b> {html.escape(s.overview)}</div>')
         for m in s.marks:
-            body.append(_html_item(m, labels))
+            body.append(_html_item(m, labels, show_path))
     if not marks:
         body.append('<p class="empty">표시한 부분을 찾지 못했습니다.</p>')
 
@@ -187,26 +268,38 @@ def to_html(title: str, sections: list[Section], labels: dict[str, str], source_
 """
 
 
-def _html_item(m: Mark, labels: dict[str, str]) -> str:
+def _path(m: Mark, show_path: bool) -> str:
+    if not (show_path and m.heading_path):
+        return ""
+    return f'<span class="path">{html.escape(" › ".join(m.heading_path))}</span> · '
+
+
+def _html_item(m: Mark, labels: dict[str, str], show_path: bool = False) -> str:
     if m.kind in (HANDWRITING, NOTE):
-        return _html_note(m, solo=True)
+        return _html_note(m, solo=True, show_path=show_path)
     k = color_key(m.color)
     filt = f"c-{k}"
-    text = html.escape(m.text) if m.text else ""
-    inner = f'<div class="text"><mark>{text}</mark></div>' if text else ""
+    if m.sentence:
+        inner = '<div class="text">' + "".join(
+            f"<mark>{html.escape(t)}</mark>" if hl else f'<span class="ctx">{html.escape(t)}</span>' for t, hl in m.sentence
+        ) + "</div>"
+    else:
+        inner = f'<div class="text"><mark>{html.escape(m.text)}</mark></div>' if m.text else ""
     if m.text and m.confidence in ("medium", "low"):
         inner += '<span class="warn">⚠ AI가 읽은 글 · 원본 확인</span>'
+    if m.ai_context:
+        inner += f'<div class="aictx"><span class="ai-badge">AI</span>{html.escape(m.ai_context)}</div>'
     img = _img(m)
     notes = ""
     if m.notes:
         notes = '<ul class="notes">' + "".join(_html_note(n) for n in m.notes) + "</ul>"
     return (
         f'<article class="item {m.kind}" style="--c:{color_css(m.color)}" data-filter="{filt}">'
-        f'{inner}{img}<div class="meta">p.{m.page_no} · {html.escape(_label(m, labels))}</div>{notes}</article>'
+        f'{inner}{img}<div class="meta">{_path(m, show_path)}p.{m.page_no} · {html.escape(_label(m, labels))}</div>{notes}</article>'
     )
 
 
-def _html_note(m: Mark, solo: bool = False) -> str:
+def _html_note(m: Mark, solo: bool = False, show_path: bool = False) -> str:
     icon = "✍️" if m.kind == HANDWRITING else "📝"
     tag = "div" if solo else "li"
     cls = "note solo" if solo else "note"
@@ -217,7 +310,7 @@ def _html_note(m: Mark, solo: bool = False) -> str:
     if m.kind == HANDWRITING and m.transcription and m.confidence in ("medium", "low") and not m.is_symbol:
         detail = f" ({', '.join(m.unclear)})" if m.unclear else ""
         warn = f'<span class="warn">⚠ 애매함{html.escape(detail)}</span>'
-    meta = f'<div class="meta">p.{m.page_no} · {KIND_LABELS[m.kind]}</div>' if solo else ""
+    meta = f'<div class="meta">{_path(m, show_path)}p.{m.page_no} · {KIND_LABELS[m.kind]}</div>' if solo else ""
     return (
         f'<{tag} class="{cls}" data-icon="{icon}" data-filter="k-{m.kind}">'
         f'<div class="text">{text}{warn}</div>{_img(m)}{meta}</{tag}>'
@@ -245,6 +338,9 @@ def to_json(title: str, sections: list[Section], labels: dict[str, str]) -> str:
             "confidence": m.confidence,
             "unclear": m.unclear or None,
             "rect": [round(v, 1) for v in m.rect],
+            "sentence": "".join(t for t, _ in m.sentence) or None,
+            "heading_path": m.heading_path or None,
+            "ai_context": m.ai_context or None,
         }
         if m.notes:
             d["notes"] = [conv(n) for n in m.notes]
@@ -253,6 +349,10 @@ def to_json(title: str, sections: list[Section], labels: dict[str, str]) -> str:
     data = {
         "title": title,
         "labels": labels,
-        "sections": [{"title": s.title, "items": [conv(m) for m in s.marks]} for s in sections],
+        "sections": [
+            {k: v for k, v in {"title": s.title, "level": s.level, "overview": s.overview or None,
+                               "items": [conv(m) for m in s.marks]}.items() if v is not None}
+            for s in sections
+        ],
     }
     return json.dumps(data, ensure_ascii=False, indent=2)

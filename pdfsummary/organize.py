@@ -45,6 +45,9 @@ def merge_adjacent(marks: list[Mark], line_heights: dict[int, float]) -> list[Ma
                 p.text = (p.text + " " + m.text).strip()
                 p.rect = union(p.rect, m.rect)
                 p.parts.extend(m.parts or [m.rect])
+                if p.span and m.span:
+                    p.spans = (p.spans or [p.span]) + (m.spans or [m.span])
+                    p.span = (min(p.span[0], m.span[0]), max(p.span[1], m.span[1]))
                 p.notes.extend(m.notes)
                 continue
         out.append(m)
@@ -120,36 +123,44 @@ class Section:
     title: Optional[str]
     level: int
     marks: list[Mark] = field(default_factory=list)
+    overview: str = ""          # AI 단원 개요
+    count: int = 0              # 하위 단원까지 합친 표시 수 (목차에 표시)
+    anchor: str = ""
+
+
+def from_tree(root) -> list[Section]:
+    """목차 나무를 위에서부터 차례로 펼친다. 표시가 없는 상위 제목도 길잡이로 남긴다."""
+    out: list[Section] = []
+
+    def visit(node, depth):
+        if node.title is None:
+            if node.marks or node.overview:
+                out.append(Section(None, 1, list(node.marks), node.overview, node.count()))
+        else:
+            out.append(Section(node.title, depth, list(node.marks), node.overview, node.count()))
+        for c in node.children:
+            visit(c, depth + 1 if node.title is not None else 1)
+
+    visit(root, 0)
+    for i, sec in enumerate(out):
+        sec.anchor = f"s{i + 1}"
+    return out
 
 
 def by_chapter(marks: list[Mark], toc: list, max_level: int = 2) -> list[Section]:
-    """PDF 목차(책갈피)를 이용해 단원별로 나눈다. 목차가 없으면 하나로."""
-    entries = [(lvl, title.strip(), page - 1) for lvl, title, page, *_ in toc if lvl <= max_level and page >= 1]
-    entries.sort(key=lambda e: e[2])
-    sections: list[Section] = []
-    current: Optional[Section] = None
-    current_key = None
-    for m in marks:
-        entry = None
-        for e in entries:
-            if e[2] <= m.page:
-                entry = e
-            else:
-                break
-        k = entry if entry else None
-        if current is None or k != current_key:
-            current = Section(entry[1] if entry else None, entry[0] if entry else 1)
-            current_key = k
-            sections.append(current)
-        current.marks.append(m)
-    return sections
+    """(예전 방식) PDF 책갈피만으로 나누기. 테스트·하위 호환용."""
+    from .outline import Heading, build_tree
+
+    heads = [Heading(page - 1, float("-inf"), lvl, str(title).strip(), "toc")
+             for lvl, title, page, *_ in toc if lvl <= max_level and page >= 1]
+    return [s for s in from_tree(build_tree(heads, marks)) if s.marks]
 
 
 def by_page(marks: list[Mark]) -> list[Section]:
     sections: list[Section] = []
     for m in marks:
         if not sections or sections[-1].marks[0].page != m.page:
-            sections.append(Section(f"{m.page_no}쪽", 1))
+            sections.append(Section(f"{m.page_no}쪽", 1, anchor=f"s{len(sections) + 1}"))
         sections[-1].marks.append(m)
     return sections
 
@@ -168,4 +179,22 @@ def by_color(marks: list[Mark], labels: dict[str, str]) -> list[Section]:
             title = labels.get(k) or f"{COLOR_NAMES[k][0]} 표시"
         groups.setdefault(k, Section(title, 1)).marks.append(m)
     keys = sorted(groups, key=lambda k: order.index(k) if k in order else 99)
-    return [groups[k] for k in keys]
+    out = [groups[k] for k in keys]
+    for i, sec in enumerate(out):
+        sec.anchor = f"s{i + 1}"
+        sec.count = len(sec.marks)
+    return out
+
+
+def add_sentences(marks: list[Mark], get_text) -> None:
+    """표시한 부분이 들어 있는 문장 전체를 붙인다 (앞뒤 문맥)."""
+    for m in all_marks(marks):
+        if m.kind in TEXT_KINDS and m.span and m.text:
+            pt = get_text(m.page)
+            if pt is not None:
+                m.sentence = pt.sentence_runs(m.spans or [m.span])
+
+
+def number_marks(marks: list[Mark]) -> None:
+    for i, m in enumerate(marks, 1):
+        m.uid = i

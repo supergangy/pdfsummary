@@ -70,5 +70,5 @@ def test_cli_original(book_pair, tmp_path):
     orig, ann = book_pair
     assert main([str(ann), "-o", str(tmp_path / "o"), "--no-ai", "--format", "md", "--original", str(orig)]) == 0
     md = (tmp_path / "o" / "요약.md").read_text(encoding="utf-8")
-    assert "기질 특이성" not in md and "생체 촉매" not in md
-    assert "🟩 가장 높다 " in md and "✍️" in md
+    assert "**기질 특이성**" not in md and "**생체 촉매**" not in md   # 책 자체 강조는 표시로 잡히지 않음 (문맥으로는 보일 수 있음)
+    assert "**가장 높다**" in md and "✍️" in md

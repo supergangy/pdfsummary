@@ -26,3 +26,13 @@ def book_pair(tmp_path_factory):
     orig, ann = d / "book.pdf", d / "book_notes.pdf"
     make_sample.make_book_pair(str(orig), str(ann))
     return orig, ann
+
+
+@pytest.fixture(scope="session")
+def textbook(tmp_path_factory):
+    """책갈피 없이 글자 크기로만 Ⅰ > 1. > 소제목 구조가 드러나는 교과서 + 형광펜 6개."""
+    import make_sample
+
+    path = tmp_path_factory.mktemp("tb") / "textbook.pdf"
+    make_sample.make_textbook(str(path))
+    return path

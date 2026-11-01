@@ -94,7 +94,12 @@ def check_ocr(url: str, token: str) -> None:
     print("ocr job:", st["status"], st.get("summary"), st.get("error"))
     assert st["status"] == "done", st
     html = urllib.request.urlopen(f"{url}/r/{job}/%EC%9A%94%EC%95%BD.html?t={token}", timeout=30).read().decode("utf-8")
-    assert "보안 기능" in html and "SNMPv3" in html, "스캔 쪽 형광펜 글자를 읽지 못했습니다"
+    marked = re.findall(r"<mark>(.*?)</mark>", html)
+    print("highlighted text:", marked)
+    print("log:", "\n".join(st.get("log", [])))
+    # 글자 인식은 대소문자·낱말 하나쯤 틀릴 수 있어 한국어 구절로 확인한다
+    joined = " ".join(marked)
+    assert "보안 기능" in joined and "데이터 인증" in joined, "스캔 쪽 형광펜 글자를 읽지 못했습니다"
     print("OK: 스캔 쪽 형광펜 글자를 글자 인식으로 읽었습니다.")
 
 

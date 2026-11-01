@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>필기 요약 만들기</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--ink:#202328;--muted:#6a707a;--line:#e5e2da;--accent:#2f6fde;--accent-ink:#fff;--soft:#eef3fd;--ok:#1f8a4c;--warn:#b26a00;--bad:#c23b3b;--drop:#fbfaf6}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141518;--card:#1e2025;--ink:#e7e8ea;--muted:#9aa0a8;--line:#31343b;--accent:#6f9cf5;--accent-ink:#0d1220;--soft:#1f2a40;--ok:#54c58a;--warn:#f0b35a;--bad:#ff7b7b;--drop:#191b1f}}
+:root[data-theme="dark"]{--bg:#141518;--card:#1e2025;--ink:#e7e8ea;--muted:#9aa0a8;--line:#31343b;--accent:#6f9cf5;--accent-ink:#0d1220;--soft:#1f2a40;--ok:#54c58a;--warn:#f0b35a;--bad:#ff7b7b;--drop:#191b1f}
+*{box-sizing:border-box}
+body{margin:0;word-break:keep-all;overflow-wrap:anywhere;background:var(--bg);color:var(--ink);font:15px/1.6 "Pretendard","Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:36px 16px 80px}
+header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:22px}
+header h1{font-size:26px;margin:0;letter-spacing:-.01em}
+header p{margin:0;color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin:14px 0}
+.card h2{font-size:16px;margin:0 0 12px;display:flex;align-items:center;gap:8px}
+.step{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--accent);color:var(--accent-ink);font-size:12px;font-weight:700}
+.hint{color:var(--muted);font-size:13px}
+.hidden{display:none!important}
+
+.drop{border:2px dashed var(--line);border-radius:12px;background:var(--drop);padding:34px 16px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s;position:relative}
+.drop:hover,.drop.over{border-color:var(--accent);background:var(--soft)}
+.drop .big{font-size:17px;font-weight:600}
+.drop .icon{font-size:34px;line-height:1;margin-bottom:8px}
+.drop.small{padding:16px;display:flex;align-items:center;gap:14px;text-align:left}
+.drop.small .icon{font-size:24px;margin:0}
+.drop.loaded{border-style:solid;border-color:var(--line);background:var(--card);cursor:default;padding:16px;display:flex;align-items:center;gap:14px;text-align:left}
+.file-name{font-weight:600;word-break:break-all}
+.link{background:none;border:0;color:var(--accent);cursor:pointer;font:inherit;padding:0;text-decoration:underline}
+.bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:10px}
+.bar>i{display:block;height:100%;background:var(--accent);width:0;transition:width .2s}
+.grow{flex:1;min-width:0}
+
+.colors{display:flex;flex-direction:column;gap:8px}
+.crow{display:grid;grid-template-columns:auto auto 1fr auto;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.crow.off{opacity:.45}
+.sw{width:22px;height:22px;border-radius:6px;border:1px solid rgba(0,0,0,.12)}
+.cname{font-weight:600}
+.code{color:var(--muted);font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace;margin-left:6px}
+.sample{color:var(--muted);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.crow input[type=text]{width:120px}
+input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent)}
+input[type=text],input[type=password],select{font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+input[type=text]:focus,input[type=password]:focus,select:focus{outline:2px solid color-mix(in srgb,var(--accent) 40%,transparent);border-color:var(--accent)}
+
+.opt{display:grid;grid-template-columns:110px 1fr;gap:10px 16px;align-items:start;margin:12px 0}
+.opt>label{font-weight:600;padding-top:6px}
+.seg{display:flex;flex-wrap:wrap;gap:6px}
+.seg button{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;padding:6px 14px;cursor:pointer}
+.seg button[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.seg button:disabled{opacity:.4;cursor:not-allowed}
+.seg-note{font-size:12.5px;color:var(--muted);margin-top:4px}
+details{margin-top:10px}
+summary{cursor:pointer;color:var(--muted);font-size:14px}
+.adv{display:grid;grid-template-columns:110px 1fr;gap:10px 16px;align-items:center;margin-top:12px}
+.adv label{font-size:14px}
+.inline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+.ai{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--muted);display:inline-block}
+.dot.on{background:var(--ok)}
+.keyform{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+.keyform input[type=password]{flex:1;min-width:220px}
+
+.btn{font:inherit;font-weight:600;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;padding:8px 16px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.primary:disabled{opacity:.45;cursor:not-allowed}
+.btn.big{font-size:17px;padding:13px 26px;border-radius:12px}
+.runrow{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:18px 0}
+
+.log{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;background:var(--drop);border:1px solid var(--line);border-radius:10px;padding:10px 12px;max-height:180px;overflow:auto;white-space:pre-wrap;color:var(--muted)}
+.prog{margin:8px 0}
+.prog .lbl{font-size:13px;display:flex;justify-content:space-between}
+.spin{width:16px;height:16px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;display:inline-block;animation:sp 0.8s linear infinite;vertical-align:-3px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.done-line{font-size:16px;font-weight:600;color:var(--ok);margin-bottom:10px}
+.err{color:var(--bad);font-weight:600}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+iframe{width:100%;height:75vh;border:1px solid var(--line);border-radius:12px;background:#fff}
+.msg{font-size:13.5px;margin-top:8px}
+.msg.bad{color:var(--bad)}
+footer{color:var(--muted);font-size:12.5px;text-align:center;margin-top:30px}
+@media (max-width:640px){.opt,.adv{grid-template-columns:1fr}.opt>label{padding-top:0}.crow{grid-template-columns:auto auto 1fr}.crow input[type=text]{grid-column:1/-1;width:100%}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>📚 필기 요약 만들기</h1>
+  <p>형광펜·밑줄·손글씨만 모아 목차대로 정리해 드려요.</p>
+</header>
+
+<section class="card">
+  <h2><span class="step">1</span>PDF 넣기</h2>
+  <div id="dropMain" class="drop" tabindex="0" role="button" aria-label="필기한 PDF 고르기">
+    <div class="icon">📄</div>
+    <div class="big">필기한 PDF를 여기에 끌어다 놓으세요</div>
+    <div class="hint">또는 눌러서 고르기 · 굿노트, 노타빌리티, 삼성노트, PDF Expert 등에서 내보낸 파일</div>
+  </div>
+  <div id="mainLoaded" class="drop loaded hidden">
+    <div class="icon">📕</div>
+    <div class="grow"><div class="file-name" id="mainName"></div><div class="hint" id="mainInfo"></div></div>
+    <button class="link" id="mainChange">바꾸기</button>
+  </div>
+  <div id="mainBar" class="bar hidden"><i></i></div>
+  <div id="mainMsg" class="msg bad hidden"></div>
+
+  <div style="height:12px"></div>
+  <div id="dropOrig" class="drop small" tabindex="0" role="button" aria-label="원본 PDF 고르기">
+    <div class="icon">📗</div>
+    <div class="grow"><div><b>필기 전 원본 PDF</b> <span class="hint">(선택)</span></div>
+      <div class="hint">넣으면 책에 원래 인쇄된 색칠·밑줄은 빼고 내가 한 필기만 찾아요.</div></div>
+  </div>
+  <div id="origLoaded" class="drop loaded small hidden">
+    <div class="icon">📗</div>
+    <div class="grow"><div class="file-name" id="origName"></div><div class="hint" id="origInfo"></div></div>
+    <button class="link" id="origRemove">빼기</button>
+  </div>
+  <div id="origBar" class="bar hidden"><i></i></div>
+  <div id="origMsg" class="msg bad hidden"></div>
+  <input type="file" id="fileMain" accept="application/pdf,.pdf" class="hidden">
+  <input type="file" id="fileOrig" accept="application/pdf,.pdf" class="hidden">
+</section>
+
+<section class="card hidden" id="colorCard">
+  <h2><span class="step">2</span>형광펜 색 고르기</h2>
+  <div id="colorLoading"><span class="spin"></span> 형광펜 색을 찾는 중…</div>
+  <div id="colorBody" class="hidden">
+    <p class="hint" id="colorHint" style="margin-top:0">내가 칠한 색만 체크해 두세요. 체크를 끈 색은 요약에서 빠져요. 색마다 의미를 적으면 요약에 같이 표시돼요.</p>
+    <div class="colors" id="colors"></div>
+  </div>
+</section>
+
+<section class="card hidden" id="optCard">
+  <h2><span class="step">3</span>정리 방법</h2>
+  <div class="opt">
+    <label>묶는 방식</label>
+    <div><div class="seg" data-name="group_by">
+      <button data-v="chapter" aria-pressed="true">목차별</button>
+      <button data-v="page" aria-pressed="false">쪽별</button>
+      <button data-v="color" aria-pressed="false">색별</button>
+    </div><div class="seg-note" id="noteGroup">큰 제목 › 작은 제목 아래에 모아요. 맨 위에 목차가 붙어요.</div></div>
+  </div>
+  <div class="opt">
+    <label>문맥 보충</label>
+    <div><div class="seg" data-name="context">
+      <button data-v="ai" aria-pressed="false" data-needs-ai>AI 개요·연결 설명</button>
+      <button data-v="sentence" aria-pressed="true">앞뒤 문장</button>
+      <button data-v="none" aria-pressed="false">칠한 부분만</button>
+    </div><div class="seg-note" id="noteContext"></div></div>
+  </div>
+  <div class="opt">
+    <label>손글씨</label>
+    <div><div class="seg" data-name="handwriting">
+      <button data-v="auto" aria-pressed="false" data-needs-ai>AI로 읽기</button>
+      <button data-v="image" aria-pressed="true">원본 이미지</button>
+      <button data-v="both" aria-pressed="false" data-needs-ai>글 + 원본 같이</button>
+    </div><div class="seg-note" id="noteHand"></div></div>
+  </div>
+
+  <details>
+    <summary>더 자세한 설정</summary>
+    <div class="adv">
+      <label for="optTitle">요약본 제목</label><input type="text" id="optTitle">
+      <label for="optPages">쪽 범위</label><div class="inline"><input type="text" id="optPages" placeholder="예: 1-40, 52" style="width:180px"><span class="hint">비우면 전체</span></div>
+      <label for="optHeadings">목차 찾기</label>
+      <select id="optHeadings">
+        <option value="auto">책갈피 + 글자 크기·굵기 (추천)</option>
+        <option value="toc">PDF 책갈피만</option>
+        <option value="font">글자 크기·굵기만</option>
+      </select>
+      <label for="optScan">스캔본 형광펜</label>
+      <select id="optScan">
+        <option value="auto">스캔한 쪽에서만 찾기 (추천)</option>
+        <option value="on">모든 쪽에서 색으로 찾기</option>
+        <option value="off">찾지 않기</option>
+      </select>
+      <label>그 밖에</label>
+      <div>
+        <label class="inline"><input type="checkbox" id="optNoDraw"> 페이지에 굳은 펜 획은 찾지 않기 <span class="hint">(책 속 그림이 손글씨로 잡힐 때)</span></label>
+        <label class="inline"><input type="checkbox" id="optNoAttach"> 메모를 형광펜 밑에 붙이지 않고 따로 두기</label>
+      </div>
+    </div>
+  </details>
+
+  <div style="border-top:1px solid var(--line);margin:18px 0 14px"></div>
+  <div class="ai">
+    <span><span class="dot" id="aiDot"></span> <b>AI</b> <span id="aiText" class="hint">확인 중…</span></span>
+    <button class="link" id="aiToggle">API 키 넣기</button>
+  </div>
+  <div class="keyform hidden" id="keyForm">
+    <input type="password" id="keyInput" placeholder="sk-ant-… (Claude API 키)" autocomplete="off">
+    <label class="inline hint"><input type="checkbox" id="keyRemember" checked> 이 컴퓨터에 기억</label>
+    <button class="btn" id="keySave">저장</button>
+    <button class="link hidden" id="keyClear">키 지우기</button>
+    <div class="hint" style="flex-basis:100%">키는 <a href="https://platform.claude.com/" target="_blank" rel="noopener">Claude Console</a>에서 발급받아요. 이 컴퓨터에만 저장되고, AI를 켰을 때만 손글씨 이미지와 단원 본문이 Claude로 보내져요.</div>
+  </div>
+
+  <div class="runrow">
+    <button class="btn primary big" id="runBtn" disabled>요약 만들기</button>
+    <span class="hint" id="runHint"></span>
+  </div>
+</section>
+
+<section class="card hidden" id="resultCard">
+  <h2 id="resultTitle"><span class="spin"></span> 만드는 중…</h2>
+  <div id="progs"></div>
+  <div id="doneBox" class="hidden">
+    <div class="done-line" id="doneLine"></div>
+    <div class="actions">
+      <a class="btn primary" id="aOpen" target="_blank" rel="noopener">새 창에서 열기</a>
+      <a class="btn" id="aHtml">HTML 저장</a>
+      <a class="btn" id="aZip">Markdown + 이미지 (zip)</a>
+      <a class="btn" id="aJson">JSON</a>
+    </div>
+    <iframe id="preview" title="요약 미리보기"></iframe>
+  </div>
+  <div id="errBox" class="err hidden"></div>
+  <details id="logBox"><summary>진행 기록</summary><div class="log" id="log"></div></details>
+</section>
+
+<footer>pdfsummary __VERSION__ · 이 화면은 내 컴퓨터에서만 열려요. 끝내려면 실행한 창을 닫으세요.</footer>
+</main>
+
+<script>
+const TOKEN = "__TOKEN__";
+const $ = (id) => document.getElementById(id);
+const S = { main: null, orig: null, colors: [], hasKey: false, job: null, colorsReq: 0 };
+
+async function api(path, body) {
+  const r = await fetch(path, {
+    method: body === undefined ? "GET" : "POST",
+    headers: { "X-Token": TOKEN, "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({ error: "응답을 읽지 못했어요." }));
+  if (!r.ok) throw new Error(data.error || "실패했어요.");
+  return data;
+}
+
+// ── 파일 올리기 ───────────────────────────────────────────────
+function upload(file, which) {
+  const bar = $(which + "Bar"), msg = $(which + "Msg");
+  msg.classList.add("hidden");
+  if (!file || !/\.pdf$/i.test(file.name) && file.type !== "application/pdf") {
+    msg.textContent = "PDF 파일만 넣을 수 있어요."; msg.classList.remove("hidden"); return;
+  }
+  bar.classList.remove("hidden"); bar.firstElementChild.style.width = "0";
+  const xhr = new XMLHttpRequest();
+  xhr.open("PUT", "/api/upload?name=" + encodeURIComponent(file.name));
+  xhr.setRequestHeader("X-Token", TOKEN);
+  xhr.upload.onprogress = (e) => { if (e.lengthComputable) bar.firstElementChild.style.width = (e.loaded / e.total * 100) + "%"; };
+  xhr.onload = () => {
+    bar.classList.add("hidden");
+    let data = {}; try { data = JSON.parse(xhr.responseText); } catch (_) {}
+    if (xhr.status !== 200) { msg.textContent = data.error || "올리지 못했어요."; msg.classList.remove("hidden"); return; }
+    S[which] = data;
+    showFile(which);
+  };
+  xhr.onerror = () => { bar.classList.add("hidden"); msg.textContent = "올리지 못했어요. 실행 창이 켜져 있는지 확인해 주세요."; msg.classList.remove("hidden"); };
+  xhr.send(file);
+}
+
+function showFile(which) {
+  const f = S[which];
+  const drop = which === "main" ? $("dropMain") : $("dropOrig");
+  const loaded = $(which + "Loaded");
+  drop.classList.toggle("hidden", !!f);
+  loaded.classList.toggle("hidden", !f);
+  if (f) {
+    $(which + "Name").textContent = f.name;
+    $(which + "Info").textContent = f.pages + "쪽" + (which === "main" ? (f.has_toc ? " · PDF 목차(책갈피) 있음" : " · 책갈피 없음 → 글자 크기로 제목을 찾아요") : "");
+  }
+  if (which === "main" && f) {
+    $("optTitle").value = f.title;
+    $("colorCard").classList.remove("hidden");
+    $("optCard").classList.remove("hidden");
+  }
+  if (which === "orig" && f && S.main && f.pages !== S.main.pages) {
+    $("origInfo").textContent += ` · 필기본(${S.main.pages}쪽)과 쪽 수가 달라요. 같은 번호 쪽끼리 비교해요.`;
+  }
+  updateRun();
+  if (S.main) loadColors();
+}
+
+function setupDrop(zone, input, which) {
+  zone.addEventListener("click", () => input.click());
+  zone.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } });
+  input.addEventListener("change", () => { if (input.files[0]) upload(input.files[0], which); input.value = ""; });
+  ["dragenter", "dragover"].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); zone.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); zone.classList.remove("over"); }));
+  zone.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f) upload(f, which); });
+}
+setupDrop($("dropMain"), $("fileMain"), "main");
+setupDrop($("dropOrig"), $("fileOrig"), "orig");
+$("mainChange").onclick = () => $("fileMain").click();
+$("origRemove").onclick = () => { S.orig = null; showFile("orig"); };
+// 화면 아무 데나 떨어뜨려도 필기본으로
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) upload(f, "main"); });
+
+// ── 형광펜 색 ─────────────────────────────────────────────────
+async function loadColors() {
+  const req = ++S.colorsReq;
+  $("colorLoading").classList.remove("hidden"); $("colorBody").classList.add("hidden");
+  try {
+    const data = await api("/api/colors", { file: S.main.id, original: S.orig && S.orig.id, pages: $("optPages").value.trim() });
+    if (req !== S.colorsReq) return;
+    S.colors = data.colors.map((c) => ({ ...c, on: true }));
+  } catch (e) {
+    if (req !== S.colorsReq) return;
+    S.colors = [];
+    $("colorHint").textContent = e.message;
+  }
+  renderColors();
+}
+
+function renderColors() {
+  $("colorLoading").classList.add("hidden"); $("colorBody").classList.remove("hidden");
+  const box = $("colors"); box.innerHTML = "";
+  if (!S.colors.length) {
+    $("colorHint").textContent = "형광펜은 찾지 못했어요. 밑줄·동그라미·손글씨·메모는 그대로 정리돼요.";
+    updateRun(); return;
+  }
+  $("colorHint").textContent = "내가 칠한 색만 체크해 두세요. 체크를 끈 색은 요약에서 빠져요. 색마다 의미(예: 핵심, 정의)를 적으면 요약에 같이 표시돼요.";
+  const seenFamily = new Set();
+  S.colors.forEach((c, i) => {
+    const row = document.createElement("div");
+    row.className = "crow" + (c.on ? "" : " off");
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = c.on; cb.id = "c" + i;
+    cb.setAttribute("aria-label", c.name + " " + (c.code || "") + " 포함");
+    cb.onchange = () => { c.on = cb.checked; row.classList.toggle("off", !c.on); updateRun(); };
+    const sw = document.createElement("span"); sw.className = "sw"; sw.style.background = c.css;
+    const mid = document.createElement("label"); mid.htmlFor = cb.id; mid.style.minWidth = "0"; mid.style.cursor = "pointer";
+    const pages = c.pages.slice(0, 6).join(", ") + (c.pages.length > 6 ? "…" : "");
+    mid.innerHTML = `<div><span class="cname"></span><span class="code"></span> <span class="hint">· ${c.count}곳 · ${pages}쪽</span></div><div class="sample"></div>`;
+    mid.querySelector(".cname").textContent = c.name;
+    mid.querySelector(".code").textContent = c.code || "(색 계열)";
+    mid.querySelector(".sample").textContent = c.sample ? "“" + c.sample + "”" : "(글자 없음)";
+    row.append(cb, sw, mid);
+    if (!seenFamily.has(c.family)) {
+      seenFamily.add(c.family);
+      const lab = document.createElement("input"); lab.type = "text"; lab.placeholder = "의미 (예: 핵심)";
+      lab.dataset.family = c.family; lab.className = "labelInput";
+      lab.setAttribute("aria-label", c.name + " 색의 의미");
+      row.append(lab);
+    }
+    box.append(row);
+  });
+  updateRun();
+}
+$("optPages").addEventListener("change", () => { if (S.main) loadColors(); });
+
+// ── 선택지 ────────────────────────────────────────────────────
+const NOTES = {
+  group_by: { chapter: "큰 제목 › 작은 제목 아래에 모아요. 맨 위에 목차가 붙어요.", page: "쪽 순서대로 모아요. 표시마다 어느 단원인지 적어 줘요.", color: "색마다 모아요 (예: 노랑=핵심만 따로 복습). 표시마다 단원을 적어 줘요." },
+  context: { ai: "칠한 문장이 든 문장 전체 + AI가 단원 개요와 표시마다 1~2문장 연결 설명을 붙여요. AI 글에는 AI 표시가 붙어요.", sentence: "칠한 부분이 든 문장 전체를 보여 주고 칠한 부분만 굵게 해요.", none: "칠한 부분만 그대로 모아요." },
+  handwriting: { auto: "AI가 손글씨를 글로 바꿔요. 애매한 글씨는 원본 이미지도 같이 넣어요.", image: "손글씨를 잘라낸 원본 이미지 그대로 넣어요.", both: "AI가 읽은 글과 원본 이미지를 항상 같이 넣어요." },
+};
+const noteId = { group_by: "noteGroup", context: "noteContext", handwriting: "noteHand" };
+function segValue(name) { const b = document.querySelector(`.seg[data-name="${name}"] button[aria-pressed=true]`); return b && b.dataset.v; }
+function setSeg(name, v) {
+  document.querySelectorAll(`.seg[data-name="${name}"] button`).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === v)));
+  $(noteId[name]).textContent = NOTES[name][v] || "";
+}
+document.querySelectorAll(".seg").forEach((seg) => {
+  seg.addEventListener("click", (e) => { const b = e.target.closest("button"); if (b && !b.disabled) setSeg(seg.dataset.name, b.dataset.v); });
+});
+
+// ── AI 키 ─────────────────────────────────────────────────────
+function applyKeyState(st) {
+  S.hasKey = st.has_key;
+  $("aiDot").classList.toggle("on", st.has_key);
+  $("aiText").textContent = st.has_key ? `사용 가능${st.masked ? " (" + st.masked + ")" : ""}` : "API 키가 없어 AI 없이 만들어요 (손글씨는 원본 이미지, 문맥은 앞뒤 문장).";
+  $("aiToggle").textContent = st.has_key ? "키 바꾸기" : "API 키 넣기";
+  $("keyClear").classList.toggle("hidden", !st.saved);
+  document.querySelectorAll("[data-needs-ai]").forEach((b) => { b.disabled = !st.has_key; b.title = st.has_key ? "" : "API 키를 넣으면 쓸 수 있어요"; });
+  setSeg("context", st.has_key ? "ai" : "sentence");
+  setSeg("handwriting", st.has_key ? "auto" : "image");
+}
+$("aiToggle").onclick = () => { $("keyForm").classList.toggle("hidden"); $("keyInput").focus(); };
+$("keySave").onclick = async () => {
+  const key = $("keyInput").value.trim(); if (!key) return;
+  applyKeyState(await api("/api/key", { key, remember: $("keyRemember").checked }));
+  $("keyInput").value = ""; $("keyForm").classList.add("hidden");
+};
+$("keyClear").onclick = async () => { applyKeyState(await api("/api/key", { key: "", remember: false })); };
+
+// ── 실행 ──────────────────────────────────────────────────────
+function updateRun() {
+  const any = !S.colors.length || S.colors.some((c) => c.on);
+  $("runBtn").disabled = !S.main || !any;
+  $("runHint").textContent = !S.main ? "먼저 PDF를 넣어 주세요." : any ? "" : "형광펜 색을 하나 이상 체크해 주세요.";
+}
+
+$("runBtn").onclick = async () => {
+  const allOn = S.colors.every((c) => c.on);
+  const labels = {};
+  document.querySelectorAll(".labelInput").forEach((i) => { if (i.value.trim()) labels[i.dataset.family] = i.value.trim(); });
+  const options = {
+    group_by: segValue("group_by"), context: segValue("context"), handwriting: segValue("handwriting"),
+    headings: $("optHeadings").value, scan: $("optScan").value, pages: $("optPages").value.trim(),
+    title: $("optTitle").value.trim(), no_drawings: $("optNoDraw").checked, no_attach: $("optNoAttach").checked,
+    colors: allOn ? [] : S.colors.filter((c) => c.on).map((c) => c.filter), labels,
+  };
+  $("runBtn").disabled = true;
+  $("resultCard").classList.remove("hidden");
+  $("resultTitle").innerHTML = '<span class="spin"></span> 만드는 중…';
+  $("doneBox").classList.add("hidden"); $("errBox").classList.add("hidden"); $("progs").innerHTML = ""; $("log").textContent = "";
+  $("resultCard").scrollIntoView({ behavior: "smooth", block: "start" });
+  try {
+    const { job } = await api("/api/run", { file: S.main.id, original: S.orig && S.orig.id, options });
+    S.job = job; poll();
+  } catch (e) { showError(e.message); }
+};
+
+async function poll() {
+  let st;
+  try { st = await api("/api/job/" + S.job); } catch (e) { return showError(e.message); }
+  $("log").textContent = st.log.join("\n"); $("log").scrollTop = 1e9;
+  const progs = $("progs"); progs.innerHTML = "";
+  Object.entries(st.progress).forEach(([label, [d, n]]) => {
+    const el = document.createElement("div"); el.className = "prog";
+    el.innerHTML = `<div class="lbl"><span></span><span>${d}/${n}</span></div><div class="bar"><i style="width:${n ? d / n * 100 : 0}%"></i></div>`;
+    el.querySelector("span").textContent = label.replace(/^[^\p{L}]+/u, "");
+    progs.append(el);
+  });
+  if (st.status === "running") {
+    const last = st.log.filter((l) => l.trim()).slice(-1)[0] || "만드는 중…";
+    $("resultTitle").innerHTML = '<span class="spin"></span> ';
+    $("resultTitle").append(last.trim());
+    return setTimeout(poll, 600);
+  }
+  updateRun();
+  if (st.status === "error") return showError(st.error);
+  $("resultTitle").textContent = "✅ 다 만들었어요";
+  $("progs").innerHTML = "";
+  $("doneLine").textContent = st.summary;
+  const base = `/r/${S.job}/`, q = `?t=${encodeURIComponent(TOKEN)}`;
+  $("aOpen").href = base + encodeURIComponent("요약.html") + q;
+  $("aHtml").href = base + encodeURIComponent("요약.html") + q + "&dl=1";
+  $("aZip").href = base + encodeURIComponent("요약.zip") + q + "&dl=1";
+  $("aJson").href = base + encodeURIComponent("요약.json") + q + "&dl=1";
+  $("preview").src = $("aOpen").href;
+  $("doneBox").classList.remove("hidden");
+}
+
+function showError(msg) {
+  $("resultTitle").textContent = "만들지 못했어요";
+  $("errBox").textContent = msg; $("errBox").classList.remove("hidden");
+  $("logBox").open = true;
+  updateRun();
+}
+
+api("/api/state").then(applyKeyState).catch(() => { $("aiText").textContent = "실행 창과 연결이 끊겼어요."; });
+setSeg("group_by", "chapter");
+</script>
+</body>
+</html>

@@ -357,5 +357,17 @@ def has_credentials() -> bool:
     return (Path.home() / ".config" / "anthropic").exists()
 
 
+_warn_sink = None
+
+
+def set_warn(fn) -> None:
+    """경고를 받을 곳 (명령줄은 표준 오류, 실행 화면은 진행 기록)."""
+    global _warn_sink
+    _warn_sink = fn
+
+
 def _warn(msg: str) -> None:
-    print(f"  ! {msg}", file=sys.stderr)
+    if _warn_sink is not None:
+        _warn_sink(f"  ! {msg}")
+    else:
+        print(f"  ! {msg}", file=sys.stderr)

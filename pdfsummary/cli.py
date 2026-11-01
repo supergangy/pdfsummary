@@ -87,13 +87,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--format", default="html,md", help="만들 파일 종류: html,md,json 중 쉼표로 (기본 html,md)")
     p.add_argument("--title", help="요약본 제목 (기본: PDF 제목 또는 파일 이름)")
     p.add_argument("--dpi", type=int, default=200, help="원본 이미지 해상도 (기본 200)")
+    p.add_argument("--cache", type=Path, help=argparse.SUPPRESS)   # AI 결과 캐시 파일 (실행 화면이 책마다 따로 둔다)
     p.add_argument("-V", "--version", action="version", version=f"pdfsummary {__version__}")
     return p
 
 
-def main(argv: list[str] | None = None) -> int:
+def _stderr_progress(label: str, done: int, total: int) -> None:
+    print(f"\r{label} {done}/{total}", end="" if done < total else "\n", file=sys.stderr)
+
+
+def main(argv: list[str] | None = None, log=None, progress=None) -> int:
+    """log(글): 진행 상황 한 줄, progress(이름, 한 것, 전체): 진행률. 실행 화면(app)이 바꿔 끼운다."""
     args = build_parser().parse_args(argv)
-    log = lambda s: print(s, file=sys.stderr)
+    if log is None:
+        log = lambda s: print(s, file=sys.stderr)
+    if progress is None:
+        progress = _stderr_progress
+    from . import ai as _ai
+
+    _ai.set_warn(log)
+
+    def prog(label):
+        return lambda d, n: progress(label, d, n)
 
     if not args.pdf.exists():
         log(f"파일이 없습니다: {args.pdf}")
@@ -173,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
         context = "sentence"
 
     if reader is not None and mode != "image" and need_ai:
-        _read_with_ai(reader, need_ai)
+        _read_with_ai(reader, need_ai, prog)
 
     if not args.no_attach:
         marks = attach_notes(marks, line_heights)
@@ -194,7 +209,7 @@ def main(argv: list[str] | None = None) -> int:
         parents = [n for n in tree.walk() if len(n.children) >= 2 or (n.children and n.marks)]
         items = [(n, *section_text(n, opts.texts.get)) for n in with_marks]
         log(f"🧠 AI로 단원 개요·연결 설명 만드는 중 (요청 {len(items) + len(parents)}번)…")
-        reader.explain_sections(title, items, parents, _progress("   단원"))
+        reader.explain_sections(title, items, parents, prog("   단원"))
         for n in tree.walk():
             if not n.children and len(n.marks) < 2:
                 n.overview = ""   # 표시 하나뿐인 작은 단원은 개요가 그 표시 설명과 겹친다
@@ -227,26 +242,48 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def print_colors(marks) -> None:
-    """찾은 형광펜 색을 코드별로 묶어 보여 준다."""
+def collect_colors(marks) -> list[dict]:
+    """찾은 형광펜 색을 코드별로 묶는다. 많이 쓴 색부터.
+
+    filter 값은 --color에 그대로 넣을 수 있는 값이다 (정확한 코드 또는 색 이름 계열)."""
     groups: dict[str, list] = {}
     for m in marks:
         if m.kind != HIGHLIGHT or m.color is None:
             continue
         exact = m.source in ColorFilter.EXACT_SOURCES
-        code = to_hex(m.color) if exact else f"({COLOR_NAMES[color_key(m.color)][0]} 계열)"
-        groups.setdefault(code, []).append(m)
-    if not groups:
+        key = to_hex(m.color) if exact else color_key(m.color)
+        groups.setdefault(key, []).append(m)
+    out = []
+    for key, ms in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        family = color_key(ms[0].color)
+        exact = key.startswith("#")
+        out.append({
+            "filter": key if exact else COLOR_NAMES[family][0],
+            "code": key if exact else None,
+            "family": family,
+            "name": COLOR_NAMES[family][0],
+            "css": key if exact else COLOR_NAMES[family][1],
+            "count": len(ms),
+            "pages": sorted({m.page_no for m in ms}),
+            "sample": next((m.text for m in ms if m.text), ""),
+        })
+    return out
+
+
+def print_colors(marks) -> None:
+    """찾은 형광펜 색을 코드별로 묶어 보여 준다."""
+    colors = collect_colors(marks)
+    if not colors:
         print("형광펜을 찾지 못했습니다.")
         return
     print(f"{'색 코드':<14}{'색':<6}{'개수':>5}  쪽            예시")
-    for code, ms in sorted(groups.items(), key=lambda kv: -len(kv[1])):
-        name = COLOR_NAMES[color_key(ms[0].color)][0]
-        pages = sorted({m.page_no for m in ms})
+    for c in colors:
+        code = c["code"] or f"({c['name']} 계열)"
+        pages = c["pages"]
         page_s = ",".join(map(str, pages[:5])) + ("…" if len(pages) > 5 else "")
-        sample = next((m.text for m in ms if m.text), "(글자 없음)")
+        sample = c["sample"] or "(글자 없음)"
         sample = sample[:24] + ("…" if len(sample) > 24 else "")
-        print(f"{code:<14}{name:<6}{len(ms):>5}  {page_s:<13} {sample}")
+        print(f"{code:<14}{c['name']:<6}{c['count']:>5}  {page_s:<13} {sample}")
     print("\n내 형광펜 색만 남기려면: --color \"#코드\" (여러 개는 쉼표로)")
     print("(괄호로 된 '계열'은 원본 비교·스캔에서 찾은 것이라 정확한 코드 대신 색 이름으로 거르세요. 예: --color 노랑)")
 
@@ -258,24 +295,20 @@ def _make_reader(args, out_dir: Path, log):
         log("ℹ️  ANTHROPIC_API_KEY가 없어 AI 없이 정리합니다 (손글씨는 원본 이미지, 문맥은 앞뒤 문장). "
             "AI를 쓰려면 README의 'AI 설정'을 보세요.")
         return None
-    reader = AIReader(model=args.model or DEFAULT_MODEL, cache_path=out_dir / ".ai_cache.json")
+    reader = AIReader(model=args.model or DEFAULT_MODEL, cache_path=args.cache or out_dir / ".ai_cache.json")
     if not reader.available:
         log(f"ℹ️  {reader.disabled_reason} — AI 없이 정리합니다.")
         return None
     return reader
 
 
-def _progress(label):
-    return lambda d, n: print(f"\r{label} {d}/{n}", end="" if d < n else "\n", file=sys.stderr)
-
-
-def _read_with_ai(reader, todo) -> None:
+def _read_with_ai(reader, todo, prog) -> None:
     hand = [m for m in todo if m.kind == HANDWRITING]
     rest = [m for m in todo if m.kind != HANDWRITING]
     if hand:
-        reader.transcribe_handwriting(hand, _progress("  ✍️  손글씨 읽는 중"))
+        reader.transcribe_handwriting(hand, prog("  ✍️  손글씨 읽는 중"))
     if rest:
-        reader.read_highlighted(rest, _progress("  🔎 스캔 글자 읽는 중"))
+        reader.read_highlighted(rest, prog("  🔎 스캔 글자 읽는 중"))
 
 
 if __name__ == "__main__":

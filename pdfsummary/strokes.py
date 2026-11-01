@@ -89,6 +89,8 @@ def strokes_from_drawings(page: pymupdf.Page, skip_rects: list[Rect], source: st
             continue
 
         pts = _flatten(items)
+        if not is_fill and d.get("closePath") and len(pts) > 2 and pts[-1] == pts[0]:
+            pts = pts[:-1]   # 열린 획인데 끝을 시작점으로 되돌리는 선은 실제로 그은 것이 아니다
         if len(pts) < 2:
             continue
 

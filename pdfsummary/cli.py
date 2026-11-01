@@ -9,9 +9,9 @@ from pathlib import Path
 import pymupdf
 
 from . import __version__
-from .colors import parse_label
+from .colors import COLOR_NAMES, ColorFilter, color_key, parse_label, to_hex
 from .extract import Options, extract
-from .models import HANDWRITING
+from .models import HANDWRITING, HIGHLIGHT
 from .organize import (
     attach_notes,
     by_chapter,
@@ -52,6 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("pdf", type=Path, help="필기한 PDF 파일")
     p.add_argument("-o", "--out", type=Path, help="결과를 저장할 폴더 (기본: <파일이름>_요약)")
     p.add_argument("--pages", help="처리할 페이지. 예: 1-30,45,50-")
+    p.add_argument("--original", type=Path, metavar="원본.pdf",
+                   help="필기하기 전 원본 PDF. 주면 원본에도 있는 색칠·밑줄(책 자체의 것)은 빼고 내가 더한 것만 찾음")
+    p.add_argument("--color", action="append", default=[], metavar="색",
+                   help="형광펜은 이 색만 인정. 색 이름(노랑) 또는 코드(#F5E663). 여러 번 또는 쉼표로. 색 코드는 --list-colors로 확인")
+    p.add_argument("--list-colors", action="store_true",
+                   help="이 PDF에서 찾은 형광펜 색과 개수만 보여 주고 끝냄 (--color에 넣을 코드 찾기)")
     p.add_argument(
         "--handwriting",
         choices=["auto", "ai", "image", "both"],
@@ -88,6 +94,11 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as e:
         log(str(e))
         return 2
+    try:
+        color_filter = ColorFilter(args.color)
+    except ValueError as e:
+        log(str(e))
+        return 2
     formats = {f.strip().lower() for f in args.format.split(",") if f.strip()}
     bad = formats - {"html", "md", "json"}
     if bad:
@@ -109,16 +120,36 @@ def main(argv: list[str] | None = None) -> int:
         log(str(e))
         return 2
 
+    original = None
+    if args.original:
+        try:
+            original = pymupdf.open(args.original)
+        except Exception as e:
+            log(f"원본 PDF를 열 수 없습니다: {e}")
+            return 2
+        if original.page_count != doc.page_count:
+            log(f"ℹ️  원본({original.page_count}쪽)과 필기본({doc.page_count}쪽)의 쪽 수가 다릅니다. "
+                "같은 번호의 쪽끼리 비교하고, 원본에 없는 쪽은 비교 없이 찾습니다.")
+
     title = args.title or (doc.metadata or {}).get("title") or args.pdf.stem
     out_dir = args.out or args.pdf.with_name(f"{args.pdf.stem}_요약")
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     log(f"📖 {args.pdf.name} ({doc.page_count}쪽) 에서 표시한 부분을 찾는 중…")
-    opts = Options(pages=pages, drawings=not args.no_drawings, scan=args.scan, image_dpi=args.dpi)
+    opts = Options(pages=pages, drawings=not args.no_drawings, scan=args.scan, image_dpi=args.dpi, original=original)
     marks, infos = extract(doc, opts, log)
     line_heights = {i: info.line_height for i, info in infos.items()}
 
-    marks = reading_order(drop_empty(marks))
+    if args.list_colors:
+        print_colors(marks)
+        return 0
+
+    marks = drop_empty(marks)
+    if color_filter:
+        before = len(marks)
+        marks = [m for m in marks if m.kind != HIGHLIGHT or color_filter.accepts(m.color, m.source)]
+        log(f"  지정한 색이 아닌 형광펜 {before - len(marks)}개를 뺐습니다.")
+    marks = reading_order(marks)
+    out_dir.mkdir(parents=True, exist_ok=True)
     marks = merge_adjacent(marks, line_heights)
 
     mode = "image" if args.no_ai else args.handwriting
@@ -156,6 +187,30 @@ def main(argv: list[str] | None = None) -> int:
     for p in written:
         log(f"   → {p}")
     return 0
+
+
+def print_colors(marks) -> None:
+    """찾은 형광펜 색을 코드별로 묶어 보여 준다."""
+    groups: dict[str, list] = {}
+    for m in marks:
+        if m.kind != HIGHLIGHT or m.color is None:
+            continue
+        exact = m.source in ColorFilter.EXACT_SOURCES
+        code = to_hex(m.color) if exact else f"({COLOR_NAMES[color_key(m.color)][0]} 계열)"
+        groups.setdefault(code, []).append(m)
+    if not groups:
+        print("형광펜을 찾지 못했습니다.")
+        return
+    print(f"{'색 코드':<14}{'색':<6}{'개수':>5}  쪽            예시")
+    for code, ms in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        name = COLOR_NAMES[color_key(ms[0].color)][0]
+        pages = sorted({m.page_no for m in ms})
+        page_s = ",".join(map(str, pages[:5])) + ("…" if len(pages) > 5 else "")
+        sample = next((m.text for m in ms if m.text), "(글자 없음)")
+        sample = sample[:24] + ("…" if len(sample) > 24 else "")
+        print(f"{code:<14}{name:<6}{len(ms):>5}  {page_s:<13} {sample}")
+    print("\n내 형광펜 색만 남기려면: --color \"#코드\" (여러 개는 쉼표로)")
+    print("(괄호로 된 '계열'은 원본 비교·스캔에서 찾은 것이라 정확한 코드 대신 색 이름으로 거르세요. 예: --color 노랑)")
 
 
 def _run_ai(todo, args, out_dir: Path, log) -> None:

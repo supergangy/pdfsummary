@@ -75,14 +75,21 @@ class PageText:
         ys = [p[1] for p in points]
         box = (min(xs) - radius, min(ys) - radius, max(xs) + radius, max(ys) + radius)
         segs = list(zip(points, points[1:]))
+        last = len(segs) - 1
         out = []
         for c in self.chars:
             if not (box[0] <= c.cx <= box[2] and box[1] <= c.cy <= box[3]):
                 continue
-            # 글자 높이의 절반만큼은 여유를 준다 (획이 글자 위·아래로 살짝 치우쳐도 잡히게)
+            # 글자 높이의 1/4만큼은 여유를 준다 (획이 글자 위·아래로 살짝 치우쳐도 잡히게)
             r = radius + c.height * 0.25
-            if any(_seg_dist(c.cx, c.cy, a, b) <= r for a, b in segs):
-                out.append(c)
+            for k, (a, b) in enumerate(segs):
+                d, over = _seg_dist(c.cx, c.cy, a, b)
+                # 획 양 끝의 둥근 부분이 옆 글자에 살짝 걸친 것은 칠한 것으로 보지 않는다
+                if (k == 0 and over < -1.0) or (k == last and over > 1.0):
+                    continue
+                if d <= r:
+                    out.append(c)
+                    break
         return out
 
     def above_line(self, rect: Rect, max_gap: float) -> list[Char]:
@@ -111,16 +118,19 @@ class PageText:
         return text[:limit]
 
 
-def _seg_dist(px: float, py: float, a, b) -> float:
+def _seg_dist(px: float, py: float, a, b) -> tuple[float, float]:
+    """점과 선분 사이 거리, 그리고 선분 밖으로 벗어난 길이(시작점 앞이면 음수, 끝점 뒤면 양수, 안이면 0)."""
     ax, ay = a
     bx, by = b
     dx, dy = bx - ax, by - ay
     L = dx * dx + dy * dy
     if L == 0:
-        return ((px - ax) ** 2 + (py - ay) ** 2) ** 0.5
-    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / L))
+        return ((px - ax) ** 2 + (py - ay) ** 2) ** 0.5, 0.0
+    raw = ((px - ax) * dx + (py - ay) * dy) / L
+    t = max(0.0, min(1.0, raw))
     qx, qy = ax + t * dx, ay + t * dy
-    return ((px - qx) ** 2 + (py - qy) ** 2) ** 0.5
+    over = (raw - t) * L ** 0.5
+    return ((px - qx) ** 2 + (py - qy) ** 2) ** 0.5, over
 
 
 def join_chars(chars: list[Char]) -> str:

@@ -7,7 +7,7 @@ from typing import Callable, Optional
 
 import pymupdf
 
-from . import scan
+from . import diff, scan
 from .models import (
     CIRCLE,
     HANDWRITING,
@@ -46,6 +46,7 @@ class Options:
     drawings: bool = True               # 페이지에 굳어진 펜 획도 찾기 (GoodNotes 등)
     scan: str = "auto"                  # auto / on / off : 스캔 이미지에서 형광펜 색 찾기
     image_dpi: int = 200                # 원본 이미지로 잘라낼 때 해상도
+    original: Optional[pymupdf.Document] = None  # 필기 전 원본 PDF (있으면 책 자체의 색칠·선은 뺀다)
 
 
 @dataclass
@@ -62,7 +63,12 @@ def extract(doc: pymupdf.Document, opts: Options, log: Callable[[str], None] = l
     infos: dict[int, PageInfo] = {}
     for i in pages:
         page = doc[i]
-        found, info = extract_page(page, i, opts)
+        orig = opts.original[i] if opts.original is not None and i < opts.original.page_count else None
+        try:
+            found, info = extract_page(page, i, opts, orig)
+        except diff.PageMismatch:
+            log(f"  ! p.{i + 1}: 원본과 쪽 모양이 달라 비교하지 않고 찾습니다.")
+            found, info = extract_page(page, i, opts, None)
         infos[i] = info
         if found:
             log(f"  p.{i + 1}: {len(found)}개")
@@ -70,8 +76,12 @@ def extract(doc: pymupdf.Document, opts: Options, log: Callable[[str], None] = l
     return marks, infos
 
 
-def extract_page(page: pymupdf.Page, index: int, opts: Options) -> tuple[list[Mark], PageInfo]:
+def extract_page(
+    page: pymupdf.Page, index: int, opts: Options, original: Optional[pymupdf.Page] = None
+) -> tuple[list[Mark], PageInfo]:
     pt = PageText(page)
+    if original is not None and not pt.has_text and _same_size(page, original):
+        pt = PageText(original)   # 필기본이 그림으로 굳어졌어도 원본에는 글자층이 있을 수 있다
     lh = pt.line_height()
     scanned = scan.is_scanned_page(page)
     marks: list[Mark] = []
@@ -124,7 +134,10 @@ def extract_page(page: pymupdf.Page, index: int, opts: Options) -> tuple[list[Ma
             marks.append(Mark(index, NOTE, rect, SRC_ANNOT, color, text=content))
 
     if opts.drawings:
+        book = _signatures(strokes_from_drawings(original, [], SRC_DRAWING)) if original is not None else set()
         for s in strokes_from_drawings(page, annot_rects, SRC_DRAWING):
+            if _signature(s) in book:   # 원본에도 있는 선 = 책 자체의 것
+                continue
             if is_highlighter(s, lh):
                 marks.append(highlight_from_stroke(s, pt, index))
             else:
@@ -133,7 +146,11 @@ def extract_page(page: pymupdf.Page, index: int, opts: Options) -> tuple[list[Ma
     for group in cluster_strokes(pen, dist=max(6.0, 0.7 * lh)):
         marks.append(classify_pen_group(group, pt, index, lh))
 
-    if opts.scan == "on" or (opts.scan == "auto" and scanned):
+    if original is not None:
+        # 원본과 다른 부분 중 아직 못 찾은 것 (그림으로 굳은 필기 등)
+        known = [m.rect for m in marks] + annot_rects
+        marks.extend(diff.added_marks(page, original, pt, index, lh, known))
+    elif opts.scan == "on" or (opts.scan == "auto" and scanned):
         for m in scan.find_highlights(page, index):
             if pt.has_text:   # OCR된 스캔본이면 글자층에서 바로 읽는다
                 m.text = join_chars(pt.in_rects(m.parts or [m.rect]))
@@ -147,13 +164,27 @@ def extract_page(page: pymupdf.Page, index: int, opts: Options) -> tuple[list[Ma
     return marks, PageInfo(index, lh, page.rect.width, scanned)
 
 
+def _same_size(a: pymupdf.Page, b: pymupdf.Page) -> bool:
+    return abs(a.rect.width - b.rect.width) < 1 and abs(a.rect.height - b.rect.height) < 1
+
+
+def _signature(s: Stroke):
+    return (tuple(round(v) for v in s.rect), tuple(round(c, 2) for c in (s.color or ())))
+
+
+def _signatures(strokes: list[Stroke]) -> set:
+    return {_signature(s) for s in strokes}
+
+
 def crop_png(page: pymupdf.Page, rect: Rect, dpi: int) -> bytes:
     clip = pymupdf.Rect(expand(rect, 4)) & page.rect
     if clip.is_empty:
         clip = page.rect
-    # 너무 큰 영역은 해상도를 낮춰 이미지가 지나치게 커지지 않게
+    # 작은 손글씨는 해상도를 올려 AI가 읽기 쉽게(긴 변 600px 이상), 너무 큰 영역은 낮춰서 2000px 이하로
     longest = max(clip.width, clip.height) / 72 * dpi
-    if longest > 2000:
+    if longest < 600:
+        dpi = min(400, int(dpi * 600 / max(longest, 1)))
+    elif longest > 2000:
         dpi = max(72, int(dpi * 2000 / longest))
     pix = page.get_pixmap(dpi=dpi, clip=clip, annots=True)
     return pix.tobytes("png")

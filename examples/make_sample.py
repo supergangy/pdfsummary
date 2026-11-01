@@ -117,12 +117,12 @@ def page_flattened(doc: pymupdf.Document) -> None:
     r = page.search_for("포도당 1분자가 피루브산 2분자로 분해된다")[0]
     y = (r.y0 + r.y1) / 2
     sh.draw_polyline([(r.x0, y), (r.x0 + r.width * 0.5, y + 0.4), (r.x1, y)])
-    sh.finish(color=(1, 0.85, 0), width=r.height * 1.1, stroke_opacity=0.35, lineCap=1)
+    sh.finish(color=(1, 0.85, 0), width=r.height * 1.1, stroke_opacity=0.35, lineCap=1, closePath=False)
 
     # 펜 손글씨 (둥근 끝, 검정) - 아래 여백
     for stroke in squiggle_word(80, 470, 6, size=11, seed=3):
         sh.draw_polyline(stroke)
-        sh.finish(color=(0.05, 0.05, 0.05), width=1.4, lineCap=1, lineJoin=1)
+        sh.finish(color=(0.05, 0.05, 0.05), width=1.4, lineCap=1, lineJoin=1, closePath=False)
     sh.commit()
 
     # 책 자체의 표 선 (손글씨로 잡히면 안 됨)
@@ -164,3 +164,59 @@ def main(path: str) -> None:
 
 if __name__ == "__main__":
     main(sys.argv[1] if len(sys.argv) > 1 else "sample.pdf")
+
+
+# ── 책 자체에 색칠이 있는 경우 (원본 비교 / 색 지정 시험용) ─────────────────
+
+BOOK_YELLOW = (1.0, 0.95, 0.55)     # 책에 인쇄된 강조 색
+MY_YELLOW = (0.96, 0.9, 0.39)       # 내 형광펜 색 (#F5E663)
+MY_PINK = (1.0, 0.55, 0.75)
+
+
+def make_book_pair(original_path: str, annotated_path: str) -> None:
+    """original: 책 자체에 노란 강조·빨간 밑줄이 인쇄된 원본
+    annotated: 그 위에 내가 형광펜(노랑·분홍)과 손글씨를 더한 것.
+               손글씨는 '그림 한 장'으로 덮어씌운다 (필기를 이미지로 굳혀 내보내는 앱 흉내)."""
+    orig = pymupdf.open()
+    page = orig.new_page()
+    paras = [
+        "효소는 생명체 내에서 일어나는 화학 반응의 활성화 에너지를 낮추는 생체 촉매이다.",
+        "효소는 기질 특이성이 있어 특정한 기질과만 결합하며, 이때 효소-기질 복합체가 형성된다.",
+        "효소의 활성은 온도와 pH의 영향을 받으며, 최적 온도와 최적 pH에서 가장 높다.",
+        "경쟁적 저해제는 기질과 구조가 비슷하여 효소의 활성 부위에 결합한다.",
+    ]
+    write_text(page, "4. 효소", paras)
+    # 책 자체의 강조: 불투명 노란 바탕 + 반투명 노란 바탕 + 빨간 직선 밑줄
+    r = page.search_for("생체 촉매")[0]
+    page.draw_rect(r, color=None, fill=BOOK_YELLOW, overlay=False)
+    r = page.search_for("기질 특이성")[0]
+    page.draw_rect(r, color=None, fill=BOOK_YELLOW, fill_opacity=0.5)
+    r = page.search_for("최적 온도")[0]
+    page.draw_line((r.x0, r.y1 + 1), (r.x1, r.y1 + 1), color=(0.85, 0.1, 0.1), width=1)
+    orig.save(original_path)
+
+    ann = pymupdf.open(original_path)
+    page = ann[0]
+    sh = page.new_shape()
+    for phrase, color in (("활성화 에너지를 낮추는", MY_YELLOW), ("경쟁적 저해제", MY_PINK)):
+        r = page.search_for(phrase)[0]
+        y = (r.y0 + r.y1) / 2
+        sh.draw_polyline([(r.x0, y), (r.x0 + r.width / 2, y + 0.3), (r.x1, y)])
+        sh.finish(color=color, width=r.height, stroke_opacity=0.45, lineCap=1, closePath=False)
+    sh.commit()
+
+    # 손글씨를 투명 배경 그림으로 만들어 덮는다
+    r = page.search_for("경쟁적 저해제")[0]
+    ink = pymupdf.open()
+    ip = ink.new_page(width=page.rect.width, height=page.rect.height)
+    s2 = ip.new_shape()
+    for stroke in squiggle_word(450, r.y0 + 6, 5, seed=4):
+        s2.draw_polyline(stroke)
+        s2.finish(color=(0.1, 0.2, 0.75), width=1.3, lineCap=1, closePath=False)
+    s2.commit()
+    # 그림으로 굳은 형광펜 (초록)
+    g = page.search_for("가장 높다")[0]
+    ip.draw_rect(g, color=None, fill=(0.4, 0.9, 0.4), fill_opacity=0.45)
+    pix = ip.get_pixmap(dpi=150, alpha=True)
+    page.insert_image(page.rect, stream=pix.tobytes("png"), overlay=True)
+    ann.save(annotated_path)

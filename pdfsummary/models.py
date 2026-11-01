@@ -17,6 +17,7 @@ NOTE = "note"                # 입력한 메모 (스티커 메모, 텍스트 상
 SRC_ANNOT = "annotation"   # PDF 주석 (Adobe, 미리보기, Xodo, Flexcil 등)
 SRC_DRAWING = "drawing"    # 페이지에 굳어진 펜 획 (GoodNotes, Notability 내보내기 등)
 SRC_SCAN = "scan"          # 스캔 이미지에서 색으로 찾은 것
+SRC_DIFF = "diff"          # 필기 전 원본 PDF와 비교해서 찾은 것
 
 KIND_LABELS = {
     HIGHLIGHT: "형광펜",

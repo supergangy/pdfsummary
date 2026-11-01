@@ -222,7 +222,11 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;margin-top:30px}
   <details id="logBox"><summary>진행 기록</summary><div class="log" id="log"></div></details>
 </section>
 
-<footer>pdfsummary __VERSION__ · 이 화면은 내 컴퓨터에서만 열려요. 끝내려면 실행한 창을 닫으세요.</footer>
+<footer>pdfsummary __VERSION__ · 이 화면은 내 컴퓨터에서만 열려요. <span id="quitHint">끝내려면 실행한 창을 닫으세요.</span>
+  <button class="btn hidden" id="quitBtn" style="margin-left:8px;font-size:13px;padding:4px 12px">끝내기</button></footer>
+<div id="bye" class="hidden" style="position:fixed;inset:0;background:var(--bg);display:grid;place-items:center;text-align:center;padding:24px">
+  <div><div style="font-size:40px">👋</div><h2 style="margin:8px 0">필기 요약을 끝냈어요</h2><p class="hint">이 탭은 닫아도 돼요. 다시 쓰려면 앱을 다시 실행하세요.</p></div>
+</div>
 </main>
 
 <script>
@@ -455,6 +459,14 @@ function showError(msg) {
   updateRun();
 }
 
+const DESKTOP = __DESKTOP__;
+if (DESKTOP) {
+  $("quitHint").textContent = "화면을 닫으면 3분 뒤 저절로 끝나요.";
+  $("quitBtn").classList.remove("hidden");
+  const ping = () => api("/api/ping", {}).catch(() => {});
+  ping(); setInterval(ping, 10000);
+  $("quitBtn").onclick = async () => { await api("/api/quit", {}).catch(() => {}); $("bye").classList.remove("hidden"); };
+}
 api("/api/state").then(applyKeyState).catch(() => { $("aiText").textContent = "실행 창과 연결이 끊겼어요."; });
 setSeg("group_by", "chapter");
 </script>

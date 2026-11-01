@@ -1,0 +1,77 @@
+name: 설치 앱 만들기 (Windows · Mac)
+
+# - 수동 실행: GitHub → Actions → "설치 앱 만들기" → Run workflow
+# - v로 시작하는 태그를 올리면(예: v0.2.0) 만든 파일을 Releases에 올린다
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows
+          - os: macos-latest      # Apple Silicon (M1 이후)
+            name: Mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 설치
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . "pyinstaller==6.22.3" pytest
+
+      - name: 테스트
+        run: python -m pytest -q
+
+      - name: 앱 만들기
+        working-directory: desktop
+        run: pyinstaller --noconfirm pdfsummary.spec
+
+      - name: 켜 보기 (Windows)
+        if: runner.os == 'Windows'
+        run: python desktop/smoke_test.py desktop/dist/PdfSummary.exe
+
+      - name: 켜 보기 (Mac)
+        if: runner.os == 'macOS'
+        run: python desktop/smoke_test.py "desktop/dist/필기 요약.app/Contents/MacOS/PdfSummary"
+
+      - name: 묶기 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path desktop/dist/PdfSummary.exe -DestinationPath PdfSummary-Windows.zip
+
+      - name: 묶기 (Mac)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --sequesterRsrc --keepParent "desktop/dist/필기 요약.app" PdfSummary-Mac.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PdfSummary-${{ matrix.name }}
+          path: PdfSummary-${{ matrix.name }}.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            PdfSummary-Windows.zip
+            PdfSummary-Mac.zip

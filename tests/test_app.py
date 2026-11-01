@@ -1,4 +1,5 @@
 import json
+import sys
 import threading
 import time
 import urllib.error
@@ -114,6 +115,7 @@ def test_safe_name():
     assert app._safe_name("") == "책.pdf"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows에는 유닉스 파일 권한이 없음")
 def test_key_saved_privately(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "CONFIG_DIR", tmp_path / "cfg")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)

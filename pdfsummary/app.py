@@ -17,6 +17,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import uuid
 import webbrowser
 import zipfile
@@ -59,8 +60,14 @@ class Job:
     summary: str = ""
 
 
+DESKTOP_IDLE_QUIT = 180   # 데스크톱 앱: 화면(브라우저 탭)이 닫히고 이만큼(초) 지나면 스스로 끝낸다
+
+
 class State:
-    def __init__(self):
+    def __init__(self, desktop: bool = False):
+        self.desktop = desktop
+        self.last_ping = time.monotonic()
+        self.quit_requested = False
         self.token = secrets.token_urlsafe(24)
         self.workdir = Path(tempfile.mkdtemp(prefix="pdfsummary_"))
         self.uploads: dict[str, Upload] = {}
@@ -259,7 +266,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authed(q):
                 return self._send(403, "터미널에 나온 주소(…?t=…)로 열어 주세요.".encode("utf-8"), "text/plain; charset=utf-8")
             page = resources.files("pdfsummary").joinpath("app_page.html").read_text(encoding="utf-8")
-            page = page.replace("__TOKEN__", STATE.token).replace("__VERSION__", __version__)
+            page = (page.replace("__TOKEN__", STATE.token).replace("__VERSION__", __version__)
+                    .replace("__DESKTOP__", "true" if STATE.desktop else "false"))
             return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8",
                               {"Content-Security-Policy": "frame-ancestors 'self'"})
         if not self._authed(q):
@@ -338,6 +346,12 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authed(parse_qs(url.query)):
             return self._err("권한이 없습니다.", 403)
         body = self._body_json()
+        if url.path == "/api/ping":
+            STATE.last_ping = time.monotonic()
+            return self._json({"ok": True})
+        if url.path == "/api/quit":
+            STATE.quit_requested = True
+            return self._json({"ok": True})
         if url.path == "/api/key":
             save_key(str(body.get("key") or "").strip(), bool(body.get("remember")))
             return self._json(key_state())
@@ -365,9 +379,30 @@ class Handler(BaseHTTPRequestHandler):
 
 # ── 시작 ────────────────────────────────────────────────────────────────
 
-def serve(port: int = 8765, open_browser: bool = True) -> None:
+def _busy() -> bool:
+    return any(j.status == "running" for j in STATE.jobs.values())
+
+
+def _watchdog(server) -> None:
+    """데스크톱 앱은 터미널 창이 없으니, 끝내기 버튼을 누르거나 화면을 닫고 한참 지나면 스스로 끝낸다."""
+    while True:
+        time.sleep(2)
+        idle = time.monotonic() - STATE.last_ping
+        if STATE.quit_requested or (idle > DESKTOP_IDLE_QUIT and not _busy()):
+            server.shutdown()
+            return
+
+
+def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False) -> None:
     global STATE
-    STATE = State()
+    if sys.stdout is None:   # 창 없는 앱(pyinstaller --windowed)에서는 print할 곳이 없다
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    from .cli import utf8_console
+
+    utf8_console()
+    STATE = State(desktop=desktop)
     load_saved_key()
     server = None
     for p in [port] + list(range(port + 1, port + 20)) + [0]:
@@ -380,11 +415,13 @@ def serve(port: int = 8765, open_browser: bool = True) -> None:
         print("빈 포트를 찾지 못했습니다.", file=sys.stderr)
         sys.exit(1)
     url = f"http://127.0.0.1:{server.server_address[1]}/?t={STATE.token}"
-    print("📚 필기 요약 실행 화면을 열었습니다.")
-    print(f"   브라우저가 안 열리면 이 주소를 복사해 여세요: {url}")
-    print("   끝내려면 이 창을 닫거나 Ctrl+C 를 누르세요.")
+    print("📚 필기 요약 실행 화면을 열었습니다.", flush=True)
+    print(f"   브라우저가 안 열리면 이 주소를 복사해 여세요: {url}", flush=True)
+    print("   화면의 '끝내기'를 누르면 끝납니다." if desktop else "   끝내려면 이 창을 닫거나 Ctrl+C 를 누르세요.", flush=True)
     if open_browser:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+    if desktop:
+        threading.Thread(target=_watchdog, args=(server,), daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -392,15 +429,17 @@ def serve(port: int = 8765, open_browser: bool = True) -> None:
     finally:
         server.server_close()
         shutil.rmtree(STATE.workdir, ignore_errors=True)
-        print("\n종료했습니다. 임시 파일을 지웠습니다.")
+        print("\n종료했습니다. 임시 파일을 지웠습니다.", flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="pdfsummary-app", description="필기 요약 실행 화면 (브라우저)")
     p.add_argument("--port", type=int, default=8765)
     p.add_argument("--no-browser", action="store_true", help="브라우저를 자동으로 열지 않음")
+    p.add_argument("--desktop", action="store_true",
+                   help="설치 앱 모드: 화면에 '끝내기' 버튼을 두고, 화면을 닫고 3분이 지나면 스스로 끝냄")
     a = p.parse_args(argv)
-    serve(a.port, not a.no_browser)
+    serve(a.port, not a.no_browser, desktop=a.desktop or bool(getattr(sys, "frozen", False)))
     return 0
 
 

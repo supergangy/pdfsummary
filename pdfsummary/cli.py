@@ -92,6 +92,15 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def utf8_console() -> None:
+    """Windows에서 출력이 파일·파이프로 갈 때도 한글·이모지 때문에 멈추지 않게."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def _stderr_progress(label: str, done: int, total: int) -> None:
     print(f"\r{label} {done}/{total}", end="" if done < total else "\n", file=sys.stderr)
 
@@ -100,6 +109,7 @@ def main(argv: list[str] | None = None, log=None, progress=None) -> int:
     """log(글): 진행 상황 한 줄, progress(이름, 한 것, 전체): 진행률. 실행 화면(app)이 바꿔 끼운다."""
     args = build_parser().parse_args(argv)
     if log is None:
+        utf8_console()
         log = lambda s: print(s, file=sys.stderr)
     if progress is None:
         progress = _stderr_progress

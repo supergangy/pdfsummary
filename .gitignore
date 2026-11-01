@@ -8,3 +8,5 @@ dist/
 *_요약/
 sample.pdf
 textbook.pdf
+desktop/build/
+desktop/dist/

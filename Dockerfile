@@ -11,7 +11,9 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY pdfsummary ./pdfsummary
 RUN pip install --no-cache-dir . \
+    && (python -m pdfsummary.ocr --download --dest /app/ocr_models || echo "글자 인식 모델은 처음 쓸 때 받습니다") \
     && useradd --create-home --uid 10001 app
+ENV PDFSUMMARY_MODELS=/app/ocr_models
 USER app
 
 EXPOSE 8080

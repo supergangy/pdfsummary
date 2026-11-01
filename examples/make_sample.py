@@ -299,7 +299,7 @@ def make_textbook(path: str) -> None:
 
 # ── 문제집처럼 책에 원래 색 글씨·머리 띠·뱃지가 인쇄된 스캔 (형광펜과 구분 시험용) ──────────
 
-def make_printed_color_scan(path: str) -> None:
+def make_printed_color_scan(path: str, text_path: str | None = None) -> None:
     """책 자체의 청록색 강조 글씨, 하늘색 머리 띠, '23년.기사' 뱃지 + 학생이 그은 노란·하늘색 형광펜 하나씩.
     형광펜은 실제 펜처럼 '곱하기'로 칠한다 (밑의 검은 글자는 그대로 검정)."""
     import io
@@ -323,6 +323,8 @@ def make_printed_color_scan(path: str) -> None:
     for text, color in lines:
         p.insert_text((60, y), text, fontname=FONT, fontsize=11, color=color or (0, 0, 0))
         y += 30
+    if text_path:   # 스캔 전 글자층이 있는 원본 (글자 인식을 흉내 낼 때 정답으로 씀)
+        tmp.save(text_path)
     pix = p.get_pixmap(dpi=150)
     a = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[..., :3].astype(np.float32) / 255
     z = 150 / 72

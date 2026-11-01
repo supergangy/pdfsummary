@@ -36,3 +36,19 @@ def textbook(tmp_path_factory):
     path = tmp_path_factory.mktemp("tb") / "textbook.pdf"
     make_sample.make_textbook(str(path))
     return path
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "real_ocr: 실제 한국어 글자 인식 모델로 시험 (모델이 있을 때만)")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_ocr_by_default(request, tmp_path, monkeypatch):
+    """보통 시험은 글자 인식 모델이 없는 것처럼 (있는 컴퓨터·CI에서도 결과가 같게). real_ocr 표시가 있는 시험만 실제 모델을 쓴다."""
+    monkeypatch.setenv("PDFSUMMARY_HOME", str(tmp_path / "home"))
+    if request.node.get_closest_marker("real_ocr"):
+        return
+    import pdfsummary.ocr as ocr
+
+    monkeypatch.setattr(ocr, "find_model", lambda: None)
+    monkeypatch.setattr(ocr, "download_model", lambda *a, **k: None)

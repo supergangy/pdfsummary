@@ -12,6 +12,8 @@ dependencies = [
     "pymupdf>=1.24",
     "numpy>=1.24",
     "anthropic>=2.3",
+    "rapidocr>=3.10",      # 스캔본 글자 인식 (기기 안, 인터넷·AI 없이)
+    "onnxruntime>=1.20",
 ]
 
 [project.optional-dependencies]

@@ -56,6 +56,9 @@ def main(exe: str) -> int:
                                  headers={"X-Token": token, "Content-Type": "application/json"})
     print("colors:", json.loads(urllib.request.urlopen(col, timeout=120).read()))
 
+    if os.environ.get("PDFSUMMARY_EXPECT_OCR"):
+        check_ocr(url, token)
+
     q = urllib.request.Request(f"{url}/api/quit", data=b"{}", method="POST",
                                headers={"X-Token": token, "Content-Type": "application/json"})
     urllib.request.urlopen(q, timeout=30).read()
@@ -67,6 +70,32 @@ def main(exe: str) -> int:
         return 1
     print("OK: 화면이 뜨고, PDF 분석이 되고, 끝내기로 꺼졌습니다.")
     return 0
+
+
+def check_ocr(url: str, token: str) -> None:
+    """스캔한 쪽(글자층 없음)의 형광펜 부분을 앱 안의 글자 인식으로 읽어 내는지."""
+    import tempfile
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "examples"))
+    import make_sample
+
+    path = os.path.join(tempfile.mkdtemp(), "scan.pdf")
+    make_sample.make_printed_color_scan(path)
+    h = {"X-Token": token, "Content-Type": "application/json"}
+    up = urllib.request.Request(f"{url}/api/upload?name=scan.pdf", data=open(path, "rb").read(), method="PUT", headers={"X-Token": token})
+    fid = json.loads(urllib.request.urlopen(up, timeout=60).read())["id"]
+    body = json.dumps({"file": fid, "options": {"style": "list", "context": "sentence", "handwriting": "image"}}).encode()
+    job = json.loads(urllib.request.urlopen(urllib.request.Request(f"{url}/api/run", data=body, method="POST", headers=h), timeout=60).read())["job"]
+    for _ in range(600):
+        st = json.loads(urllib.request.urlopen(urllib.request.Request(f"{url}/api/job/{job}", headers=h), timeout=30).read())
+        if st["status"] != "running":
+            break
+        time.sleep(0.5)
+    print("ocr job:", st["status"], st.get("summary"), st.get("error"))
+    assert st["status"] == "done", st
+    html = urllib.request.urlopen(f"{url}/r/{job}/%EC%9A%94%EC%95%BD.html?t={token}", timeout=30).read().decode("utf-8")
+    assert "보안 기능" in html and "SNMPv3" in html, "스캔 쪽 형광펜 글자를 읽지 못했습니다"
+    print("OK: 스캔 쪽 형광펜 글자를 글자 인식으로 읽었습니다.")
 
 
 if __name__ == "__main__":

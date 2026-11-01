@@ -36,8 +36,13 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install . "pyinstaller==6.22.3" pytest
 
+      - name: 한국어 글자 인식 모델 받기 (앱에 넣음)
+        run: python -m pdfsummary.ocr --download --dest desktop/ocr_models
+
       - name: 테스트
-        run: python -m pytest -q
+        env:
+          PDFSUMMARY_MODELS: ${{ github.workspace }}/desktop/ocr_models
+        run: python -m pytest -q -rs
 
       - name: 앱 만들기
         working-directory: desktop
@@ -45,10 +50,14 @@ jobs:
 
       - name: 켜 보기 (Windows)
         if: runner.os == 'Windows'
+        env:
+          PDFSUMMARY_EXPECT_OCR: "1"
         run: python desktop/smoke_test.py desktop/dist/PdfSummary.exe
 
       - name: 켜 보기 (Mac)
         if: runner.os == 'macOS'
+        env:
+          PDFSUMMARY_EXPECT_OCR: "1"
         run: python desktop/smoke_test.py "desktop/dist/필기 요약.app/Contents/MacOS/PdfSummary"
 
       - name: 묶기 (Windows)

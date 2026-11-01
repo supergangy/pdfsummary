@@ -8,7 +8,9 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()
     # 무거운 라이브러리는 요청 처리 스레드가 아니라 여기(메인 스레드)에서 먼저 한 번 불러 둔다
     import numpy  # noqa: F401
+    import onnxruntime  # noqa: F401
     import pymupdf  # noqa: F401
+    import rapidocr  # noqa: F401
 
     import pdfsummary.cli  # noqa: F401
     from pdfsummary.app import main

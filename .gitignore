@@ -10,3 +10,5 @@ sample.pdf
 textbook.pdf
 desktop/build/
 desktop/dist/
+desktop/ocr_models/
+ocr_models/

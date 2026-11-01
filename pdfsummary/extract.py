@@ -41,29 +41,81 @@ TEXT_MARKUP = {
 
 
 class TextCache:
-    """쪽마다 인쇄 글자를 한 번만 읽어 둔다. 필기본에 글자층이 없으면 원본의 글자층을 쓴다."""
+    """쪽마다 인쇄 글자를 한 번만 읽어 둔다.
+    필기본에 글자층이 없으면 원본의 글자층을, 그래도 없으면(스캔본) 기기 안 글자 인식(OCR)으로 읽는다."""
 
-    def __init__(self, doc: pymupdf.Document, original: Optional[pymupdf.Document] = None):
+    def __init__(self, doc: pymupdf.Document, original: Optional[pymupdf.Document] = None,
+                 ocr: str = "off", log: Callable[[str], None] = lambda s: None):
         self.doc = doc
         self.original = original
+        self.ocr_mode = ocr          # auto: 글자층 없는 그림 쪽만 인식 / off
+        self.log = log
         self._cache: dict[int, PageText] = {}
+        self._plain: dict[int, PageText] = {}   # 글자 인식 없이 읽은 것
+        self._engine = None
+        self._engine_failed = False
+        self._digest: Optional[str] = None
+        self.ocr_pages = 0
 
-    def get(self, i: int) -> Optional[PageText]:
+    def get(self, i: int, ocr: bool = True) -> Optional[PageText]:
+        """ocr=False면 글자 인식은 하지 않는다 (먼저 표시가 있는지만 볼 때 — 글자 인식은 쪽마다 몇 초 걸린다)."""
         if i < 0 or i >= self.doc.page_count:
             return None
-        if i not in self._cache:
+        if i in self._cache:
+            return self._cache[i]
+        if i not in self._plain:
             page = self.doc[i]
             pt = PageText(page)
             if not pt.has_text and self.original is not None and i < self.original.page_count:
                 orig = self.original[i]
                 if _same_size(page, orig):
                     pt = PageText(orig)   # 필기본이 그림으로 굳어졌어도 원본에는 글자층이 있을 수 있다
-            self._cache[i] = pt
+            self._plain[i] = pt
+        pt = self._plain[i]
+        if not ocr or not self.needs_ocr(i):
+            if pt.has_text or self.ocr_mode == "off":
+                self._cache[i] = pt
+            return pt
+        self._cache[i] = self._ocr(self.doc[i], i) or pt
         return self._cache[i]
 
-    def all(self, upto: Optional[int] = None) -> dict[int, PageText]:
+    def needs_ocr(self, i: int) -> bool:
+        pt = self._plain.get(i)
+        if pt is None:
+            pt = self.get(i, ocr=False)
+        return (self.ocr_mode != "off" and not self._engine_failed and not pt.has_text
+                and bool(self.doc[i].get_images()))
+
+    def _ocr(self, page: pymupdf.Page, i: int) -> Optional[PageText]:
+        if self._engine_failed:
+            return None
+        if self._engine is None:
+            from .ocr import OcrEngine
+
+            self._engine = OcrEngine(self.log)
+            if not self._engine.ready:
+                self._engine_failed = True
+                self.log(f"ℹ️  {self._engine.error} 스캔 쪽 글자는 그림으로 넣습니다.")
+                return None
+        if self._digest is None:
+            import hashlib
+
+            from pathlib import Path
+
+            data = Path(self.doc.name).read_bytes() if self.doc.name else self.doc.tobytes()
+            self._digest = hashlib.sha256(data).hexdigest()[:24]
+        from .ocr import OCR_DPI
+
+        self.ocr_pages += 1
+        if self.ocr_pages == 1 or self.ocr_pages % 10 == 0:
+            self.log(f"  🔤 스캔 쪽 글자 읽는 중… ({i + 1}쪽)")
+        lines = self._engine.read_page(page, cache_key=f"{self._digest}_{i}_{OCR_DPI}")
+        return PageText.from_ocr(lines, page.rect.height)
+
+    def all(self, upto: Optional[int] = None, ocr_pages: Optional[set[int]] = None) -> dict[int, PageText]:
+        """ocr_pages를 주면 그 쪽들만 글자 인식을 한다 (나머지 스캔 쪽은 글자 없이)."""
         n = self.doc.page_count if upto is None else min(upto + 1, self.doc.page_count)
-        return {i: self.get(i) for i in range(n)}
+        return {i: self.get(i, ocr=ocr_pages is None or i in ocr_pages) for i in range(n)}
 
 
 @dataclass
@@ -108,7 +160,18 @@ def extract(doc: pymupdf.Document, opts: Options, log: Callable[[str], None] = l
 def extract_page(
     page: pymupdf.Page, index: int, opts: Options, original: Optional[pymupdf.Page] = None
 ) -> tuple[list[Mark], PageInfo]:
-    pt = opts.texts.get(index) if opts.texts is not None else PageText(page)
+    if opts.texts is None:
+        return _extract_page(page, index, opts, original, PageText(page))
+    # 먼저 글자 인식 없이 표시를 찾고, 스캔 쪽에 표시가 있을 때만 글자를 인식해서 다시 읽는다
+    marks, info = _extract_page(page, index, opts, original, opts.texts.get(index, ocr=False))
+    if marks and opts.texts.needs_ocr(index):
+        marks, info = _extract_page(page, index, opts, original, opts.texts.get(index))
+    return marks, info
+
+
+def _extract_page(
+    page: pymupdf.Page, index: int, opts: Options, original: Optional[pymupdf.Page], pt: PageText
+) -> tuple[list[Mark], PageInfo]:
     lh = pt.line_height()
     scanned = scan.is_scanned_page(page)
     marks: list[Mark] = []

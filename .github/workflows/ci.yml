@@ -16,7 +16,12 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install . pytest
-      - run: python -m pytest -q
+      - name: 한국어 글자 인식 모델 받기
+        run: python -m pdfsummary.ocr --download --dest ocr_models
+      - name: 테스트 (실제 글자 인식 포함)
+        env:
+          PDFSUMMARY_MODELS: ${{ github.workspace }}/ocr_models
+        run: python -m pytest -q -rs
 
   mobile:
     runs-on: ubuntu-latest

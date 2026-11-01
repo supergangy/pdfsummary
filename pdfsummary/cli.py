@@ -10,7 +10,7 @@ import pymupdf
 
 from . import __version__
 from .colors import COLOR_NAMES, ColorFilter, color_key, parse_label, to_hex
-from .extract import Options, extract
+from .extract import Options, TextCache, extract
 from .models import HANDWRITING, HIGHLIGHT
 from .organize import (
     add_sentences,
@@ -80,6 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
                         "list=표시한 부분 모음, auto=AI를 쓸 수 있으면 booklet(기본)")
     p.add_argument("--scope", choices=["auto", "focus", "all"], default="auto",
                    help="요약집 범위: focus=내가 표시한 주제 중심, all=책 내용 전체(표시는 강조), auto=표시가 있으면 focus(기본)")
+    p.add_argument("--ocr", choices=["auto", "off"], default="auto",
+                   help="스캔본(글자층 없는 쪽) 글자 인식: auto=표시가 있는 스캔 쪽을 기기 안에서 읽음(기본, 인터넷·AI 필요 없음), off=안 함")
     p.add_argument("--headings", choices=["auto", "toc", "font"], default="auto",
                    help="목차 찾기: toc=PDF 책갈피만, font=글자 크기·굵기로 찾은 제목만, auto=둘 다(기본)")
     p.add_argument("--label", action="append", default=[], metavar="색=이름",
@@ -190,7 +192,8 @@ def _main(argv, log, progress, api_key, opened: list) -> int:
     out_dir = args.out or args.pdf.with_name(f"{args.pdf.stem}_요약")
 
     log(f"📖 {args.pdf.name} ({doc.page_count}쪽) 에서 표시한 부분을 찾는 중…")
-    opts = Options(pages=pages, drawings=not args.no_drawings, scan=args.scan, image_dpi=args.dpi, original=original)
+    opts = Options(pages=pages, drawings=not args.no_drawings, scan=args.scan, image_dpi=args.dpi, original=original,
+                   texts=TextCache(doc, original, ocr=args.ocr, log=log))
     marks, infos = extract(doc, opts, log)
     line_heights = {i: info.line_height for i, info in infos.items()}
 
@@ -243,7 +246,10 @@ def _main(argv, log, progress, api_key, opened: list) -> int:
     log("📑 목차 정리 중…")
     last_page = max((m.page for m in marks), default=0)
     toc_h = toc_headings(doc.get_toc(), opts.texts.get) if args.headings in ("auto", "toc") else []
-    font_h = font_headings(opts.texts.all(upto=last_page + 1)) if args.headings in ("auto", "font") else []
+    # 스캔 쪽은 글자 인식이 느리므로 표시가 있는 쪽과 그 앞 쪽만 읽어 제목을 찾는다
+    near_marks = {p for m in marks for p in (m.page - 1, m.page)}
+    font_h = (font_headings(opts.texts.all(upto=last_page + 1, ocr_pages=near_marks))
+              if args.headings in ("auto", "font") else [])
     tree = build_tree(merge_headings(toc_h, font_h), marks)
 
     if context == "ai" and reader is not None and marks:
@@ -387,7 +393,8 @@ def _make_booklet(args, doc, marks, pages, reader, opts, log, prog):
         return []
     n_pages, cost = estimate_cost(chunks)
     log(f"🧠 AI로 요약집 만드는 중: {n_pages}쪽, 요청 {len(chunks)}번 (예상 비용 약 ${cost:.2f}, 다시 만들면 캐시로 무료)")
-    return write_booklet(reader, doc, chunks, scope, opts.texts.get, prog("   요약집"))
+    # 요약집은 Claude가 쪽 이미지를 직접 읽으므로, 이미 인식해 둔 글자만 곁들인다 (새로 인식하지 않음)
+    return write_booklet(reader, doc, chunks, scope, lambda p: opts.texts.get(p, ocr=False), prog("   요약집"))
 
 
 def _dominant_mark_color(marks) -> str:

@@ -79,6 +79,60 @@ class PageText:
                                            block_id, li == 0, len(blines)))
                 line_id += 1
 
+    ocr = False   # 글자층이 아니라 글자 인식(OCR)으로 만든 것인지
+
+    @classmethod
+    def from_ocr(cls, lines, page_height: float) -> "PageText":
+        """글자 인식 결과(줄·글자 상자)로 같은 모양의 PageText를 만든다.
+        같은 높이의 상자는 한 줄로, 줄 간격이 벌어지거나 글자 크기가 바뀌면 다른 문단으로 본다."""
+        self = cls.__new__(cls)
+        self.chars, self.lines, self.height, self.ocr = [], [], page_height, True
+        # 세로 위치로 줄(row) 묶기 → 줄 안에서는 왼쪽부터
+        rows: list[list] = []
+        for ln in sorted(lines, key=lambda l: (l.box[1] + l.box[3]) / 2):
+            cy, h = (ln.box[1] + ln.box[3]) / 2, ln.box[3] - ln.box[1]
+            if rows:
+                last = rows[-1][0]
+                lcy, lh = (last.box[1] + last.box[3]) / 2, last.box[3] - last.box[1]
+                if abs(cy - lcy) < 0.5 * min(h, lh):
+                    rows[-1].append(ln)
+                    continue
+            rows.append([ln])
+        block_id = 0
+        prev = None
+        line_id = 0
+        pending: list[Line] = []
+
+        def close_block():
+            for k, L in enumerate(pending):
+                L.first_in_block = k == 0
+                L.block_lines = len(pending)
+            pending.clear()
+
+        for row in rows:
+            row.sort(key=lambda l: l.box[0])
+            top = min(l.box[1] for l in row)
+            bottom = max(l.box[3] for l in row)
+            h = bottom - top
+            if prev is not None:
+                ptop, pbottom = prev
+                ph = pbottom - ptop
+                if top - pbottom > 0.7 * max(h, ph) or abs(h - ph) > 0.2 * max(h, ph):
+                    block_id += 1
+                    close_block()
+            for ln in row:
+                for c, bb in ln.chars:
+                    self.chars.append(Char(c, (bb[0], top, bb[2], bottom), line_id, len(self.chars), block_id))
+                text = " ".join(ln.text.split())
+                if text:
+                    L = Line(text, (ln.box[0], top, ln.box[2], bottom), h * 0.8, False, block_id, False, 1)
+                    self.lines.append(L)
+                    pending.append(L)
+                line_id += 1
+            prev = (top, bottom)
+        close_block()
+        return self
+
     @property
     def has_text(self) -> bool:
         return sum(1 for c in self.chars if not c.c.isspace()) > 20

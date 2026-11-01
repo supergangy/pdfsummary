@@ -9,8 +9,12 @@ from PyInstaller.utils.hooks import collect_all
 datas = [(os.path.join(SPECPATH, "..", "pdfsummary", "app_page.html"), "pdfsummary")]
 binaries = []
 hiddenimports = ["pdfsummary.app", "pdfsummary.cli"]
-# PyMuPDF는 글꼴·레이아웃 모델 같은 데이터 파일을 함께 가져가야 한다
-for pkg in ("pymupdf",):
+# 한국어 글자 인식 모델 (CI가 빌드 전에 desktop/ocr_models 에 받아 둔다). 있으면 앱에 넣어 인터넷 없이도 인식
+_models = os.path.join(SPECPATH, "ocr_models")
+if os.path.isdir(_models):
+    datas += [(os.path.join(_models, f), "ocr_models") for f in os.listdir(_models) if f.endswith(".onnx")]
+# PyMuPDF는 글꼴·레이아웃 모델, RapidOCR은 설정·기본 모델, onnxruntime은 실행 파일을 함께 가져가야 한다
+for pkg in ("pymupdf", "rapidocr", "onnxruntime"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b

@@ -38,6 +38,48 @@ pdfsummary 생명과학.pdf
 - 같은 책을 옵션만 바꿔 다시 만들면 AI 결과를 재사용해서 비용이 다시 들지 않습니다 (`~/.pdfsummary/cache/`).
 - 명령어로 직접 열 수도 있습니다: `pdfsummary-app` (설치 후)
 
+## 설치 앱 (Windows · Mac) — 파이썬 없이
+
+파이썬 설치 없이 더블클릭으로 여는 앱입니다. 위의 실행 화면을 그대로 담았고, 창 아래 **끝내기**로 끕니다 (화면을 닫으면 3분 뒤 저절로 꺼짐).
+
+- **받기**: GitHub 저장소 → Releases (v로 시작하는 태그를 올리면 자동으로 올라감), 또는 Actions → "설치 앱 만들기" 실행 결과의 Artifacts
+  - Windows: `PdfSummary-Windows.zip` → 압축을 풀고 `PdfSummary.exe`
+  - Mac (M1 이후): `PdfSummary-Mac.zip` → 풀고 `필기 요약.app`을 응용 프로그램 폴더로
+- **처음 열 때 경고**: 서명하지 않은 앱이라 경고가 뜹니다.
+  - Windows "PC 보호" 창 → **추가 정보 → 실행**
+  - Mac "확인되지 않은 개발자" → 앱을 **우클릭 → 열기** (또는 시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기)
+- 직접 만들기: `pip install . pyinstaller==6.22.3` 후 `cd desktop && pyinstaller --noconfirm pdfsummary.spec` (그 OS용만 만들어짐)
+
+## 태블릿·폰 앱 (iOS · Android)
+
+아이패드·갤럭시탭에서 PDF를 고르거나 굿노트·삼성노트에서 **공유 → 필기 요약**으로 보내 요약합니다. 앱은 `mobile/`에 있고, 만들고 스토어에 올리는 방법은 [mobile/README.md](mobile/README.md)에 있습니다.
+PDF 분석은 기기에서 못 하므로 아래 **앱용 서버**가 하나 필요합니다.
+
+## 앱용 서버
+
+```bash
+pdfsummary-app --server --access-code "길고-아무도-모를-접속-코드"
+```
+
+또는 Docker로 (클라우드에 올릴 때):
+
+```bash
+docker build -t pdfsummary-server .
+docker run -p 8080:8080 -e PDFSUMMARY_ACCESS_CODE="길고-아무도-모를-접속-코드" pdfsummary-server
+```
+
+| 환경 변수 | 뜻 |
+|---|---|
+| `PDFSUMMARY_ACCESS_CODE` | **필수**, 8자 이상. 앱 설정의 "접속 코드"에 같은 값을 넣음. 이 코드가 없으면 아무것도 못 함 |
+| `ANTHROPIC_API_KEY` | 선택. 넣으면 접속 코드가 있는 **모든 사람의 AI 비용을 이 키로 냄**. 비우면 각자 앱 설정에 자기 키를 넣어 씀 (요청마다 보내고 서버에 저장 안 됨) |
+| `PDFSUMMARY_TTL_MINUTES` | 올린 PDF·결과를 지우기까지 분 (기본 60) |
+| `PDFSUMMARY_MAX_UPLOAD_MB` | 업로드 한도 (기본 300) |
+| `PORT` | 받을 포트 (기본 8080, 클라우드가 정해 주면 그 값) |
+
+- 아이폰·아이패드 앱은 **https** 주소만 붙을 수 있습니다. Render · Fly.io · Google Cloud Run 같은 곳에 Docker 이미지를 올리면 https 주소를 줍니다.
+- 요약은 한 번에 하나씩 만듭니다 (여러 명이 동시에 쓰면 차례로 처리).
+- 서버 상태 확인: `GET /healthz`
+
 ## 요약본은 이렇게 정리됩니다
 
 형광펜 친 문장만 떼어 놓으면 문맥이 끊겨 무슨 말인지 모르기 쉬워서, 세 가지를 같이 붙입니다.
@@ -244,3 +286,7 @@ pytest
 | `pdfsummary/render.py` | HTML · Markdown · JSON 쓰기 |
 | `pdfsummary/app.py`, `app_page.html` | 실행 화면 (내 컴퓨터 전용 웹 서버 + 끌어다 놓기 화면) |
 | `실행_Windows.bat`, `실행_Mac.command` | 더블클릭 실행 (처음엔 `.venv`를 만들고 설치) |
+| `desktop/` | 설치 앱 만들기 (PyInstaller 설정, 아이콘, 켜 보기 시험) |
+| `Dockerfile` | 앱용 서버 이미지 |
+| `mobile/` | 태블릿·폰 앱 (Expo) — [mobile/README.md](mobile/README.md) |
+| `.github/workflows/` | 점검(파이썬·앱), 설치 앱 만들기(Windows·Mac) |

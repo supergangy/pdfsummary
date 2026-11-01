@@ -13,6 +13,11 @@ import urllib.request
 
 
 def main(exe: str) -> int:
+    for stream in (sys.stdout, sys.stderr):   # Windows 콘솔(cp1252)에서도 한글 출력
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     env = dict(os.environ, PDFSUMMARY_NO_BROWSER="1", PYTHONIOENCODING="utf-8")
     proc = subprocess.Popen([exe], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
     url = None

@@ -165,7 +165,8 @@ def parent_prompt(book: str, node: "Node") -> str:
 
 
 class AIReader:
-    def __init__(self, model: str = DEFAULT_MODEL, cache_path: Optional[Path] = None, workers: int = 4):
+    def __init__(self, model: str = DEFAULT_MODEL, cache_path: Optional[Path] = None, workers: int = 4,
+                 api_key: Optional[str] = None):
         self.model = model
         self.workers = workers
         self.cache_path = cache_path
@@ -179,7 +180,7 @@ class AIReader:
             except (OSError, json.JSONDecodeError):
                 self._cache = {}
         try:
-            self.client = anthropic.Anthropic()
+            self.client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
         except Exception as e:  # 자격 증명을 찾지 못한 경우 등
             self.client = None
             self.disabled_reason = f"Claude 클라이언트를 만들 수 없습니다: {e}"

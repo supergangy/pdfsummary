@@ -105,8 +105,22 @@ def _stderr_progress(label: str, done: int, total: int) -> None:
     print(f"\r{label} {done}/{total}", end="" if done < total else "\n", file=sys.stderr)
 
 
-def main(argv: list[str] | None = None, log=None, progress=None) -> int:
-    """log(글): 진행 상황 한 줄, progress(이름, 한 것, 전체): 진행률. 실행 화면(app)이 바꿔 끼운다."""
+def main(argv: list[str] | None = None, log=None, progress=None, api_key: str | None = None) -> int:
+    """log(글): 진행 상황 한 줄, progress(이름, 한 것, 전체): 진행률. 실행 화면(app)이 바꿔 끼운다.
+    api_key: 이 실행에만 쓸 Claude API 키 (앱용 서버가 요청마다 넘긴다)."""
+    opened: list = []
+    try:
+        return _main(argv, log, progress, api_key, opened)
+    finally:
+        # Windows는 열린 PDF 파일을 지울 수 없으므로 끝나면 꼭 닫는다
+        for d in opened:
+            try:
+                d.close()
+            except Exception:
+                pass
+
+
+def _main(argv, log, progress, api_key, opened: list) -> int:
     args = build_parser().parse_args(argv)
     if log is None:
         utf8_console()
@@ -141,6 +155,7 @@ def main(argv: list[str] | None = None, log=None, progress=None) -> int:
 
     try:
         doc = pymupdf.open(args.pdf)
+        opened.append(doc)
     except Exception as e:
         log(f"PDF를 열 수 없습니다: {e}")
         return 2
@@ -158,6 +173,7 @@ def main(argv: list[str] | None = None, log=None, progress=None) -> int:
     if args.original:
         try:
             original = pymupdf.open(args.original)
+            opened.append(original)
         except Exception as e:
             log(f"원본 PDF를 열 수 없습니다: {e}")
             return 2
@@ -190,7 +206,7 @@ def main(argv: list[str] | None = None, log=None, progress=None) -> int:
     context = args.context
     need_ai = [m for m in marks if m.image and (m.kind == HANDWRITING or not m.text)]
     wants_ai = (mode != "image" and need_ai) or (not args.no_ai and context in ("auto", "ai"))
-    reader = _make_reader(args, out_dir, log) if wants_ai else None
+    reader = _make_reader(args, out_dir, log, api_key) if wants_ai else None
     if context == "auto":
         context = "ai" if reader is not None else "sentence"
     elif context == "ai" and reader is None:
@@ -298,14 +314,15 @@ def print_colors(marks) -> None:
     print("(괄호로 된 '계열'은 원본 비교·스캔에서 찾은 것이라 정확한 코드 대신 색 이름으로 거르세요. 예: --color 노랑)")
 
 
-def _make_reader(args, out_dir: Path, log):
+def _make_reader(args, out_dir: Path, log, api_key: str | None = None):
     from .ai import DEFAULT_MODEL, AIReader, has_credentials
 
-    if not has_credentials():
+    if not api_key and not has_credentials():
         log("ℹ️  ANTHROPIC_API_KEY가 없어 AI 없이 정리합니다 (손글씨는 원본 이미지, 문맥은 앞뒤 문장). "
             "AI를 쓰려면 README의 'AI 설정'을 보세요.")
         return None
-    reader = AIReader(model=args.model or DEFAULT_MODEL, cache_path=args.cache or out_dir / ".ai_cache.json")
+    reader = AIReader(model=args.model or DEFAULT_MODEL, cache_path=args.cache or out_dir / ".ai_cache.json",
+                      api_key=api_key)
     if not reader.available:
         log(f"ℹ️  {reader.disabled_reason} — AI 없이 정리합니다.")
         return None

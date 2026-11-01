@@ -27,7 +27,7 @@ KOREAN_REC = {
         "https://huggingface.co/RapidAI/RapidOCR/resolve/main/onnx/PP-OCRv5/rec/korean_PP-OCRv5_rec_mobile.onnx",
     ],
 }
-OCR_DPI = 200
+OCR_DPI = int(os.environ.get("PDFSUMMARY_OCR_DPI", "200"))
 
 
 @dataclass

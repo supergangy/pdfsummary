@@ -115,8 +115,10 @@ def test_real_korean_ocr_on_scanned_textbook(tmp_path, textbook):
     assert eng.ready, eng.error
     lines = eng.read_page(scan[0])
     text = " ".join(ln.text for ln in lines)
-    print(text[:400])
-    for word in ("광합성", "명반응", "틸라코이드", "ATP", "NADPH"):
+    for ln in lines:
+        print(f"{ln.score:.2f} {ln.text}")
+    # 시험용 PDF의 내장 한글 글꼴은 영문자를 한 칸씩 띄워 찍어서 영어는 확인하지 않는다 (실제 책은 정상 간격)
+    for word in ("광합성", "명반응", "틸라코이드", "세포질", "산소가 필요 없다"):
         assert word in text, word
     pt = PageText.from_ocr(lines, scan[0].rect.height)
     assert "광합성" in join_chars(pt.chars)
@@ -131,8 +133,16 @@ def test_real_korean_ocr_highlight_pipeline(tmp_path):
     scan = tmp_path / "scan.pdf"
     make_sample.make_printed_color_scan(str(scan))
     doc = pymupdf.open(scan)
-    marks, _ = extract(doc, Options(texts=TextCache(doc, ocr="auto")))
+    texts = TextCache(doc, ocr="auto")
+    marks, _ = extract(doc, Options(texts=texts))
     got = [m.text for m in sorted(marks, key=lambda m: m.rect[1])]
     print(got)
-    assert "보안 기능" in got[0] and "community" in got[0]
-    assert "SNMPv3" in got[1]
+    for dpi in (200, 300):   # 진단: 해상도별 줄 인식 결과
+        ocr.OCR_DPI = dpi
+        try:
+            for ln in ocr.OcrEngine().read_page(doc[0]):
+                print(dpi, f"{ln.score:.2f}", ln.text)
+        finally:
+            ocr.OCR_DPI = 200
+    assert got[0].startswith("보안 기능이 없으며")
+    assert "데이터 인증" in got[1]

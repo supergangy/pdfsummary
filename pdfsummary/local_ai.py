@@ -69,6 +69,27 @@ def list_models(host: Optional[str] = None) -> list[dict]:
     return out
 
 
+# 작은 모델은 형식을 강제하면 같은 항목을 끝없이 되풀이하다 길이 제한에 걸리곤 한다 (실제 Ollama 시험에서 확인).
+# Ollama는 답을 스키마대로 '생성 중에' 묶으므로, 목록 개수·글 길이에 상한을 걸어 두면 되풀이가 멈춘다.
+ARRAY_LIMITS = {"units": 3, "sections": 4, "blocks": 6, "items": 6, "columns": 4, "rows": 6,
+                "points": 6, "pages": 6, "unclear_parts": 5}
+SHORT_FIELDS = {"title", "heading", "chapter", "topic", "evidence", "kind", "confidence", "type"}
+
+
+def bounded_schema(schema: dict, key: str = "") -> dict:
+    """스키마를 복사하면서 배열에 maxItems, 문자열에 maxLength를 붙인다 (내 컴퓨터 AI 전용)."""
+    out = dict(schema)
+    t = schema.get("type")
+    if t == "object":
+        out["properties"] = {k: bounded_schema(v, k) for k, v in schema.get("properties", {}).items()}
+    elif t == "array":
+        out["items"] = bounded_schema(schema.get("items", {}), key)
+        out.setdefault("maxItems", ARRAY_LIMITS.get(key, 6))
+    elif t == "string" and "enum" not in schema:
+        out.setdefault("maxLength", 80 if key in SHORT_FIELDS else 400)
+    return out
+
+
 def _same_model(a: str, b: str) -> bool:
     def norm(x: str) -> str:
         return x[:-7] if x.endswith(":latest") else x
@@ -155,7 +176,7 @@ class OllamaReader(AIReader):
             "model": self.model,
             "messages": to_messages(content, self.vision),
             "stream": False,
-            "format": schema,                    # 답을 이 JSON 모양으로 묶는다
+            "format": bounded_schema(schema),    # 답을 이 JSON 모양으로 묶는다 (개수·길이 상한 포함)
             "options": {"num_ctx": NUM_CTX, "num_predict": min(max_tokens, MAX_PREDICT), "temperature": 0.2},
             "keep_alive": "10m",
         }

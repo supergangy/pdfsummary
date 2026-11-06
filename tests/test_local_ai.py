@@ -106,7 +106,12 @@ def test_ask_content_request_and_cache(ollama, tmp_path):
     content = [{"type": "text", "text": "안녕"}]
     assert r.ask_content(content, BOOKLET_SCHEMA, max_tokens=32000)["units"][0]["title"] == "광합성"
     body = ollama["chats"][0]
-    assert body["format"] == BOOKLET_SCHEMA and body["stream"] is False
+    fmt = body["format"]
+    assert body["stream"] is False and fmt["required"] == BOOKLET_SCHEMA["required"]
+    unit = fmt["properties"]["units"]
+    assert unit["maxItems"] == 3 and unit["items"]["properties"]["title"]["maxLength"] == 80
+    assert unit["items"]["properties"]["sections"]["items"]["properties"]["blocks"]["maxItems"] == 6
+    assert "maxItems" not in BOOKLET_SCHEMA["properties"]["units"]   # 원본(Claude용)은 그대로
     assert body["options"]["num_ctx"] >= 16384 and body["options"]["num_predict"] <= 8192
     r.ask_content(content, BOOKLET_SCHEMA, max_tokens=32000)
     assert len(ollama["chats"]) == 1   # 같은 요청은 캐시에서
@@ -188,7 +193,7 @@ def test_real_ollama_accepts_booklet_schema(textbook):
     doc = pymupdf.open(textbook)
     r = OllamaReader(model=model)
     content = chunk_content(doc, Chunk([0]), "all", TextCache(doc).get)
-    res = r.ask_content(content, BOOKLET_SCHEMA, max_tokens=4096)
+    res = r.ask_content(content, BOOKLET_SCHEMA, max_tokens=8192)
     print(json.dumps(res, ensure_ascii=False)[:1500])
     assert res is not None and isinstance(res.get("units"), list)
     for u in res["units"]:

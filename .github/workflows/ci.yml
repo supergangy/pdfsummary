@@ -70,6 +70,6 @@ jobs:
       - name: 실제 Ollama로 시험
         env:
           PDFSUMMARY_REAL_OLLAMA_MODEL: qwen2.5:0.5b
-          PDFSUMMARY_OLLAMA_MAX_TOKENS: "4096"
+          PDFSUMMARY_OLLAMA_MAX_TOKENS: "8192"
         run: python -m pytest -q -rs -s -m real_ollama tests/test_local_ai.py
 

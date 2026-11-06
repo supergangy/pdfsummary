@@ -90,6 +90,42 @@ def bounded_schema(schema: dict, key: str = "") -> dict:
     return out
 
 
+def salvage_json(text: str):
+    """길이 제한에 걸려 잘린 JSON에서 '끝까지 완성된' 부분만 살린다.
+    마지막으로 끝난 값(쉼표·닫는 괄호 바로 앞)까지 자르고, 열린 괄호를 차례로 닫는다."""
+    import json as _json
+
+    stack: list[str] = []
+    in_str = esc = False
+    cuts: list[tuple[int, list[str]]] = []   # (자를 위치, 그때 열려 있던 괄호들)
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            cuts.append((i + 1, list(stack)))
+        elif ch == ",":
+            cuts.append((i, list(stack)))
+    for pos, open_ in reversed(cuts):
+        candidate = text[:pos].rstrip().rstrip(",") + "".join(reversed(open_))
+        try:
+            return _json.loads(candidate)
+        except ValueError:
+            continue
+    return None
+
+
 def _same_model(a: str, b: str) -> bool:
     def norm(x: str) -> str:
         return x[:-7] if x.endswith(":latest") else x
@@ -193,15 +229,21 @@ class OllamaReader(AIReader):
             self._disable(f"내 컴퓨터 AI(Ollama)와 연결이 끊겼거나 너무 오래 걸립니다: {e}")
             return None
         self.calls += 1
-        if res.get("done_reason") == "length":
-            _warn("내 컴퓨터 AI의 답이 길이 제한에 걸려 잘렸습니다 (PDFSUMMARY_OLLAMA_MAX_TOKENS로 늘릴 수 있음).")
-            return None
         text = ((res.get("message") or {}).get("content") or "").strip()
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            _warn("내 컴퓨터 AI가 형식에 맞지 않는 답을 했습니다. 이 부분은 건너뜁니다.")
-            return None
+        self.last_raw = text
+        if res.get("done_reason") == "length":
+            # 작은 모델이 같은 말을 되풀이하다 길이 제한에 걸린 경우: 끝까지 완성된 부분만 살린다
+            data = salvage_json(text)
+            if not isinstance(data, dict):
+                _warn("내 컴퓨터 AI의 답이 길이 제한에 걸려 잘렸고, 살릴 부분이 없습니다.")
+                return None
+            _warn("내 컴퓨터 AI의 답이 길이 제한에 걸려 잘렸습니다. 완성된 부분만 씁니다 (더 큰 모델을 쓰면 나아집니다).")
+        else:
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                _warn("내 컴퓨터 AI가 형식에 맞지 않는 답을 했습니다. 이 부분은 건너뜁니다.")
+                return None
         if not isinstance(data, dict):
             return None
         with self._lock:

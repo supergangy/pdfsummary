@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import io
+import json
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -272,12 +273,62 @@ def write_booklet(reader, doc: pymupdf.Document, chunks: list[Chunk], scope: str
     for ch, res in zip(chunks, results):
         if not res:
             continue
-        for k, u in enumerate(x for x in res.get("units", []) if x.get("title")):
+        for k, u in enumerate(clean_units(res.get("units", []))):
             u["pages"] = sorted({p for p in u.get("pages", []) if 1 <= p <= doc.page_count} or {p + 1 for p in ch.pages})
             if k > 0:
                 u["continues_previous"] = False   # 이어짐은 묶음의 첫 주제에만 있을 수 있다
             units.append(u)
     return merge_units(units)
+
+
+def clean_units(units: list) -> list[dict]:
+    """AI 답을 다듬는다: 빠진 칸은 기본값으로, 바로 되풀이된 항목은 하나로, 빈 블록은 뺀다.
+    (작은 모델이나 잘린 답에서도 요약집이 깨지지 않게)"""
+    def s(v) -> str:
+        return v if isinstance(v, str) else ""
+
+    def strs(v) -> list[str]:
+        out: list[str] = []
+        for x in v if isinstance(v, list) else []:
+            if isinstance(x, str) and x.strip() and (not out or out[-1] != x):
+                out.append(x)
+        return out
+
+    clean = []
+    for u in units if isinstance(units, list) else []:
+        if not isinstance(u, dict) or not s(u.get("title")).strip():
+            continue
+        sections = []
+        for sec in u.get("sections") or []:
+            if not isinstance(sec, dict):
+                continue
+            blocks, seen = [], None
+            for b in sec.get("blocks") or []:
+                if not isinstance(b, dict) or b.get("type") not in BLOCK_TYPES:
+                    continue
+                rows = [strs(r) for r in b.get("rows") or [] if isinstance(r, list)]
+                nb = {"type": b["type"], "text": s(b.get("text")), "items": strs(b.get("items")),
+                      "columns": strs(b.get("columns")), "rows": [r for r in rows if r]}
+                if not (nb["text"].strip() or nb["items"] or nb["rows"]):
+                    continue
+                key = json.dumps(nb, ensure_ascii=False, sort_keys=True)
+                if key != seen:
+                    blocks.append(nb)
+                seen = key
+            if blocks:
+                sections.append({"heading": s(sec.get("heading")) or "정리", "blocks": blocks})
+        points, seen_topics = [], set()
+        for p in u.get("points") or []:
+            if not isinstance(p, dict) or not s(p.get("topic")).strip() or p["topic"] in seen_topics:
+                continue
+            seen_topics.add(p["topic"])
+            stars = p.get("stars") if isinstance(p.get("stars"), int) else 1
+            points.append({"topic": p["topic"], "memo": s(p.get("memo")), "stars": max(1, min(3, stars)),
+                           "evidence": s(p.get("evidence"))})
+        pages = [p for p in u.get("pages") or [] if isinstance(p, int)]
+        clean.append({"chapter": s(u.get("chapter")), "title": u["title"], "continues_previous": bool(u.get("continues_previous")),
+                      "intro": s(u.get("intro")), "sections": sections, "points": points, "pages": pages})
+    return clean
 
 
 def merge_units(units: list[dict]) -> list[dict]:

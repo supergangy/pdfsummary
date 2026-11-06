@@ -117,10 +117,37 @@ def test_ask_content_request_and_cache(ollama, tmp_path):
     assert len(ollama["chats"]) == 1   # 같은 요청은 캐시에서
 
 
-def test_truncated_answer_is_skipped(ollama):
+def test_truncated_answer_keeps_completed_part(ollama):
+    """작은 모델이 되풀이하다 잘린 답: 끝까지 완성된 부분만 살린다."""
+    import pdfsummary.local_ai as la
+
+    full = json.dumps(unit_json(), ensure_ascii=False)
+    cut = full[: full.index('"points"') + 30]          # points 중간에서 잘림
+    assert la.salvage_json(cut)["units"][0]["title"] == "광합성"
+    assert la.salvage_json('{"units": [{"title": "가') is None       # 완성된 값이 하나도 없음
+    assert la.salvage_json('{"a": "x\\"y", "b": [1, 2, 3') == {"a": 'x"y', "b": [1, 2]}   # 따옴표 이스케이프
+    assert la.salvage_json("garbage") is None
     ollama["done_reason"] = "length"
     r = OllamaReader(host=ollama["host"])
-    assert r.ask_content([{"type": "text", "text": "x"}], BOOKLET_SCHEMA, 1000) is None
+    assert r.ask_content([{"type": "text", "text": "x"}], BOOKLET_SCHEMA, 1000)["units"][0]["title"] == "광합성"
+
+
+def test_clean_units_fills_and_dedupes():
+    from pdfsummary.booklet import clean_units
+
+    raw = [{"title": "SNMP", "sections": [{"heading": "1. 개념", "blocks": [
+              {"type": "bullets", "items": ["a", "a", "b"]},
+              {"type": "bullets", "items": ["a", "a", "b"]},           # 바로 되풀이된 블록
+              {"type": "weird", "text": "x"},                          # 모르는 종류
+              {"type": "paragraph", "text": ""}]}],                    # 빈 블록
+            "points": [{"topic": "v3", "stars": 9}, {"topic": "v3"}]},
+           {"title": "", "sections": []}, "junk"]
+    out = clean_units(raw)
+    assert len(out) == 1
+    blocks = out[0]["sections"][0]["blocks"]
+    assert blocks == [{"type": "bullets", "text": "", "items": ["a", "b"], "columns": [], "rows": []}]
+    assert out[0]["points"] == [{"topic": "v3", "memo": "", "stars": 3, "evidence": ""}]
+    assert out[0]["intro"] == "" and out[0]["pages"] == []
 
 
 def test_text_only_model_does_not_get_handwriting_images(ollama):
@@ -194,7 +221,10 @@ def test_real_ollama_accepts_booklet_schema(textbook):
     r = OllamaReader(model=model)
     content = chunk_content(doc, Chunk([0]), "all", TextCache(doc).get)
     res = r.ask_content(content, BOOKLET_SCHEMA, max_tokens=8192)
-    print(json.dumps(res, ensure_ascii=False)[:1500])
+    raw = getattr(r, "last_raw", "")
+    print("raw head:", raw[:800])
+    print("raw tail:", raw[-400:])
+    print("parsed:", json.dumps(res, ensure_ascii=False)[:1500])
     assert res is not None and isinstance(res.get("units"), list)
     for u in res["units"]:
         assert {"title", "sections", "points"} <= set(u)

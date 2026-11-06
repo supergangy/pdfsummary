@@ -203,8 +203,23 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;margin-top:30px}
   </details>
 
   <div style="border-top:1px solid var(--line);margin:18px 0 14px"></div>
-  <div class="ai">
-    <span><span class="dot" id="aiDot"></span> <b>AI</b> <span id="aiText" class="hint">확인 중…</span></span>
+  <div class="opt" style="margin-top:0">
+    <label>AI 엔진</label>
+    <div><div class="seg" data-name="engine">
+      <button data-v="claude" aria-pressed="true">Claude (API 키)</button>
+      <button data-v="ollama" aria-pressed="false">내 컴퓨터 AI (Ollama)</button>
+      <button data-v="none" aria-pressed="false">AI 안 씀</button>
+    </div><div class="seg-note" id="noteEngine"></div>
+    <div id="ollamaBox" class="hidden" style="margin-top:8px">
+      <div class="inline">
+        <select id="ollamaModel" aria-label="내 컴퓨터 AI 모델"></select>
+        <button class="link" id="ollamaRefresh">다시 찾기</button>
+      </div>
+      <div class="hint" id="ollamaStatus" style="margin-top:4px"></div>
+    </div></div>
+  </div>
+  <div class="ai" id="claudeBox">
+    <span><span class="dot" id="aiDot"></span> <b>Claude</b> <span id="aiText" class="hint">확인 중…</span></span>
     <button class="link" id="aiToggle">API 키 넣기</button>
   </div>
   <div class="keyform hidden" id="keyForm">
@@ -376,17 +391,30 @@ $("optPages").addEventListener("change", () => { if (S.main) loadColors(); });
 
 // ── 선택지 ────────────────────────────────────────────────────
 const NOTES = {
+  engine: {
+    claude: "정리 품질이 가장 좋아요. Claude API 키가 필요하고 쪽 수만큼 비용이 들어요.",
+    ollama: "내 컴퓨터에서 돌려서 무료이고 인터넷이 필요 없어요. 대신 느리고, 모델이 작을수록 정리 품질이 떨어져요.",
+    none: "AI 없이 칠한 부분을 모아요 (스캔본도 글자 인식으로 글자로).",
+  },
   style: { booklet: "AI가 책 내용과 내 표시로 주제별 핵심 정리를 만들어요: 개념 → 구조(비교 표) → 예상 문제 → 시험 포인트(출제 빈도 ★). 내가 칠한 말은 요약집에서도 형광펜으로 보여요.", list: "내가 칠한 부분을 목차·쪽·색별로 그대로 모아요. AI 없이도 돼요." },
   scope: { focus: "내가 표시한 주제만 정리하고, 이해에 필요한 앞뒤 설명을 곁들여요.", all: "넣은 쪽 전체를 정리해요. 표시한 부분은 형광펜으로 강조돼요. (쪽이 많으면 비용이 늘어요)" },
   group_by: { chapter: "큰 제목 › 작은 제목 아래에 모아요. 맨 위에 목차가 붙어요.", page: "쪽 순서대로 모아요. 표시마다 어느 단원인지 적어 줘요.", color: "색마다 모아요 (예: 노랑=핵심만 따로 복습). 표시마다 단원을 적어 줘요." },
   context: { ai: "칠한 문장이 든 문장 전체 + AI가 단원 개요와 표시마다 1~2문장 연결 설명을 붙여요. AI 글에는 AI 표시가 붙어요.", sentence: "칠한 부분이 든 문장 전체를 보여 주고 칠한 부분만 굵게 해요.", none: "칠한 부분만 그대로 모아요." },
   handwriting: { auto: "AI가 손글씨를 글로 바꿔요. 애매한 글씨는 원본 이미지도 같이 넣어요.", image: "손글씨를 잘라낸 원본 이미지 그대로 넣어요.", both: "AI가 읽은 글과 원본 이미지를 항상 같이 넣어요." },
 };
-const noteId = { style: "noteStyle", scope: "noteScope", group_by: "noteGroup", context: "noteContext", handwriting: "noteHand" };
+const noteId = { engine: "noteEngine", style: "noteStyle", scope: "noteScope", group_by: "noteGroup", context: "noteContext", handwriting: "noteHand" };
 function segValue(name) { const b = document.querySelector(`.seg[data-name="${name}"] button[aria-pressed=true]`); return b && b.dataset.v; }
 function setSeg(name, v) {
   document.querySelectorAll(`.seg[data-name="${name}"] button`).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.v === v)));
   $(noteId[name]).textContent = NOTES[name][v] || "";
+  if (name === "engine") {
+    $("ollamaBox").classList.toggle("hidden", v !== "ollama");
+    $("claudeBox").classList.toggle("hidden", v !== "claude");
+    $("keyForm").classList.add("hidden");
+    try { localStorage.setItem("pdfsummary.engine", v); } catch (_) {}
+    if (v === "ollama" && !S.ollamaChecked) loadOllama();
+    refreshAI();
+  }
   if (name === "style") {
     $("listOpts").classList.toggle("hidden", v === "booklet");
     $("scopeOpt").classList.toggle("hidden", v !== "booklet");
@@ -400,15 +428,60 @@ document.querySelectorAll(".seg").forEach((seg) => {
 function applyKeyState(st) {
   S.hasKey = st.has_key;
   $("aiDot").classList.toggle("on", st.has_key);
-  $("aiText").textContent = st.has_key ? `사용 가능${st.masked ? " (" + st.masked + ")" : ""}` : "API 키가 없어 AI 없이 만들어요 (손글씨는 원본 이미지, 문맥은 앞뒤 문장).";
+  $("aiText").textContent = st.has_key ? `사용 가능${st.masked ? " (" + st.masked + ")" : ""}` : "API 키가 없어요.";
   $("aiToggle").textContent = st.has_key ? "키 바꾸기" : "API 키 넣기";
   $("keyClear").classList.toggle("hidden", !st.saved);
-  document.querySelectorAll("[data-needs-ai]").forEach((b) => { b.disabled = !st.has_key; b.title = st.has_key ? "" : "API 키를 넣으면 쓸 수 있어요"; });
-  setSeg("style", st.has_key ? "booklet" : "list");
-  setSeg("scope", "focus");
-  setSeg("context", st.has_key ? "ai" : "sentence");
-  setSeg("handwriting", st.has_key ? "auto" : "image");
+  refreshAI();
 }
+
+// 지금 고른 엔진으로 AI를 쓸 수 있는지에 맞춰 선택지를 켜고 끈다
+function refreshAI() {
+  const engine = segValue("engine");
+  const model = S.ollamaModels.find((m) => m.name === $("ollamaModel").value);
+  const ok = engine === "claude" ? S.hasKey : engine === "ollama" ? !!model : false;
+  const sees = engine === "claude" || (model && model.vision);   // 손글씨 그림을 읽을 수 있는지
+  const why = engine === "claude" ? "API 키를 넣으면 쓸 수 있어요" : engine === "ollama" ? "Ollama 모델을 고르면 쓸 수 있어요" : "AI 엔진을 고르면 쓸 수 있어요";
+  document.querySelectorAll("[data-needs-ai]").forEach((b) => {
+    const needsEyes = b.closest('.seg[data-name="handwriting"]');
+    const can = ok && (!needsEyes || sees);
+    b.disabled = !can;
+    b.title = can ? "" : (ok ? "이 모델은 그림(손글씨)을 못 읽어요" : why);
+  });
+  if (ok !== S.aiOk) {   // 바뀔 때만 기본값을 다시 고른다
+    setSeg("style", ok ? "booklet" : "list");
+    setSeg("context", ok ? "ai" : "sentence");
+  }
+  setSeg("handwriting", ok && sees ? "auto" : "image");
+  S.aiOk = ok;
+}
+
+S.ollamaModels = [];
+async function loadOllama() {
+  S.ollamaChecked = true;
+  $("ollamaStatus").textContent = "내 컴퓨터 AI를 찾는 중…";
+  let st;
+  try { st = await api("/api/ollama"); } catch (e) { st = { running: false, models: [], error: e.message }; }
+  S.ollamaModels = st.models || [];
+  const sel = $("ollamaModel"); sel.innerHTML = "";
+  S.ollamaModels.forEach((m) => {
+    const o = document.createElement("option"); o.value = m.name;
+    o.textContent = `${m.name} (${m.size_gb}GB${m.vision ? " · 쪽 이미지 읽음" : " · 글자만"})`;
+    sel.append(o);
+  });
+  let saved = null; try { saved = localStorage.getItem("pdfsummary.ollamaModel"); } catch (_) {}
+  if (saved && S.ollamaModels.some((m) => m.name === saved)) sel.value = saved;
+  sel.classList.toggle("hidden", !S.ollamaModels.length);
+  if (!st.running) {
+    $("ollamaStatus").innerHTML = 'Ollama가 켜져 있지 않아요. <a href="https://ollama.com" target="_blank" rel="noopener">ollama.com</a>에서 설치하고 실행한 뒤 "다시 찾기"를 눌러 주세요.';
+  } else if (!S.ollamaModels.length) {
+    $("ollamaStatus").innerHTML = '설치된 모델이 없어요. 터미널에서 예) <code>ollama pull gemma3:12b</code> 후 "다시 찾기".';
+  } else {
+    $("ollamaStatus").textContent = "‘쪽 이미지 읽음’ 모델은 스캔본 쪽을 직접 보고, ‘글자만’ 모델은 글자 인식 결과로 정리해요. 처음 한 번은 모델을 불러오느라 오래 걸려요.";
+  }
+  refreshAI();
+}
+$("ollamaRefresh").onclick = () => loadOllama();
+$("ollamaModel").onchange = () => { try { localStorage.setItem("pdfsummary.ollamaModel", $("ollamaModel").value); } catch (_) {} refreshAI(); };
 $("aiToggle").onclick = () => { $("keyForm").classList.toggle("hidden"); $("keyInput").focus(); };
 $("keySave").onclick = async () => {
   const key = $("keyInput").value.trim(); if (!key) return;
@@ -434,6 +507,9 @@ $("runBtn").onclick = async () => {
     headings: $("optHeadings").value, scan: $("optScan").value, pages: $("optPages").value.trim(),
     title: $("optTitle").value.trim(), no_drawings: $("optNoDraw").checked, no_attach: $("optNoAttach").checked,
     colors: allOn ? [] : S.colors.filter((c) => c.on).map((c) => c.filter), labels,
+    ai: segValue("engine") === "ollama" ? "ollama" : "claude",
+    model: segValue("engine") === "ollama" ? $("ollamaModel").value : "",
+    no_ai: segValue("engine") === "none",
   };
   $("runBtn").disabled = true;
   $("resultCard").classList.remove("hidden");
@@ -496,6 +572,8 @@ api("/api/state").then(applyKeyState).catch(() => { $("aiText").textContent = "�
 setSeg("group_by", "chapter");
 setSeg("style", "list");
 setSeg("scope", "focus");
+let savedEngine = null; try { savedEngine = localStorage.getItem("pdfsummary.engine"); } catch (_) {}
+setSeg("engine", ["claude", "ollama", "none"].includes(savedEngine) ? savedEngine : "claude");
 </script>
 </body>
 </html>

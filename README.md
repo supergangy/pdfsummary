@@ -43,6 +43,29 @@ SNMP 접근 제한 설정 핵심 정리
 - 무엇을 표시로 찾았는지는 함께 만들어지는 `표시모음.html`에서 확인할 수 있습니다.
 - API 키가 없으면(또는 `--style list`) 예전처럼 표시한 부분 모음을 만듭니다.
 
+## 내 컴퓨터 AI로 요약집 만들기 (Ollama, 무료)
+
+Claude API 키가 없어도, 내 컴퓨터에서 AI 모델을 돌려 요약집을 만들 수 있습니다. 인터넷·비용이 들지 않는 대신 **느리고, 작은 모델일수록 정리 품질이 떨어집니다.** 어느 정도인지 직접 비교해 보는 용도로 넣었습니다.
+
+1. [ollama.com](https://ollama.com)에서 Ollama를 설치하고 실행합니다.
+2. 모델을 받습니다 (터미널). 컴퓨터 메모리에 맞춰 고르세요.
+
+   ```bash
+   ollama pull gemma3:12b     # 예: 쪽 이미지도 읽는 모델 (메모리 16GB 이상 권장)
+   ollama pull gemma3:4b      # 예: 더 가볍지만 정리 품질은 낮음
+   ```
+
+   모델 이름은 Ollama 사이트의 목록에서 확인하세요. **그림(vision)을 읽는 모델**이면 스캔 쪽을 직접 보고, 글자만 다루는 모델이면 글자층·[글자 인식](#스캔본도-글자로-기기-안-글자-인식-무료) 결과로 정리합니다.
+3. 실행 화면에서 **AI 엔진 → 내 컴퓨터 AI (Ollama)**를 고르고 모델을 선택합니다. 명령줄이라면:
+
+   ```bash
+   pdfsummary 책.pdf --ai ollama --model gemma3:12b
+   ```
+
+- 한 번에 2쪽씩, 하나씩 보냅니다 (요청마다 컴퓨터에 따라 몇 분). 결과는 저장해 두어 다시 만들면 바로 나옵니다.
+- 그림을 못 읽는 모델에게는 손글씨 읽기를 맡기지 않습니다 (그림 없이 지어내기 때문에).
+- 조절: `PDFSUMMARY_OLLAMA_CTX`(문맥 길이, 기본 16384), `PDFSUMMARY_OLLAMA_MAX_TOKENS`(답 길이, 기본 8192), `OLLAMA_HOST`(다른 컴퓨터의 Ollama).
+
 ## 가장 쉬운 방법: 실행 화면 (끌어다 놓기)
 
 1. [Python 3.10 이상](https://www.python.org/downloads/)을 설치합니다. Windows는 설치 첫 화면에서 **"Add python.exe to PATH"를 체크**하세요.
@@ -294,6 +317,8 @@ pdfsummary 책.pdf --no-ai
 | `--no-drawings` | 페이지에 굳어진 펜 획은 찾지 않음 (책 속 그림이 손글씨로 잘못 잡힐 때) |
 | `--scan auto/on/off` | 스캔 이미지에서 형광펜 색 찾기 (기본: 스캔 페이지에서만) |
 | `--ocr auto/off` | 스캔 쪽 글자 인식 (기본: 표시가 있는 스캔 쪽만) |
+| `--ai auto/claude/ollama` | AI 엔진 (기본: Claude 키가 있으면 Claude) |
+| `--ollama-host` | Ollama 주소 (기본 `http://127.0.0.1:11434`) |
 | `--format html,md,json` | 만들 파일 |
 | `--title` | 요약본 제목 |
 | `--dpi` | 원본 이미지 해상도 (기본 200) |
@@ -326,6 +351,7 @@ pytest
 | `pdfsummary/pagetext.py` | 영역 안의 인쇄 글자를 글자 단위로 읽기 순서대로 꺼내기 (글자층 또는 글자 인식 결과) |
 | `pdfsummary/ocr.py` | 기기 안 글자 인식: 한국어 모델 받기(SHA256 확인), 쪽 인식, 결과 캐시 |
 | `pdfsummary/ai.py` | Claude로 손글씨·스캔 글자 읽기, 단원 개요·연결 설명 (구조화된 출력, 캐시) |
+| `pdfsummary/local_ai.py` | 내 컴퓨터 AI(Ollama): 모델 목록·그림 읽기 여부, 같은 요청을 Ollama 형식으로 |
 | `pdfsummary/outline.py` | 제목 찾기(책갈피 + 글자 크기·굵기), 목차 나무 만들기, 단원 본문 자르기 |
 | `pdfsummary/organize.py` | 이어진 형광펜 합치기, 메모 붙이기, 앞뒤 문장 붙이기, 목차/쪽/색별 나누기 |
 | `pdfsummary/booklet.py` | 요약집: 쪽 묶음 나누기, 쪽 이미지·표시를 Claude에 보내기(구조화된 출력), 묶음 경계의 같은 주제 합치기 |

@@ -40,6 +40,7 @@ def textbook(tmp_path_factory):
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "real_ocr: 실제 한국어 글자 인식 모델로 시험 (모델이 있을 때만)")
+    config.addinivalue_line("markers", "real_ollama: 실제 Ollama로 시험 (CI의 ollama 작업에서만)")
 
 
 @pytest.fixture(autouse=True)

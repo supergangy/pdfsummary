@@ -165,6 +165,9 @@ def parent_prompt(book: str, node: "Node") -> str:
 
 
 class AIReader:
+    backend = "claude"
+    vision = True   # 그림을 읽을 수 있는지 (내 컴퓨터 AI는 모델에 따라 다름)
+
     def __init__(self, model: str = DEFAULT_MODEL, cache_path: Optional[Path] = None, workers: int = 4,
                  api_key: Optional[str] = None):
         self.model = model
@@ -191,6 +194,8 @@ class AIReader:
 
     # ── 공개 함수 ────────────────────────────────────────────────────
     def transcribe_handwriting(self, marks: list[Mark], progress: Callable[[int, int], None] | None = None) -> None:
+        if not self.vision:
+            return   # 그림을 못 읽는 모델에게 손글씨 그림을 주면 지어낸다
         todo = [m for m in marks if m.kind == HANDWRITING and m.image]
 
         def work(m: Mark):
@@ -208,6 +213,8 @@ class AIReader:
         self._run(todo, work, progress)
 
     def read_highlighted(self, marks: list[Mark], progress: Callable[[int, int], None] | None = None) -> None:
+        if not self.vision:
+            return
         todo = [m for m in marks if not m.text and m.image]
 
         def work(m: Mark):

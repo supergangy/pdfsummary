@@ -68,7 +68,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="손글씨 처리: auto=AI로 읽고 애매하면 원본도 같이(기본), ai=글만, image=원본 이미지 그대로(AI 안 씀), both=글+원본 항상",
     )
     p.add_argument("--no-ai", action="store_true", help="Claude AI를 쓰지 않음 (--handwriting image와 같음)")
-    p.add_argument("--model", default=None, help="손글씨를 읽을 Claude 모델 (기본: claude-opus-5-5)")
+    p.add_argument("--ai", choices=["auto", "claude", "ollama"], default="auto",
+                   help="AI 엔진: claude=Claude API(키 필요), ollama=내 컴퓨터 AI(Ollama, 무료·인터넷 불필요), auto=Claude 키가 있으면 claude")
+    p.add_argument("--model", default=None,
+                   help="AI 모델 (Claude 기본: claude-opus-5-5 / Ollama 기본: 설치된 모델 중 그림을 읽는 것)")
+    p.add_argument("--ollama-host", default=None, help="Ollama 주소 (기본 http://127.0.0.1:11434 또는 OLLAMA_HOST)")
     p.add_argument("--group-by", choices=["chapter", "page", "color"], default="chapter",
                    help="정리 방식: chapter=목차(큰 제목 > 작은 제목)별(기본), page=쪽별, color=색별")
     p.add_argument("--context", choices=["auto", "ai", "sentence", "none"], default="auto",
@@ -214,7 +218,7 @@ def _main(argv, log, progress, api_key, opened: list) -> int:
     if style == "auto":
         from .ai import has_credentials
 
-        style = "booklet" if not args.no_ai and (api_key or has_credentials()) else "list"
+        style = "booklet" if not args.no_ai and (args.ai == "ollama" or api_key or has_credentials()) else "list"
     mode = "image" if args.no_ai else args.handwriting
     context = args.context
     if style == "booklet":
@@ -224,7 +228,7 @@ def _main(argv, log, progress, api_key, opened: list) -> int:
     wants_ai = style == "booklet" or (mode != "image" and need_ai) or (not args.no_ai and context in ("auto", "ai"))
     reader = _make_reader(args, out_dir, log, api_key) if wants_ai and not args.no_ai else None
     if style == "booklet" and reader is None:
-        log("ℹ️  요약집은 AI(Claude)가 있어야 만들 수 있어요. 대신 표시한 부분 모음을 만듭니다.")
+        log("ℹ️  요약집은 AI(Claude 또는 내 컴퓨터 AI)가 있어야 만들 수 있어요. 대신 표시한 부분 모음을 만듭니다.")
         style = "list"
     if context == "auto":
         context = "ai" if reader is not None else "sentence"
@@ -368,6 +372,16 @@ def print_colors(marks) -> None:
 def _make_reader(args, out_dir: Path, log, api_key: str | None = None):
     from .ai import DEFAULT_MODEL, AIReader, has_credentials
 
+    if args.ai == "ollama":
+        from .local_ai import OllamaReader
+
+        reader = OllamaReader(model=args.model, cache_path=args.cache or out_dir / ".ai_cache.json", host=args.ollama_host)
+        if not reader.available:
+            log(f"ℹ️  {reader.disabled_reason} — AI 없이 정리합니다.")
+            return None
+        eye = "쪽 이미지도 읽음" if reader.vision else "그림은 못 읽어서 글자층·글자 인식 결과로"
+        log(f"🖥️  내 컴퓨터 AI: {reader.model} ({eye})")
+        return reader
     if not api_key and not has_credentials():
         log("ℹ️  ANTHROPIC_API_KEY가 없어 AI 없이 정리합니다 (손글씨는 원본 이미지, 문맥은 앞뒤 문장). "
             "AI를 쓰려면 README의 'AI 설정'을 보세요.")
@@ -391,6 +405,13 @@ def _make_booklet(args, doc, marks, pages, reader, opts, log, prog):
     chunks = plan_chunks(doc.page_count, marks, scope, pages)
     if not chunks:
         return []
+    if getattr(reader, "backend", "claude") == "ollama":
+        # 내 컴퓨터 AI: 한 번에 보내는 쪽을 줄이고(문맥 길이), 하나씩. 그림을 못 읽는 모델이면 글자 인식으로 글자를 넣어 준다
+        chunks = plan_chunks(doc.page_count, marks, scope, pages, per_chunk=2)
+        n_pages = sum(len(c.pages) for c in chunks)
+        log(f"🖥️  내 컴퓨터 AI로 요약집 만드는 중: {n_pages}쪽, 요청 {len(chunks)}번 (비용 없음, 컴퓨터에 따라 요청마다 몇 분)")
+        get_text = (lambda p: opts.texts.get(p, ocr=False)) if reader.vision else opts.texts.get
+        return write_booklet(reader, doc, chunks, scope, get_text, prog("   요약집"), workers=1)
     n_pages, cost = estimate_cost(chunks)
     log(f"🧠 AI로 요약집 만드는 중: {n_pages}쪽, 요청 {len(chunks)}번 (예상 비용 약 ${cost:.2f}, 다시 만들면 캐시로 무료)")
     # 요약집은 Claude가 쪽 이미지를 직접 읽으므로, 이미 인식해 둔 글자만 곁들인다 (새로 인식하지 않음)

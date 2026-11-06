@@ -163,6 +163,7 @@ def build_argv(main: Upload, original: Optional[Upload], out_dir: Path, o: dict)
         "headings": ("--headings", {"auto", "toc", "font"}),
         "scan": ("--scan", {"auto", "on", "off"}),
         "style": ("--style", {"booklet", "list"}),
+        "ai": ("--ai", {"claude", "ollama"}),
         "scope": ("--scope", {"focus", "all"}),
     }
     for key, (flag, allowed) in choice.items():
@@ -181,7 +182,9 @@ def build_argv(main: Upload, original: Optional[Upload], out_dir: Path, o: dict)
     if o.get("no_attach"):
         argv.append("--no-attach")
     if o.get("model"):
-        argv += ["--model", str(o["model"])]
+        argv += ["--model", str(o["model"])[:120]]
+    if o.get("no_ai"):
+        argv.append("--no-ai")
     return argv
 
 
@@ -317,6 +320,14 @@ class Handler(BaseHTTPRequestHandler):
                               {"Content-Security-Policy": "frame-ancestors 'self'"})
         if not self._authed(q):
             return self._err("권한이 없습니다.", 403)
+        if url.path == "/api/ollama" and not STATE.server:
+            # 내 컴퓨터 AI(Ollama) 상태와 설치된 모델 (서버 모드에서는 쓰지 않음)
+            from .local_ai import host_url, list_models
+
+            try:
+                return self._json({"running": True, "models": list_models(), "host": host_url()})
+            except Exception as e:
+                return self._json({"running": False, "models": [], "host": host_url(), "error": type(e).__name__})
         if url.path == "/api/state":
             if STATE.server:
                 from .ai import has_credentials

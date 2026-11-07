@@ -226,5 +226,14 @@ def test_real_ollama_accepts_booklet_schema(textbook):
     print("raw tail:", raw[-400:])
     print("parsed:", json.dumps(res, ensure_ascii=False)[:1500])
     assert res is not None and isinstance(res.get("units"), list)
-    for u in res["units"]:
+    # 잘린 답이면 마지막 단원에 칸이 빠질 수 있다 → 실제 흐름처럼 다듬은 뒤 확인하고, 요약집으로 그려지는지까지
+    from pdfsummary.booklet import clean_units, merge_units
+    from pdfsummary.render_booklet import to_html, to_markdown
+
+    units = merge_units(clean_units(res["units"]))
+    assert units, "다듬은 뒤 남은 단원이 없음"
+    for u in units:
         assert {"title", "sections", "points"} <= set(u)
+    html = to_html("시험", units, "textbook.pdf")
+    assert units[0]["title"] in html or units[0]["title"].replace("&", "&amp;") in html
+    assert to_markdown("시험", units, "textbook.pdf").strip()

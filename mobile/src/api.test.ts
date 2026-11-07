@@ -7,6 +7,7 @@ import { readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client, colorFilters, uploadUrl, authHeaders, parseUpload, lastLine, normalizeUrl, type Settings } from "./api.ts";
+import { runDeviceTasks } from "./deviceRun.ts";
 
 const CODE = "mobile-test-code-123";
 const PORT = 18000 + Math.floor(Math.random() * 1000);
@@ -78,6 +79,31 @@ test("full flow: upload → colors → run → result", async () => {
   const html = await c.resultText(job);
   assert.match(html, /<title>효소 필기 요약<\/title>/);
   assert.match(html, /노랑 · 핵심/);
+});
+
+test("device AI flow: run → tasks → on-device answers → re-rendered result", async () => {
+  const c = new Client(S);
+  const main = await upload(pdfPath, "효소 필기.pdf");
+  const job = await c.run(main.id, null, {
+    style: "list", scope: "focus", group_by: "chapter", context: "device", handwriting: "image",
+    colors: [], labels: {}, title: "효소",
+  });
+  let st = await c.job(job);
+  for (let i = 0; i < 100 && st.status === "running"; i++) {
+    await new Promise((r) => setTimeout(r, 100));
+    st = await c.job(job);
+  }
+  assert.equal(st.status, "done", st.error);
+  const tasks = await c.deviceTasks(job);
+  assert.ok(tasks.length > 0);
+  // 기기 안 AI 대신 정해진 답을 쓰는 가짜
+  const res = await runDeviceTasks(tasks, async (_i, prompt) =>
+    (prompt.includes("개요:") ? "개요: 기기에서 쓴 개요.\n" : "") + "1: 기기에서 쓴 연결 설명.");
+  assert.equal(res.done, tasks.length);
+  const out = await c.deviceAnswers(job, res.answers);
+  assert.ok(out.notes > 0);
+  const html = await c.resultText(job);
+  assert.match(html, /기기에서 쓴 연결 설명\./);
 });
 
 test("default fetch is called unbound (browsers throw 'Illegal invocation' otherwise)", async () => {

@@ -10,6 +10,8 @@ import {
   Client, colorFilters, isPdf, lastLine, sleep,
   type ColorInfo, type JobState, type RunOptions, type ServerState, type Settings, type UploadInfo,
 } from "./src/api";
+import * as DeviceAi from "./modules/device-ai";
+import { runDeviceTasks } from "./src/deviceRun";
 import { ResultView } from "./src/platform/ResultView";
 import { shareResult } from "./src/platform/saveResult";
 import { useShareIntent } from "./src/platform/shareIntent";
@@ -21,6 +23,13 @@ import { Bar, Button, Card, DARK, Hint, LIGHT, Segmented, ThemeContext, useTheme
 
 type Slot = { picked: Picked; info?: UploadInfo; ratio: number; error?: string };
 type ColorRow = ColorInfo & { on: boolean };
+
+const DEVICE_REASON: Record<string, string> = {
+  disabled: "설정 → Apple Intelligence 및 Siri에서 Apple Intelligence를 켜면 기기 안 AI를 쓸 수 있어요.",
+  language: "기기 안 AI가 한국어를 지원하지 않는 버전이에요. 시스템을 업데이트해 주세요.",
+  os: "기기 안 AI는 iPadOS·iOS 26 이상, Apple Intelligence 지원 기기에서 쓸 수 있어요.",
+  device: "이 기기는 기기 안 AI를 지원하지 않아요.",
+};
 
 const NOTES = {
   style: {
@@ -40,6 +49,7 @@ const NOTES = {
     ai: "칠한 부분이 든 문장 전체 + AI가 단원 개요와 연결 설명을 붙여요.",
     sentence: "칠한 부분이 든 문장 전체를 보여 주고 칠한 부분만 굵게 해요.",
     none: "칠한 부분만 그대로 모아요.",
+    device: "이 기기 안의 AI가 인터넷·API 키 없이 단원 개요와 표시마다 한 줄 설명을 붙여요. Claude보다 짧고 단순하고, 앱을 켜 둔 채로 기다려야 해요.",
   },
   handwriting: {
     auto: "AI가 손글씨를 글로 바꿔요. 애매한 글씨는 원본 이미지도 같이.",
@@ -83,10 +93,15 @@ function Main() {
   const [runErr, setRunErr] = useState("");
   const [sharing, setSharing] = useState<string | null>(null);
   const colorsReq = useRef(0);
+  const [device, setDevice] = useState<DeviceAi.DeviceAiStatus | null>(null);
+  const [deviceProg, setDeviceProg] = useState<{ done: number; total: number; title: string; download?: number | null } | null>(null);
+  const [notice, setNotice] = useState("");
+  const stopDevice = useRef(false);
 
   const client = useMemo(() => new Client(settings), [settings]);
   const ready = !!settings.serverUrl && !!settings.accessCode;
   const aiOk = !!settings.apiKey.trim() || !!server?.server_key;
+  const deviceOk = !!device && ["available", "downloadable", "downloading"].includes(device.status);
 
   // 처음: 저장된 설정 불러오고 서버 상태 확인
   useEffect(() => {
@@ -105,15 +120,26 @@ function Main() {
     });
   }, []);
 
-  // AI를 쓸 수 있으면 기본값을 AI로
+  // 이 기기에 기기 안 AI가 있는지 (웹·Expo Go에서는 없음)
   useEffect(() => {
-    setOpts((o) => ({
-      ...o,
-      style: aiOk ? "booklet" : "list",
-      context: aiOk ? (o.context === "sentence" ? "ai" : o.context) : o.context === "ai" ? "sentence" : o.context,
-      handwriting: aiOk ? (o.handwriting === "image" ? "auto" : o.handwriting) : "image",
-    }));
-  }, [aiOk]);
+    DeviceAi.getStatus().then(setDevice);
+  }, []);
+
+  // AI를 쓸 수 있으면 기본값을 AI로 (Claude가 없으면 기기 안 AI)
+  useEffect(() => {
+    setOpts((o) => {
+      let context = o.context;
+      if (aiOk) context = o.context === "sentence" || o.context === "device" ? "ai" : o.context;
+      else if (deviceOk) context = o.context === "sentence" || o.context === "ai" ? "device" : o.context;
+      else if (o.context === "ai" || o.context === "device") context = "sentence";
+      return {
+        ...o,
+        style: aiOk ? "booklet" : "list",
+        context,
+        handwriting: aiOk ? (o.handwriting === "image" ? "auto" : o.handwriting) : "image",
+      };
+    });
+  }, [aiOk, deviceOk]);
 
   const upload = useCallback(
     async (which: "main" | "orig", picked: Picked) => {
@@ -184,12 +210,14 @@ function Main() {
   }
 
   const anyColor = !colors?.length || colors.some((c) => c.on);
-  const canRun = !!mainId && (!orig || !!origId) && anyColor && !colorsBusy && job?.state?.status !== "running" && !(job && !job.state);
+  const canRun = !!mainId && (!orig || !!origId) && anyColor && !colorsBusy && job?.state?.status !== "running" && !(job && !job.state) && !deviceProg;
 
   async function run() {
     if (!mainId) return;
     setRunErr("");
+    setNotice("");
     setHtml(null);
+    setDeviceProg(null);
     try {
       const id = await client.run(mainId, origId ?? null, {
         ...opts,
@@ -208,10 +236,43 @@ function Main() {
         setRunErr(st.error || "만들지 못했어요.");
         return;
       }
+      if (opts.style === "list" && opts.context === "device") await runOnDevice(id);
       setHtml(await client.resultText(id));
     } catch (e) {
       setRunErr((e as Error).message);
       setJob(null);
+    }
+  }
+
+  // 서버가 만든 일감을 이 기기 안의 AI로 처리하고 답을 서버로 보내 요약에 넣는다
+  async function runOnDevice(id: string) {
+    stopDevice.current = false;
+    try {
+      const tasks = await client.deviceTasks(id);
+      if (!tasks.length) return;
+      setDeviceProg({ done: 0, total: tasks.length, title: "" });
+      let st = await DeviceAi.getStatus();
+      if (st.status === "downloadable" || st.status === "downloading") {
+        setDeviceProg({ done: 0, total: tasks.length, title: "", download: null });
+        st = await DeviceAi.prepare((r) => setDeviceProg((p) => (p ? { ...p, download: r } : p)));
+      }
+      if (st.status !== "available") {
+        setNotice("기기 안 AI를 아직 쓸 수 없어 개요·설명 없이 만들었어요." + (st.reason && DEVICE_REASON[st.reason] ? " " + DEVICE_REASON[st.reason] : ""));
+        return;
+      }
+      const res = await runDeviceTasks(
+        tasks,
+        DeviceAi.generate,
+        (done, total, title) => setDeviceProg({ done, total, title }),
+        { shouldStop: () => stopDevice.current },
+      );
+      if (Object.keys(res.answers).length) await client.deviceAnswers(id, res.answers);
+      if (res.stopped) setNotice(`기기 안 AI가 일감 ${tasks.length}개 중 ${res.done}개까지 했어요. ${res.stopped}`);
+      else if (res.skipped) setNotice(`기기 안 AI가 일감 ${res.skipped}개는 답하지 않아 그 부분은 설명 없이 두었어요.`);
+    } catch (e) {
+      setNotice(`기기 안 AI로 설명을 붙이지 못했어요: ${(e as Error).message}`);
+    } finally {
+      setDeviceProg(null);
     }
   }
 
@@ -235,6 +296,7 @@ function Main() {
       <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }} edges={["top", "left", "right"]}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderColor: t.line, flexWrap: "wrap" }}>
           <Button kind="link" label="← 다시 만들기" onPress={() => setHtml(null)} />
+          {!!notice && <Text style={{ color: t.muted, fontSize: 13, flexBasis: "100%" }}>{notice}</Text>}
           <View style={{ flex: 1 }} />
           <Button label="공유 (HTML)" onPress={() => share("요약.html")} busy={sharing === "요약.html"} style={{ paddingVertical: 8 }} />
           <Button label="Markdown·이미지 (zip)" onPress={() => share("요약.zip")} busy={sharing === "요약.zip"} style={{ paddingVertical: 8 }} />
@@ -245,7 +307,7 @@ function Main() {
   }
 
   // ── 만드는 화면 ──────────────────────────────────────────
-  const running = !!job && (!job.state || job.state.status === "running");
+  const running = (!!job && (!job.state || job.state.status === "running")) || !!deviceProg;
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }}>
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 60, width: "100%", maxWidth: 760, alignSelf: "center" }} keyboardShouldPersistTaps="handled">
@@ -341,6 +403,7 @@ function Main() {
               onChange={(v) => setOpts({ ...opts, context: v })}
               options={[
                 { value: "ai", label: "AI 개요·연결 설명", disabled: !aiOk },
+                ...(deviceOk ? [{ value: "device" as const, label: "기기 안 AI" }] : []),
                 { value: "sentence", label: "앞뒤 문장" },
                 { value: "none", label: "칠한 부분만" },
               ]}
@@ -360,13 +423,30 @@ function Main() {
             </>
             )}
             {!aiOk && <Hint>설정에 Claude API 키를 넣으면 AI 기능을 쓸 수 있어요.</Hint>}
+            {!aiOk && opts.style === "list" && Platform.OS !== "web" && device && !deviceOk && device.reason && DEVICE_REASON[device.reason] && (
+              <Hint>{DEVICE_REASON[device.reason]}</Hint>
+            )}
             <Button kind="primary" label="요약 만들기" onPress={run} disabled={!canRun} busy={running} style={{ marginTop: 16, alignSelf: "flex-start", paddingHorizontal: 28 }} />
           </Card>
         )}
 
         {(running || runErr || job?.state?.status === "done") && (
           <Card title={runErr ? "만들지 못했어요" : running ? "만드는 중…" : "✅ 다 만들었어요"}>
-            {running && (
+            {deviceProg && (
+              <>
+                <Text style={{ color: t.ink }}>
+                  {deviceProg.download !== undefined
+                    ? "기기 안 AI 모델을 받는 중… (처음 한 번만)"
+                    : `📱 기기 안 AI가 설명을 쓰는 중… ${deviceProg.title}`}
+                </Text>
+                <Bar ratio={deviceProg.download !== undefined ? (deviceProg.download ?? 0) : deviceProg.total ? deviceProg.done / deviceProg.total : 0} />
+                {deviceProg.download === undefined && (
+                  <Text style={{ color: t.muted, fontSize: 13, marginTop: 4 }}>{deviceProg.done}/{deviceProg.total} · 앱을 켜 둔 채로 기다려 주세요.</Text>
+                )}
+                <Button kind="link" label="여기까지만 넣기" onPress={() => (stopDevice.current = true)} style={{ alignSelf: "flex-start", marginTop: 6 }} />
+              </>
+            )}
+            {running && !deviceProg && (
               <>
                 <Text style={{ color: t.ink }}>{lastLine(job?.state?.log ?? [])}</Text>
                 {Object.entries(job?.state?.progress ?? {}).map(([k, [d, n]]) => (
@@ -378,7 +458,7 @@ function Main() {
               </>
             )}
             {!!runErr && <Text style={{ color: t.bad }}>{runErr}</Text>}
-            {job?.state?.status === "done" && !html && !runErr && <ActivityIndicator color={t.accent} />}
+            {job?.state?.status === "done" && !html && !runErr && !deviceProg && <ActivityIndicator color={t.accent} />}
           </Card>
         )}
       </ScrollView>

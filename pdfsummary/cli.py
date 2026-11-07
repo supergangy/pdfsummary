@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -75,10 +76,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ollama-host", default=None, help="Ollama 주소 (기본 http://127.0.0.1:11434 또는 OLLAMA_HOST)")
     p.add_argument("--group-by", choices=["chapter", "page", "color"], default="chapter",
                    help="정리 방식: chapter=목차(큰 제목 > 작은 제목)별(기본), page=쪽별, color=색별")
-    p.add_argument("--context", choices=["auto", "ai", "sentence", "none"], default="auto",
+    p.add_argument("--context", choices=["auto", "ai", "sentence", "none", "device"], default="auto",
                    help="문맥 보충: sentence=표시한 부분이 든 문장 전체를 같이 보여 줌, "
                         "ai=거기에 더해 AI가 단원 개요와 표시마다 연결 설명을 붙임, "
-                        "auto=AI를 쓸 수 있으면 ai, 아니면 sentence(기본), none=표시한 부분만")
+                        "auto=AI를 쓸 수 있으면 ai, 아니면 sentence(기본), none=표시한 부분만, "
+                        "device=앱용: 문장 전체 + 태블릿·폰의 기기 안 AI에게 맡길 일감을 남김")
     p.add_argument("--style", choices=["auto", "booklet", "list"], default="auto",
                    help="결과 모양: booklet=AI가 책 내용과 내 표시로 만든 핵심 정리 요약집(표·목록·출제 빈도), "
                         "list=표시한 부분 모음, auto=AI를 쓸 수 있으면 booklet(기본)")
@@ -221,6 +223,9 @@ def _main(argv, log, progress, api_key, opened: list) -> int:
         style = "booklet" if not args.no_ai and (args.ai == "ollama" or api_key or has_credentials()) else "list"
     mode = "image" if args.no_ai else args.handwriting
     context = args.context
+    device = context == "device"   # 개요·설명은 나중에 앱의 기기 안 AI가 쓴다
+    if device:
+        style, context, mode = "list", "sentence", "image"
     if style == "booklet":
         # 요약집은 쪽 이미지와 표시 그림을 한 번에 보고 정리하므로 손글씨·문맥을 따로 AI에 묻지 않는다
         mode, context = "image", ("sentence" if context in ("auto", "ai") else context)
@@ -266,21 +271,12 @@ def _main(argv, log, progress, api_key, opened: list) -> int:
             if not n.children and len(n.marks) < 2:
                 n.overview = ""   # 표시 하나뿐인 작은 단원은 개요가 그 표시 설명과 겹친다
 
-    if args.group_by == "page":
-        sections = by_page(marks)
-    elif args.group_by == "color":
-        sections = by_color(marks, labels)
-    else:
-        sections = from_tree(tree)
-
-    show_path = args.group_by != "chapter"   # 쪽별·색별로 볼 때는 표시마다 어느 단원인지 적어 준다
-    written = []
-
     if style == "booklet":
         units = _make_booklet(args, doc, marks, pages, reader, opts, log, prog)
         if units:
             from . import render_booklet as rb
 
+            written = []
             mark_css = _dominant_mark_color(marks)
             if "html" in formats:
                 path = out_dir / "요약.html"
@@ -295,32 +291,55 @@ def _main(argv, log, progress, api_key, opened: list) -> int:
                 path.write_text(rb.to_json(title, units), encoding="utf-8")
                 written.append(path)
             # 무엇을 표시로 찾았는지 확인용
-            path = out_dir / "표시모음.html"
-            path.write_text(to_html(title, sections, labels, args.pdf.name, show_path), encoding="utf-8")
-            written.append(path)
+            written += write_list(out_dir, title, tree, marks, labels, args.pdf.name, args.group_by, {"html"},
+                                  name="표시모음")
             log(f"✅ 요약집: 주제 {len(units)}개 · {stats_line(marks) or '표시 없음'}")
             for p in written:
                 log(f"   → {p}")
             return 0
         log("ℹ️  요약집을 만들지 못해 표시한 부분 모음으로 대신합니다.")
 
-    if "html" in formats:
-        path = out_dir / "요약.html"
-        path.write_text(to_html(title, sections, labels, args.pdf.name, show_path), encoding="utf-8")
-        written.append(path)
-    if "md" in formats:
-        path = out_dir / "요약.md"
-        path.write_text(to_markdown(title, sections, labels, out_dir / "images", "images", show_path), encoding="utf-8")
-        written.append(path)
-    if "json" in formats:
-        path = out_dir / "요약.json"
-        path.write_text(to_json(title, sections, labels), encoding="utf-8")
-        written.append(path)
+    if device:
+        from . import device_ai
 
+        public, private = device_ai.build_tasks(title, tree, opts.texts.get)
+        device_ai.save_state(out_dir, device_ai.DeviceState(
+            title, args.pdf.name, labels, args.group_by, formats, tree, marks, private))
+        (out_dir / "기기AI_일감.json").write_text(
+            json.dumps({"tasks": public}, ensure_ascii=False), encoding="utf-8")
+        log(f"📱 기기 안 AI에게 맡길 일감 {len(public)}개를 만들었습니다.")
+
+    written = write_list(out_dir, title, tree, marks, labels, args.pdf.name, args.group_by, formats)
     log(f"✅ {stats_line(marks) or '표시한 부분 없음'}")
     for p in written:
         log(f"   → {p}")
     return 0
+
+
+def write_list(out_dir: Path, title: str, tree, marks, labels: dict, pdf_name: str, group_by: str,
+               formats: set, name: str = "요약") -> list[Path]:
+    """표시 모음(목차별·쪽별·색별)을 HTML·Markdown·JSON으로 쓴다."""
+    if group_by == "page":
+        sections = by_page(marks)
+    elif group_by == "color":
+        sections = by_color(marks, labels)
+    else:
+        sections = from_tree(tree)
+    show_path = group_by != "chapter"   # 쪽별·색별로 볼 때는 표시마다 어느 단원인지 적어 준다
+    written = []
+    if "html" in formats:
+        path = out_dir / f"{name}.html"
+        path.write_text(to_html(title, sections, labels, pdf_name, show_path), encoding="utf-8")
+        written.append(path)
+    if "md" in formats:
+        path = out_dir / f"{name}.md"
+        path.write_text(to_markdown(title, sections, labels, out_dir / "images", "images", show_path), encoding="utf-8")
+        written.append(path)
+    if "json" in formats:
+        path = out_dir / f"{name}.json"
+        path.write_text(to_json(title, sections, labels), encoding="utf-8")
+        written.append(path)
+    return written
 
 
 def collect_colors(marks) -> list[dict]:

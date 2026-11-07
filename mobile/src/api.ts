@@ -1,4 +1,5 @@
 // 필기 요약 서버와 이야기하는 부분 (화면과 분리해서 Node로도 시험할 수 있게).
+import type { DeviceTask } from "./deviceRun.ts";
 
 export type Settings = {
   serverUrl: string; // 예: https://pdfsummary.example.com
@@ -31,7 +32,7 @@ export type RunOptions = {
   style: "booklet" | "list"; // booklet = AI 핵심 정리 요약집
   scope: "focus" | "all";
   group_by: "chapter" | "page" | "color";
-  context: "ai" | "sentence" | "none";
+  context: "ai" | "sentence" | "none" | "device"; // device = 태블릿·폰의 기기 안 AI가 개요·설명을 씀
   handwriting: "auto" | "image" | "both";
   colors: string[]; // 비우면 전부
   labels: Record<string, string>; // 색 계열 → 의미
@@ -145,6 +146,19 @@ export class Client {
 
   job(id: string) {
     return this.req<JobState>(`/api/job/${id}`);
+  }
+
+  /** 기기 안 AI에게 맡길 일감 (context: "device"로 만든 작업만). */
+  deviceTasks(job: string) {
+    return this.req<{ tasks: DeviceTask[] }>(`/api/job/${job}/device-tasks`).then((r) => r.tasks);
+  }
+
+  /** 기기 안 AI가 쓴 답을 보내면 서버가 요약에 넣고 다시 그린다. */
+  deviceAnswers(job: string, answers: Record<string, string>) {
+    return this.req<{ ok: boolean; overviews: number; notes: number }>(`/api/job/${job}/device-answers`, {
+      method: "POST",
+      body: JSON.stringify({ answers }),
+    });
   }
 
   async resultText(job: string, file: ResultFile = "요약.html"): Promise<string> {

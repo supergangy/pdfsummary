@@ -1,0 +1,84 @@
+name: 앱 네이티브 빌드
+
+# 기기 안 AI 모듈(mobile/modules/device-ai)처럼 네이티브 코드가 들어간 앱을
+# 실제 Android·iOS 빌드 도구로 빌드해 본다 (컴파일 확인용, 서명·배포 없음).
+on:
+  push:
+    paths:
+      - "mobile/**"
+      - ".github/workflows/mobile-native.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - run: npm ci
+      - name: 네이티브 프로젝트 만들기
+        run: npx expo prebuild --platform android --no-install
+      - name: 빌드 (Debug, arm64)
+        working-directory: mobile/android
+        run: ./gradlew :app:assembleDebug --no-daemon -PreactNativeArchitectures=arm64-v8a
+      - name: 기기 안 AI 모듈이 들어갔는지
+        run: |
+          apk=$(ls android/app/build/outputs/apk/debug/*.apk | head -1)
+          unzip -l "$apk" | grep -q "classes" && echo "APK: $apk"
+          grep -rn "minSdk" android/gradle.properties android/build.gradle android/app/build.gradle || true
+          unzip -p "$apk" 'classes*.dex' | grep -a -c "expo/modules/deviceai/DeviceAiModule" || (echo "기기 안 AI 모듈이 APK에 없음"; exit 1)
+
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Xcode 26 (FoundationModels SDK) 고르기
+        run: |
+          x=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$x" ] && sudo xcode-select -s "$x"
+          xcodebuild -version
+          # FoundationModels가 없는 SDK면 모듈의 '#if canImport' 안쪽이 컴파일되지 않아 확인이 안 된다
+          echo 'import FoundationModels' > /tmp/fm.swift
+          xcrun --sdk iphonesimulator swiftc -typecheck -target arm64-apple-ios26.0-simulator \
+            -sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" /tmp/fm.swift
+      - run: npm ci
+      - name: 네이티브 프로젝트 만들기 (CocoaPods 포함)
+        run: npx expo prebuild --platform ios
+      - name: 빌드 (시뮬레이터, 서명 없음)
+        working-directory: mobile/ios
+        run: |
+          ws=$(ls -d *.xcworkspace | head -1)
+          scheme=$(xcodebuild -workspace "$ws" -list -json | python3 -c "import json,sys; d=json.load(sys.stdin)['workspace']['schemes']; print(next(s for s in d if not s.startswith(('Pods','Expo','React','DeviceAi','RN','hermes','Yoga','fmt','glog','boost','DoubleConversion','SocketRocket'))))")
+          echo "workspace=$ws scheme=$scheme"
+          set -o pipefail
+          xcodebuild -workspace "$ws" -scheme "$scheme" -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build | tail -40
+      - name: 기기 안 AI 모듈이 컴파일됐는지
+        run: |
+          find ~/Library/Developer/Xcode/DerivedData -name "DeviceAiModule*.o" | head -3 | grep . || (echo "DeviceAiModule이 컴파일되지 않음"; exit 1)

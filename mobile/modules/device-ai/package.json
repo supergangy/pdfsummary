@@ -1,0 +1,7 @@
+{
+  "name": "device-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "기기 안 AI(Apple Foundation Models / Android ML Kit Prompt API·Gemini Nano)로 짧은 글을 쓴다.",
+  "main": "index.ts"
+}

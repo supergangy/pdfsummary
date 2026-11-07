@@ -62,6 +62,7 @@ class Job:
     error: str = ""
     summary: str = ""
     created: float = field(default_factory=time.monotonic)
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
 DESKTOP_IDLE_QUIT = 180   # 데스크톱 앱: 화면(브라우저 탭)이 닫히고 이만큼(초) 지나면 스스로 끝낸다
@@ -158,7 +159,7 @@ def build_argv(main: Upload, original: Optional[Upload], out_dir: Path, o: dict)
         argv += ["--original", str(original.path)]
     choice = {
         "group_by": ("--group-by", {"chapter", "page", "color"}),
-        "context": ("--context", {"ai", "sentence", "none"}),
+        "context": ("--context", {"ai", "sentence", "none", "device"}),
         "handwriting": ("--handwriting", {"auto", "ai", "image", "both"}),
         "headings": ("--headings", {"auto", "toc", "font"}),
         "scan": ("--scan", {"auto", "on", "off"}),
@@ -215,7 +216,7 @@ def _zip_results(job: Job) -> None:
     zpath = job.out_dir / "요약.zip"
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
         for p in sorted(job.out_dir.rglob("*")):
-            if p.is_file() and p.name not in ("요약.zip",) and not p.name.startswith("."):
+            if p.is_file() and p.name not in ("요약.zip", "기기AI_일감.json") and not p.name.startswith("."):
                 z.write(p, f"{job.stem}_요약/{p.relative_to(job.out_dir).as_posix()}")
 
 
@@ -336,6 +337,14 @@ class Handler(BaseHTTPRequestHandler):
                                    "max_upload_mb": STATE.max_upload // (1024 * 1024),
                                    "keep_minutes": int(STATE.ttl // 60)})
             return self._json(key_state())
+        if url.path.startswith("/api/job/") and url.path.endswith("/device-tasks"):
+            job = STATE.jobs.get(url.path.split("/")[3])
+            if not job or job.status != "done":
+                return self._err("작업을 찾을 수 없습니다.", 404)
+            f = job.out_dir / "기기AI_일감.json"
+            if not f.exists():
+                return self._json({"tasks": []})
+            return self._send(200, f.read_bytes(), "application/json; charset=utf-8")
         if url.path.startswith("/api/job/"):
             job = STATE.jobs.get(url.path.rsplit("/", 1)[-1])
             if not job:
@@ -424,6 +433,8 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/api/key":
             save_key(str(body.get("key") or "").strip(), bool(body.get("remember")))
             return self._json(key_state())
+        if url.path.startswith("/api/job/") and url.path.endswith("/device-answers"):
+            return self._device_answers(url.path.split("/")[3], body)
         main = STATE.uploads.get(body.get("file") or "")
         original = STATE.uploads.get(body.get("original") or "") if body.get("original") else None
         if url.path in ("/api/colors", "/api/run") and not main:
@@ -445,6 +456,27 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=run_job, args=(job, argv, api_key), daemon=True).start()
             return self._json({"job": jid})
         return self._err("없는 주소입니다.", 404)
+
+
+    def _device_answers(self, jid: str, body: dict):
+        """앱의 기기 안 AI가 쓴 답을 받아 요약에 넣고 다시 그린다."""
+        from . import device_ai
+
+        job = STATE.jobs.get(jid)
+        if not job or job.status != "done":
+            return self._err("작업을 찾을 수 없습니다.", 404)
+        answers = body.get("answers")
+        if not isinstance(answers, dict):
+            return self._err("답이 없습니다.")
+        with job.lock:
+            st = device_ai.load_state(job.out_dir)
+            if st is None:
+                return self._err("기기 안 AI 일감이 없는 작업입니다.")
+            n_over, n_note = device_ai.apply_answers(st, answers)
+            device_ai.render(job.out_dir, st)
+            _zip_results(job)
+        job.log.append(f"📱 기기 안 AI: 단원 개요 {n_over}개 · 표시 설명 {n_note}개를 넣었습니다.")
+        return self._json({"ok": True, "overviews": n_over, "notes": n_note})
 
 
 # ── 시작 ────────────────────────────────────────────────────────────────

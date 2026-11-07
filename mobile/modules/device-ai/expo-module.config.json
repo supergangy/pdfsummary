@@ -1,0 +1,5 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": { "modules": ["DeviceAiModule"] },
+  "android": { "modules": ["expo.modules.deviceai.DeviceAiModule"] }
+}

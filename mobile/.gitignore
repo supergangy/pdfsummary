@@ -2,8 +2,8 @@ node_modules/
 .expo/
 dist/
 web-build/
-ios/
-android/
+/ios/
+/android/
 *.jks
 *.p8
 *.p12

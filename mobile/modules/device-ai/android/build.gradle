@@ -1,0 +1,25 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.deviceai'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.deviceai"
+  defaultConfig {
+    // ML Kit 기기 안 AI(Gemini Nano)는 Android 8.0(API 26)부터
+    minSdkVersion 26
+    versionCode 1
+    versionName '0.1.0'
+    consumerProguardFiles 'consumer-rules.pro'
+  }
+}
+
+dependencies {
+  implementation 'com.facebook.react:react-android'
+  implementation 'com.google.mlkit:genai-prompt:1.0.0-beta4'
+  // ML Kit beta4가 쓰는 코루틴 ABI
+  implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0'
+}

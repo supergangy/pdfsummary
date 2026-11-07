@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- 기기 안 AI(Gemini Nano)는 시스템 앱 AICore가 돌린다 -->
+  <queries>
+    <package android:name="com.google.android.aicore" />
+  </queries>
+</manifest>

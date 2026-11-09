@@ -10,3 +10,6 @@ web-build/
 *.key
 *.mobileprovision
 .env*.local
+public/pdfjs/
+public/canvaskit.wasm
+dist-web/

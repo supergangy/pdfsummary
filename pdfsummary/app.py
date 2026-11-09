@@ -135,7 +135,7 @@ def key_state() -> dict:
 
 # ── 작업 ────────────────────────────────────────────────────────────────
 
-def find_colors(main: Upload, original: Optional[Upload], pages: Optional[str]) -> list[dict]:
+def find_colors(main: Upload, original: Optional[Upload], pages: Optional[str], only_ink: bool = False) -> list[dict]:
     from .cli import collect_colors, parse_pages
     from .extract import Options, extract
     from .organize import drop_empty
@@ -144,6 +144,8 @@ def find_colors(main: Upload, original: Optional[Upload], pages: Optional[str]) 
     orig = pymupdf.open(original.path) if original else None
     try:
         opts = Options(pages=parse_pages(pages, doc.page_count) if pages else None, original=orig)
+        if only_ink:   # 필기 앱의 노트: 앱에서 그은 획(주석)만
+            opts.drawings, opts.scan = False, "off"
         marks, _ = extract(doc, opts)
         return collect_colors(drop_empty(marks))
     finally:
@@ -178,8 +180,11 @@ def build_argv(main: Upload, original: Optional[Upload], out_dir: Path, o: dict)
     for k, v in (o.get("labels") or {}).items():
         if str(v).strip():
             argv += ["--label", f"{k}={v}"]
-    if o.get("no_drawings"):
+    if o.get("no_drawings") or o.get("only_ink"):
         argv.append("--no-drawings")
+    if o.get("only_ink"):
+        # 필기 앱의 노트: 내가 앱에서 그은 획(주석)만 표시로 본다 (책에 인쇄된 색칠·그림은 무시)
+        argv += ["--scan", "off"]
     if o.get("no_attach"):
         argv.append("--no-attach")
     if o.get("model"):
@@ -240,6 +245,8 @@ def _safe_name(name: str) -> str:
 
 # ── HTTP ────────────────────────────────────────────────────────────────
 
+NOTE_LIMIT = 80 * 1024 * 1024   # 노트 획 데이터(JSON) 최대 크기
+
 RESULT_FILES = {
     "요약.html": "text/html; charset=utf-8",
     "요약.md": "text/markdown; charset=utf-8",
@@ -296,9 +303,9 @@ class Handler(BaseHTTPRequestHandler):
         tok = self.headers.get("X-Token") or (query.get("t") or [""])[0]
         return secrets.compare_digest(tok.encode(), STATE.token.encode())
 
-    def _body_json(self) -> dict:
+    def _body_json(self, limit: int = 1_000_000) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
-        if n <= 0 or n > 1_000_000:
+        if n <= 0 or n > limit:
             return {}
         try:
             return json.loads(self.rfile.read(n).decode("utf-8"))
@@ -421,7 +428,8 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         if not self._authed(parse_qs(url.query)):
             return self._err("권한이 없습니다.", 403)
-        body = self._body_json()
+        # 필기 앱 노트(획 데이터)는 클 수 있다
+        body = self._body_json(NOTE_LIMIT if url.path == "/api/notes" else 1_000_000)
         if STATE.server and url.path in ("/api/ping", "/api/quit", "/api/key"):
             return self._err("없는 주소입니다.", 404)   # 서버는 키를 저장하지도, 원격으로 꺼지지도 않는다
         if url.path == "/api/ping":
@@ -433,6 +441,8 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/api/key":
             save_key(str(body.get("key") or "").strip(), bool(body.get("remember")))
             return self._json(key_state())
+        if url.path == "/api/notes":
+            return self._notes(body)
         if url.path.startswith("/api/job/") and url.path.endswith("/device-answers"):
             return self._device_answers(url.path.split("/")[3], body)
         main = STATE.uploads.get(body.get("file") or "")
@@ -441,7 +451,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._err("먼저 필기한 PDF를 올려 주세요.")
         if url.path == "/api/colors":
             try:
-                return self._json({"colors": find_colors(main, original, body.get("pages") or None)})
+                return self._json({"colors": find_colors(main, original, body.get("pages") or None, bool(body.get("only_ink")))})
             except ValueError as e:
                 return self._err(str(e))
         if url.path == "/api/run":
@@ -457,6 +467,33 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"job": jid})
         return self._err("없는 주소입니다.", 404)
 
+
+    def _notes(self, body: dict):
+        """필기 앱의 노트(원본 PDF 업로드 + 획)를 표시가 들어간 PDF로 만들어 새 업로드처럼 등록한다."""
+        from .notes import NoteError, build_note_pdf
+
+        note = body.get("note")
+        if not isinstance(note, dict):
+            return self._err("노트 내용이 없거나 너무 큽니다.")
+        src = STATE.uploads.get(body.get("file") or "") if body.get("file") else None
+        if body.get("file") and src is None:
+            return self._err("먼저 원본 PDF를 올려 주세요.")
+        title = str(note.get("title") or (src.title if src else "") or "노트")[:200]
+        uid = uuid.uuid4().hex[:12]
+        (STATE.workdir / uid).mkdir()
+        path = STATE.workdir / uid / _safe_name(title)
+        try:
+            pages = build_note_pdf(note, src.path if src else None, path)
+        except NoteError as e:
+            _remove_upload(path)
+            return self._err(str(e))
+        except Exception as e:  # 깨진 원본 등
+            _remove_upload(path)
+            return self._err(f"노트를 PDF로 만들지 못했습니다: {type(e).__name__}")
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()[:20]
+        up = Upload(uid, path, path.name, pages, title, digest)
+        STATE.uploads[uid] = up
+        return self._json({"id": uid, "name": path.name, "pages": pages, "title": title, "has_toc": False})
 
     def _device_answers(self, jid: str, body: dict):
         """앱의 기기 안 AI가 쓴 답을 받아 요약에 넣고 다시 그린다."""

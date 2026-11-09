@@ -38,6 +38,7 @@ export type RunOptions = {
   labels: Record<string, string>; // 색 계열 → 의미
   title?: string;
   pages?: string;
+  only_ink?: boolean; // 필기 앱의 노트: 앱에서 그은 획만 표시로
 };
 
 export type JobState = {
@@ -129,10 +130,10 @@ export class Client {
     return this.req<ServerState>("/api/state");
   }
 
-  colors(file: string, original?: string | null, pages?: string) {
+  colors(file: string, original?: string | null, pages?: string, onlyInk?: boolean) {
     return this.req<{ colors: ColorInfo[] }>("/api/colors", {
       method: "POST",
-      body: JSON.stringify({ file, original: original || null, pages: pages || "" }),
+      body: JSON.stringify({ file, original: original || null, pages: pages || "", ...(onlyInk ? { only_ink: true } : {}) }),
     }).then((r) => r.colors);
   }
 
@@ -146,6 +147,11 @@ export class Client {
 
   job(id: string) {
     return this.req<JobState>(`/api/job/${id}`);
+  }
+
+  /** 필기 앱의 노트(원본 업로드 id + 획) → 표시가 들어간 PDF를 서버가 만들어 새 업로드로 돌려준다. */
+  notes(file: string | null, note: unknown) {
+    return this.req<UploadInfo>("/api/notes", { method: "POST", body: JSON.stringify({ file, note }) });
   }
 
   /** 기기 안 AI에게 맡길 일감 (context: "device"로 만든 작업만). */

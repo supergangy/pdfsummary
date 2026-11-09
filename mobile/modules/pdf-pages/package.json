@@ -1,0 +1,6 @@
+{
+  "name": "pdf-pages",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PDF 쪽 크기 읽기와 쪽을 그림으로 그리기 (iOS PDFKit, Android PdfRenderer, 웹 pdf.js)"
+}

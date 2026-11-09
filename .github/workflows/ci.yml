@@ -50,6 +50,13 @@ jobs:
         run: |
           npx expo export --platform ios --output-dir /tmp/export-ios
           npx expo export --platform android --output-dir /tmp/export-android
+      - name: 웹판 만들기 (필기 앱을 브라우저로 시험)
+        run: npx expo export --platform web --output-dir dist-web
+      - name: 브라우저로 필기 앱 시험 (쓰기·지우기·저장·내보내기·요약)
+        run: |
+          npm install --no-save playwright@1.63.0
+          npx playwright install --with-deps chromium
+          node e2e/notes.e2e.cjs dist-web
 
   ollama:
     # 내 컴퓨터 AI(Ollama) 연결을 진짜 Ollama + 아주 작은 모델로 확인 (요약 품질이 아니라 요청·답 형식 확인)

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, Alert, Platform, Pressable, ScrollView, Switch, Text, TextInput, useColorScheme, View,
 } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 import {
@@ -12,6 +13,15 @@ import {
 } from "./src/api";
 import * as DeviceAi from "./modules/device-ai";
 import { runDeviceTasks } from "./src/deviceRun";
+import { Editor } from "./src/notes/Editor";
+import { buildPdf } from "./src/notes/exportPdf";
+import { deviceFs } from "./src/notes/fs";
+import { importPdf } from "./src/notes/importPdf";
+import { Library } from "./src/notes/Library";
+import type { Ink, Notebook } from "./src/notes/model";
+import { notePayload, strokeCount } from "./src/notes/payload";
+import { sharePdf } from "./src/notes/sharePdf";
+import { NoteStore } from "./src/notes/store";
 import { ResultView } from "./src/platform/ResultView";
 import { shareResult } from "./src/platform/saveResult";
 import { useShareIntent } from "./src/platform/shareIntent";
@@ -62,16 +72,97 @@ export default function App() {
   const scheme = useColorScheme();
   const theme = scheme === "dark" ? DARK : LIGHT;
   return (
-    <SafeAreaProvider>
-      <ThemeContext.Provider value={theme}>
-        <StatusBar style={scheme === "dark" ? "light" : "dark"} />
-        <Main />
-      </ThemeContext.Provider>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <ThemeContext.Provider value={theme}>
+          <StatusBar style={scheme === "dark" ? "light" : "dark"} />
+          <Root />
+        </ThemeContext.Provider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
-function Main() {
+/** 요약 화면에 넘기는 노트: 원본 PDF(있으면)와 획 */
+type NoteInput = { nb: Notebook; ink: Ink; pdf: () => Promise<Picked | null> };
+
+type Screen =
+  | { name: "library" }
+  | { name: "editor"; id: string }
+  | { name: "summary"; note?: NoteInput; backTo?: Screen; settings?: boolean };
+
+function Root() {
+  const store = useMemo(() => new NoteStore(deviceFs), []);
+  const [screen, setScreen] = useState<Screen>({ name: "library" });
+  const [refresh, setRefresh] = useState(0);
+  const [shareErr, setShareErr] = useState("");
+
+  // 다른 앱(굿노트·삼성노트·파일)에서 공유받은 PDF → 노트로 가져와 바로 연다
+  const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntent({ resetOnBackground: true });
+  useEffect(() => {
+    if (!hasShareIntent) return;
+    const f = shareIntent.files?.[0];
+    resetShareIntent();
+    if (!f || !isPdf(f.fileName || "", f.mimeType)) return;
+    importPdf(store, { uri: f.path, name: f.fileName || "공유받은 파일.pdf", size: f.size, mimeType: f.mimeType })
+      .then((nb) => setScreen({ name: "editor", id: nb.id }))
+      .catch((e) => setShareErr((e as Error).message));
+  }, [hasShareIntent, shareIntent, resetShareIntent, store]);
+
+  const pdfOf = useCallback((nb: Notebook) => async (): Promise<Picked | null> => {
+    if (!nb.hasPdf) return null;
+    const uri = await store.pdfUri(nb.id);
+    if (Platform.OS === "web") return { uri, name: `${nb.title}.pdf`, webFile: await (await fetch(uri)).blob() };
+    return { uri, name: `${nb.title}.pdf` };
+  }, [store]);
+
+  if (screen.name === "editor") {
+    const id = screen.id;
+    return (
+      <Editor
+        store={store}
+        id={id}
+        onClose={() => {
+          setRefresh((x) => x + 1);
+          setScreen({ name: "library" });
+        }}
+        onExport={async (nb, ink) => {
+          const src = nb.hasPdf ? await store.pdfBytes(nb.id) : null;
+          await sharePdf(await buildPdf(nb, ink, src), nb.title);
+        }}
+        onSummarize={(nb, ink) => setScreen({ name: "summary", note: { nb, ink, pdf: pdfOf(nb) }, backTo: { name: "editor", id } })}
+      />
+    );
+  }
+  if (screen.name === "summary") {
+    return (
+      <Main
+        key={screen.note?.nb.id ?? "tool"}
+        note={screen.note}
+        startWithSettings={screen.settings}
+        onBack={() => setScreen(screen.backTo ?? { name: "library" })}
+      />
+    );
+  }
+  return (
+    <>
+      <Library
+        store={store}
+        refresh={refresh}
+        onOpen={(id) => setScreen({ name: "editor", id })}
+        onSummaryTool={() => setScreen({ name: "summary" })}
+        onSettings={() => setScreen({ name: "summary", settings: true })}
+      />
+      {!!shareErr && (
+        <Pressable onPress={() => setShareErr("")} style={{ position: "absolute", bottom: 24, left: 16, right: 16 }}>
+          <Text style={{ backgroundColor: "#c23b3b", color: "#fff", padding: 12, borderRadius: 10, overflow: "hidden" }}>{shareErr}</Text>
+        </Pressable>
+      )}
+    </>
+  );
+}
+
+function Main({ note, onBack, startWithSettings }: { note?: NoteInput; onBack: () => void; startWithSettings?: boolean }) {
   const t = useTheme();
   const [settings, setSettings] = useState<Settings>(EMPTY);
   const [server, setServer] = useState<ServerState | null>(null);
@@ -84,6 +175,9 @@ function Main() {
   const [colorsBusy, setColorsBusy] = useState(false);
   const [colorsErr, setColorsErr] = useState("");
   const [labels, setLabels] = useState<Record<string, string>>({});
+  const hasInk = !!note && strokeCount(note.ink) > 0;
+  const [onlyInk, setOnlyInk] = useState(hasInk);
+  const noteSent = useRef(false);
   const [opts, setOpts] = useState<Pick<RunOptions, "style" | "scope" | "group_by" | "context" | "handwriting">>({
     style: "list", scope: "focus", group_by: "chapter", context: "sentence", handwriting: "image",
   });
@@ -108,6 +202,7 @@ function Main() {
     loadSettings().then(async (s) => {
       setSettings(s);
       setLoaded(true);
+      if (startWithSettings) setShowSettings(true); // 저장된 값을 읽은 뒤에 열어야 칸이 채워져 보인다
       if (s.serverUrl && s.accessCode) {
         try {
           setServer(await new Client(s).state());
@@ -168,17 +263,20 @@ function Main() {
     [settings, server],
   );
 
-  // 다른 앱에서 공유받은 PDF
-  const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntent({ resetOnBackground: true });
+  // 필기 노트에서 왔으면: 원본 PDF를 올리고, 획을 보내 '표시가 들어간 PDF'를 서버에서 만든다
   useEffect(() => {
-    if (!hasShareIntent || !loaded) return;
-    const f = shareIntent.files?.[0];
-    if (f) {
-      if (!ready) setShowSettings(true);
-      else upload("main", { uri: f.path, name: f.fileName || "공유받은 파일.pdf", size: f.size, mimeType: f.mimeType });
-    }
-    resetShareIntent();
-  }, [hasShareIntent, shareIntent, loaded, ready, upload, resetShareIntent]);
+    if (!note || !loaded || !ready || noteSent.current) return;
+    noteSent.current = true;
+    const picked: Picked = { uri: "", name: `${note.nb.title}.pdf` };
+    setMain({ picked, ratio: 0 });
+    (async () => {
+      let fileId: string | null = null;
+      const src = await note.pdf();
+      if (src) fileId = (await uploadPdf(settings, src, (r) => setMain((m) => (m ? { ...m, ratio: r * 0.9 } : m)))).id;
+      const info = await client.notes(fileId, notePayload(note.nb, note.ink));
+      setMain({ picked, info, ratio: 1 });
+    })().catch((e) => setMain({ picked, ratio: 0, error: (e as Error).message }));
+  }, [note, loaded, ready, settings, client]);
 
   // 필기본(또는 원본)이 바뀌면 형광펜 색 다시 찾기
   const mainId = main?.info?.id;
@@ -192,11 +290,11 @@ function Main() {
     setColorsBusy(true);
     setColorsErr("");
     client
-      .colors(mainId, origId)
+      .colors(mainId, origId, undefined, !!note && onlyInk)
       .then((cs) => req === colorsReq.current && setColors(cs.map((c) => ({ ...c, on: true }))))
       .catch((e) => req === colorsReq.current && (setColors([]), setColorsErr((e as Error).message)))
       .finally(() => req === colorsReq.current && setColorsBusy(false));
-  }, [mainId, origId, client]);
+  }, [mainId, origId, client, note, onlyInk]);
 
   async function pick(which: "main" | "orig") {
     if (!ready) {
@@ -224,6 +322,7 @@ function Main() {
         colors: colors ? colorFilters(colors) : [],
         labels,
         title: main?.info?.title,
+        ...(note && onlyInk ? { only_ink: true } : {}),
       });
       setJob({ id });
       let st: JobState;
@@ -296,6 +395,7 @@ function Main() {
       <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }} edges={["top", "left", "right"]}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderColor: t.line, flexWrap: "wrap" }}>
           <Button kind="link" label="← 다시 만들기" onPress={() => setHtml(null)} />
+          <Button kind="link" label={note ? "노트로" : "노트 목록"} onPress={onBack} />
           {!!notice && <Text style={{ color: t.muted, fontSize: 13, flexBasis: "100%" }}>{notice}</Text>}
           <View style={{ flex: 1 }} />
           <Button label="공유 (HTML)" onPress={() => share("요약.html")} busy={sharing === "요약.html"} style={{ paddingVertical: 8 }} />
@@ -311,9 +411,10 @@ function Main() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }}>
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 60, width: "100%", maxWidth: 760, alignSelf: "center" }} keyboardShouldPersistTaps="handled">
+        <Button kind="link" label={note ? "‹ 노트로 돌아가기" : "‹ 노트 목록"} onPress={onBack} />
         <View style={{ flexDirection: "row", alignItems: "center", marginTop: 8, marginBottom: 12 }}>
           <View style={{ flex: 1 }}>
-            <Text style={{ color: t.ink, fontSize: 26, fontWeight: "800" }}>📚 필기 요약</Text>
+            <Text style={{ color: t.ink, fontSize: 26, fontWeight: "800" }}>{note ? `✨ ${note.nb.title} 요약` : "✨ PDF 요약"}</Text>
             <Text style={{ color: t.muted, marginTop: 2 }}>형광펜·밑줄·손글씨만 모아 목차대로 정리해요.</Text>
           </View>
           <Button label="설정" onPress={() => setShowSettings(true)} style={{ paddingVertical: 8 }} />
@@ -326,6 +427,14 @@ function Main() {
           </Card>
         )}
 
+        {note ? (
+          <Card step={1} title="노트 보내기">
+            <FileSlot label="노트" slot={main} onPick={() => {}} big fixed />
+            <Hint style={{ marginTop: 8 }}>
+              {note.nb.pages.length}쪽 · 이 앱에서 그은 획 {strokeCount(note.ink)}개를 표시로 넣어 서버에서 분석해요.
+            </Hint>
+          </Card>
+        ) : (
         <Card step={1} title="PDF 고르기">
           <FileSlot label="필기한 PDF" slot={main} onPick={() => pick("main")} big />
           <View style={{ height: 10 }} />
@@ -340,6 +449,7 @@ function Main() {
             <Hint style={{ marginTop: 10 }}>굿노트·삼성노트 등에서 PDF로 내보낸 뒤 공유 → '필기 요약'을 눌러도 바로 들어와요.</Hint>
           )}
         </Card>
+        )}
 
         {mainId && (
           <Card step={2} title="형광펜 색 고르기">
@@ -422,6 +532,17 @@ function Main() {
             />
             </>
             )}
+            {note && (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginVertical: 8 }}>
+                <Switch value={onlyInk} onValueChange={setOnlyInk} accessibilityLabel="이 앱에서 한 필기만" />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: t.ink, fontWeight: "600" }}>이 앱에서 한 필기만</Text>
+                  <Text style={{ color: t.muted, fontSize: 13 }}>
+                    {onlyInk ? "책에 인쇄된 색칠·그림, 다른 앱에서 한 필기는 빼고 여기서 그은 것만 봐요." : "PDF에 원래 있던 필기(다른 앱에서 한 것)도 함께 찾아요."}
+                  </Text>
+                </View>
+              </View>
+            )}
             {!aiOk && <Hint>설정에 Claude API 키를 넣으면 AI 기능을 쓸 수 있어요.</Hint>}
             {!aiOk && opts.style === "list" && Platform.OS !== "web" && device && !deviceOk && device.reason && DEVICE_REASON[device.reason] && (
               <Hint>{DEVICE_REASON[device.reason]}</Hint>
@@ -478,7 +599,7 @@ function Main() {
 }
 
 function FileSlot({
-  label, hint, slot, onPick, onRemove, big,
+  label, hint, slot, onPick, onRemove, big, fixed,
 }: {
   label: string;
   hint?: string;
@@ -486,6 +607,7 @@ function FileSlot({
   onPick: () => void;
   onRemove?: () => void;
   big?: boolean;
+  fixed?: boolean; // 노트에서 온 파일: 바꾸기 없음
 }) {
   const t = useTheme();
   const uploading = slot && !slot.info && !slot.error;
@@ -523,10 +645,10 @@ function FileSlot({
                   ? slot.error
                   : slot.info
                     ? `${slot.info.pages}쪽${big ? (slot.info.has_toc ? " · PDF 목차 있음" : " · 글자 크기로 제목을 찾아요") : ""}`
-                    : "올리는 중…"}
+                    : fixed ? "보내는 중…" : "올리는 중…"}
               </Text>
             </View>
-            <Button kind="link" label="바꾸기" onPress={onPick} />
+            {!fixed && <Button kind="link" label="바꾸기" onPress={onPick} />}
             {onRemove && <Button kind="link" label="빼기" onPress={onRemove} />}
           </View>
           {uploading && <Bar ratio={slot.ratio} />}

@@ -38,12 +38,14 @@ jobs:
       - name: 빌드 (Debug, arm64)
         working-directory: mobile/android
         run: ./gradlew :app:assembleDebug --no-daemon -PreactNativeArchitectures=arm64-v8a
-      - name: 기기 안 AI 모듈이 들어갔는지
+      - name: 우리 네이티브 모듈이 들어갔는지 (기기 안 AI, PDF 쪽, 손글씨 인식)
         run: |
           apk=$(ls android/app/build/outputs/apk/debug/*.apk | head -1)
           unzip -l "$apk" | grep -q "classes" && echo "APK: $apk"
           grep -rn "minSdk" android/gradle.properties android/build.gradle android/app/build.gradle || true
-          unzip -p "$apk" 'classes*.dex' | grep -a -c "expo/modules/deviceai/DeviceAiModule" || (echo "기기 안 AI 모듈이 APK에 없음"; exit 1)
+          for m in deviceai/DeviceAiModule pdfpages/PdfPagesModule pdfpages/PageText inkrecognizer/InkRecognizerModule; do
+            unzip -p "$apk" 'classes*.dex' | grep -a -q "expo/modules/$m" && echo "있음: $m" || (echo "APK에 없음: $m"; exit 1)
+          done
 
   ios:
     runs-on: macos-26
@@ -79,6 +81,8 @@ jobs:
           set -o pipefail
           xcodebuild -workspace "$ws" -scheme "$scheme" -configuration Debug -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build | tail -40
-      - name: 기기 안 AI 모듈이 컴파일됐는지
+      - name: 우리 네이티브 모듈이 컴파일됐는지 (기기 안 AI, PDF 쪽, 손글씨 인식)
         run: |
-          find ~/Library/Developer/Xcode/DerivedData -name "DeviceAiModule*.o" | head -3 | grep . || (echo "DeviceAiModule이 컴파일되지 않음"; exit 1)
+          for m in DeviceAiModule PdfPagesModule InkRecognizerModule; do
+            find ~/Library/Developer/Xcode/DerivedData -name "$m*.o" | head -1 | grep . || (echo "컴파일되지 않음: $m"; exit 1)
+          done

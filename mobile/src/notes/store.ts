@@ -80,6 +80,36 @@ export class NoteStore {
     await this.fs.writeText(`${dir(nbId)}/ink/${pageId}.json`, JSON.stringify(strokes));
   }
 
+  async folders(): Promise<string[]> {
+    try {
+      const t = await this.fs.readText("folders.json");
+      const v = t ? JSON.parse(t) : [];
+      return Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.trim()) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async saveFolders(list: string[]): Promise<void> {
+    await this.fs.writeText("folders.json", JSON.stringify([...new Set(list.map((x) => x.trim()).filter(Boolean))]));
+  }
+
+  /** 노트를 폴더로 옮긴다 (folder가 비면 폴더 밖으로). */
+  async moveTo(id: string, folder: string | undefined): Promise<void> {
+    const nb = await this.load(id);
+    if (!nb) return;
+    const next = { ...nb };
+    if (folder) next.folder = folder;
+    else delete next.folder;
+    await this.save(next);
+  }
+
+  /** 폴더 지우기: 안의 노트는 폴더 밖으로 나온다 (노트는 지우지 않음). */
+  async removeFolder(name: string): Promise<void> {
+    for (const nb of await this.list()) if (nb.folder === name) await this.moveTo(nb.id, undefined);
+    await this.saveFolders((await this.folders()).filter((f) => f !== name));
+  }
+
   pdfUri(nbId: string): Promise<string> {
     return this.fs.uri(`${dir(nbId)}/source.pdf`);
   }

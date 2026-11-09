@@ -24,3 +24,17 @@ test("store: create, list (newest first), ink per page, remove", async () => {
   await st.remove(a.id);
   assert.deepEqual((await st.list()).map((n) => n.title), ["나"]);
 });
+
+test("folders: create, move notes, remove folder keeps notes", async () => {
+  const st = new NoteStore(memoryFs());
+  const a = blankNotebook("가", "plain", 1);
+  await st.create(a);
+  await st.saveFolders(["수학", " 영어 ", "수학", ""]);
+  assert.deepEqual(await st.folders(), ["수학", "영어"]);
+  await st.moveTo(a.id, "수학");
+  assert.equal((await st.load(a.id))?.folder, "수학");
+  await st.removeFolder("수학");
+  assert.deepEqual(await st.folders(), ["영어"]);
+  assert.equal((await st.load(a.id))?.folder, undefined);
+  assert.equal((await st.list()).length, 1);
+});

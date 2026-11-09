@@ -20,6 +20,27 @@ public class PdfPagesModule: Module {
       return String(data: data, encoding: .utf8) ?? "[]"
     }
 
+    // index 쪽의 글자와 글자 상자: [["가", x0, y0, x1, y1], …] (화면에 보이는 쪽 좌표, 왼쪽 위가 0)
+    AsyncFunction("textAsync") { (uri: String, index: Int) throws -> String in
+      let doc = try PdfPagesModule.open(uri)
+      guard let page = doc.page(at: index) else { return "[]" }
+      let text = (page.string ?? "") as NSString
+      let size = PdfPagesModule.size(page)
+      let t = page.transform(for: .cropBox)   // 쪽 공간 → 자르기 상자 공간 (회전 포함, 왼쪽 아래가 0)
+      var out: [[Any]] = []
+      out.reserveCapacity(text.length)
+      for i in 0..<text.length {
+        let ch = text.substring(with: NSRange(location: i, length: 1))
+        let r = page.characterBounds(at: i).applying(t)
+        if r.isNull || r.isInfinite { continue }
+        let x0 = Double(r.minX), x1 = Double(r.maxX)
+        let y0 = Double(size.height - r.maxY), y1 = Double(size.height - r.minY)
+        out.append([ch, round2(x0), round2(y0), round2(x1), round2(y1)])
+      }
+      let data = try JSONSerialization.data(withJSONObject: out)
+      return String(data: data, encoding: .utf8) ?? "[]"
+    }
+
     // index 쪽을 폭 widthPx 픽셀로 그려 outPath(파일 경로 또는 file:// 주소)에 저장
     AsyncFunction("renderAsync") { (uri: String, index: Int, widthPx: Int, outPath: String) throws -> String in
       let doc = try PdfPagesModule.open(uri)
@@ -70,3 +91,5 @@ public class PdfPagesModule: Module {
     return (r == 90 || r == 270) ? CGSize(width: b.height, height: b.width) : b.size
   }
 }
+
+private func round2(_ v: Double) -> Double { (v * 100).rounded() / 100 }

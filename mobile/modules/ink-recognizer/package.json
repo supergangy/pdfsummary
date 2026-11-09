@@ -1,0 +1,6 @@
+{
+  "name": "ink-recognizer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "손글씨 획을 기기 안에서 글자로 (Android ML Kit Digital Ink, iOS Vision)"
+}

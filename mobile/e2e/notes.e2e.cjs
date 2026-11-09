@@ -105,7 +105,22 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     const drawn = execFileSync("python3", ["-c", "import sys, pymupdf; print(len(pymupdf.open(sys.argv[1])[0].get_drawings()))", out], { encoding: "utf8" }).trim();
     if (Number(drawn) < 1) fail("내보낸 PDF에 획이 없음 (다시 열었을 때 저장이 안 됐거나 내보내기 실패)");
     console.log("✓ 빈 노트: 쓰기·지우기·되돌리기·저장·PDF 내보내기");
+    await page.getByLabel("쪽 모아보기").click();
+    await page.getByLabel("1쪽으로").waitFor({ timeout: 10000 });
+    await page.getByLabel("쪽 모아보기 닫기").click();
     await page.getByLabel("노트 목록으로").click();
+
+    // ── 폴더 ──
+    await page.getByText("＋ 폴더").click();
+    await page.getByLabel("새 폴더").fill("수학");
+    await page.getByText("만들기", { exact: true }).click();
+    await page.getByText("이 폴더에 노트가 없어요", { exact: false }).waitFor();
+    await page.getByText(/^전체/).click();
+    await page.getByLabel("시험 노트 더 보기").click();
+    await page.getByText("📁 폴더로 옮기기").click();
+    await page.getByText("📁 수학", { exact: true }).click();
+    await page.getByText("📁 수학 1").waitFor({ timeout: 5000 });
+    console.log("✓ 폴더 만들기·노트 옮기기, 쪽 모아보기");
 
     // ── 서버 설정 ──
     await page.getByText("설정", { exact: true }).click();
@@ -134,6 +149,20 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await page.mouse.up();
     await page.waitForTimeout(600);
     await page.getByLabel("요약 만들기").click();
+    // 먼저 기기에서 바로 만든 요약 (서버 없이): PDF 글자층에서 칠한 글자를 읽는다
+    await page.getByText("✨ 서버로 자세히").waitFor({ timeout: 20000 });
+    await page.waitForTimeout(2500);
+    let quick = "";
+    for (const f of page.frames()) {
+      try {
+        quick += await f.content();
+      } catch {}
+    }
+    if (!quick.includes("경쟁적 저해제")) fail("기기에서 만든 요약에 칠한 글자가 없음");
+    if (!/<mark[^>]*>경쟁적 저해제<\/mark>/.test(quick)) fail("기기 요약에서 칠한 부분이 강조되지 않음");
+    if (!quick.includes("기질과 구조가 비슷하여")) fail("기기 요약에 앞뒤 문장이 없음");
+    console.log("✓ 기기에서 바로 요약: 칠한 글자와 그 문장");
+    await page.getByText("✨ 서버로 자세히").click();
     await page.getByText(/“경쟁적 저해제”/).waitFor({ timeout: 30000 });
     if (await page.getByText(/기질 특이성/).count()) fail("책에 인쇄된 강조가 내 형광펜 색으로 잡힘");
     await page.getByText("요약 만들기", { exact: true }).click();

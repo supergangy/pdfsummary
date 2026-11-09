@@ -18,6 +18,7 @@ import { buildPdf } from "./src/notes/exportPdf";
 import { deviceFs } from "./src/notes/fs";
 import { importPdf } from "./src/notes/importPdf";
 import { Library } from "./src/notes/Library";
+import { QuickScreen } from "./src/notes/QuickScreen";
 import type { Ink, Notebook } from "./src/notes/model";
 import { notePayload, strokeCount } from "./src/notes/payload";
 import { sharePdf } from "./src/notes/sharePdf";
@@ -89,7 +90,8 @@ type NoteInput = { nb: Notebook; ink: Ink; pdf: () => Promise<Picked | null> };
 type Screen =
   | { name: "library" }
   | { name: "editor"; id: string }
-  | { name: "summary"; note?: NoteInput; backTo?: Screen; settings?: boolean };
+  | { name: "summary"; note?: NoteInput; backTo?: Screen; settings?: boolean }
+  | { name: "quick"; nb: Notebook; ink: Ink; backTo: Screen };
 
 function Root() {
   const store = useMemo(() => new NoteStore(deviceFs), []);
@@ -131,6 +133,19 @@ function Root() {
           await sharePdf(await buildPdf(nb, ink, src), nb.title);
         }}
         onSummarize={(nb, ink) => setScreen({ name: "summary", note: { nb, ink, pdf: pdfOf(nb) }, backTo: { name: "editor", id } })}
+        onQuick={(nb, ink) => setScreen({ name: "quick", nb, ink, backTo: { name: "editor", id } })}
+      />
+    );
+  }
+  if (screen.name === "quick") {
+    const { nb, ink, backTo } = screen;
+    return (
+      <QuickScreen
+        nb={nb}
+        ink={ink}
+        store={store}
+        onBack={() => setScreen(backTo)}
+        onServerSummary={() => setScreen({ name: "summary", note: { nb, ink, pdf: pdfOf(nb) }, backTo })}
       />
     );
   }

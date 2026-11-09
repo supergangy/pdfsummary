@@ -35,9 +35,14 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh }: P
   const [err, setErr] = useState("");
   const [newOpen, setNewOpen] = useState(false);
   const [actions, setActions] = useState<Notebook | null>(null);
+  const [folders, setFolders] = useState<string[]>([]);
+  const [folder, setFolder] = useState<string | null>(null); // 지금 보는 폴더 (null = 전체)
+  const [folderDialog, setFolderDialog] = useState(false);
+  const [moving, setMoving] = useState<Notebook | null>(null);
 
   const reload = useCallback(() => {
     store.list().then(setList).catch((e) => setErr((e as Error).message));
+    store.folders().then(setFolders).catch(() => {});
   }, [store]);
   useEffect(reload, [reload, refresh]);
 
@@ -53,6 +58,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh }: P
     setBusy("PDF를 가져오는 중…");
     try {
       const nb = await importPdf(store, p);
+      if (folder) await store.moveTo(nb.id, folder);
       onOpen(nb.id);
     } catch (e) {
       setErr((e as Error).message);
@@ -64,6 +70,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh }: P
   async function createBlank(paper: Paper, title: string) {
     setNewOpen(false);
     const nb = blankNotebook(title.trim() || "새 노트", paper, 1);
+    if (folder) nb.folder = folder;
     await store.create(nb);
     onOpen(nb.id);
   }
@@ -84,6 +91,39 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh }: P
     }
   }
 
+  async function addFolder(name: string) {
+    setFolderDialog(false);
+    const n = name.trim();
+    if (!n) return;
+    await store.saveFolders([...folders, n]);
+    setFolder(n);
+    reload();
+  }
+
+  async function moveNote(nb: Notebook, to: string | undefined) {
+    setMoving(null);
+    await store.moveTo(nb.id, to);
+    reload();
+  }
+
+  function deleteFolder(name: string) {
+    const doIt = async () => {
+      await store.removeFolder(name);
+      setFolder(null);
+      reload();
+    };
+    const msg = `'${name}' 폴더를 지울까요? 안의 노트는 지우지 않고 폴더 밖으로 옮겨요.`;
+    if (Platform.OS === "web") {
+      if (globalThis.confirm?.(msg) ?? true) void doIt();
+    } else {
+      Alert.alert("폴더 지우기", msg, [{ text: "취소", style: "cancel" }, { text: "지우기", style: "destructive", onPress: () => void doIt() }]);
+    }
+  }
+
+  const shown = list?.filter((nb) => folder === null || nb.folder === folder) ?? null;
+  const counts = new Map<string, number>();
+  for (const nb of list ?? []) if (nb.folder) counts.set(nb.folder, (counts.get(nb.folder) ?? 0) + 1);
+
   const cols = Math.max(2, Math.min(6, Math.floor((Math.min(width, 1200) - 32) / 180)));
   const cardW = (Math.min(width, 1200) - 32 - (cols - 1) * 14) / cols;
 
@@ -103,12 +143,22 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh }: P
           <Button label="＋ 새 노트" onPress={() => setNewOpen(true)} />
           <Button label="✨ PDF만 넣어 요약하기" onPress={onSummaryTool} />
         </View>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 14 }}>
+          <Chip label={`전체 ${list?.length ?? ""}`} on={folder === null} onPress={() => setFolder(null)} />
+          {folders.map((f) => (
+            <Chip key={f} label={`📁 ${f} ${counts.get(f) ?? 0}`} on={folder === f} onPress={() => setFolder(f)} onLongPress={() => deleteFolder(f)} />
+          ))}
+          <Chip label="＋ 폴더" on={false} onPress={() => setFolderDialog(true)} />
+          {folder !== null && <Chip label="폴더 지우기" on={false} onPress={() => deleteFolder(folder)} />}
+        </ScrollView>
         {!pdfAvailable && <Hint>이 앱(Expo Go 등)에서는 PDF를 열 수 없어요. 개발용 빌드에서 쓸 수 있어요. 빈 노트는 쓸 수 있어요.</Hint>}
         {!!err && <Hint color={t.bad} style={{ marginBottom: 10 }}>{err}</Hint>}
 
-        {list === null ? (
+        {shown === null ? (
           <ActivityIndicator color={t.accent} style={{ marginTop: 30 }} />
-        ) : list.length === 0 ? (
+        ) : shown.length === 0 && folder !== null ? (
+          <Text style={{ color: t.muted, paddingVertical: 30, textAlign: "center" }}>이 폴더에 노트가 없어요. 노트의 ⋯ → '폴더로 옮기기'로 넣을 수 있어요.</Text>
+        ) : shown.length === 0 ? (
           <View style={{ alignItems: "center", paddingVertical: 40, gap: 8 }}>
             <Text style={{ fontSize: 40 }}>📝</Text>
             <Text style={{ color: t.ink, fontSize: 17, fontWeight: "600" }}>아직 노트가 없어요</Text>
@@ -118,7 +168,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh }: P
           </View>
         ) : (
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 14 }}>
-            {list.map((nb) => (
+            {shown.map((nb) => (
               <NoteCard key={nb.id} nb={nb} store={store} width={cardW} onPress={() => onOpen(nb.id)} onMore={() => setActions(nb)} />
             ))}
           </View>
@@ -135,6 +185,23 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh }: P
       )}
 
       <NewNoteDialog visible={newOpen} onCancel={() => setNewOpen(false)} onCreate={createBlank} />
+      <NameDialog visible={folderDialog} title="새 폴더" placeholder="폴더 이름 (예: 정보처리기사)" onCancel={() => setFolderDialog(false)} onDone={addFolder} />
+      <Modal visible={!!moving} transparent animationType="fade" onRequestClose={() => setMoving(null)}>
+        <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)", alignItems: "center", justifyContent: "center", padding: 20 }} onPress={() => setMoving(null)}>
+          <Pressable style={{ backgroundColor: t.card, borderRadius: 12, minWidth: 260, paddingVertical: 6 }} onPress={() => {}}>
+            <Text style={{ color: t.muted, paddingHorizontal: 16, paddingVertical: 10 }}>어느 폴더로 옮길까요?</Text>
+            {folders.map((f) => (
+              <Pressable key={f} onPress={() => moving && moveNote(moving, f)} style={{ paddingHorizontal: 16, paddingVertical: 12 }} accessibilityRole="menuitem">
+                <Text style={{ color: moving?.folder === f ? t.accent : t.ink, fontSize: 15 }}>📁 {f}{moving?.folder === f ? " (지금)" : ""}</Text>
+              </Pressable>
+            ))}
+            <Pressable onPress={() => moving && moveNote(moving, undefined)} style={{ paddingHorizontal: 16, paddingVertical: 12 }} accessibilityRole="menuitem">
+              <Text style={{ color: t.ink, fontSize: 15 }}>폴더 밖으로</Text>
+            </Pressable>
+            {!folders.length && <Text style={{ color: t.muted, paddingHorizontal: 16, paddingBottom: 10 }}>먼저 '＋ 폴더'로 폴더를 만들어 주세요.</Text>}
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <Modal visible={!!actions} transparent animationType="fade" onRequestClose={() => setActions(null)}>
         <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)", alignItems: "center", justifyContent: "center", padding: 20 }} onPress={() => setActions(null)}>
@@ -142,6 +209,9 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh }: P
             <Text style={{ color: t.muted, paddingHorizontal: 16, paddingVertical: 10 }} numberOfLines={1}>{actions?.title}</Text>
             <Pressable onPress={() => actions && onOpen(actions.id)} style={{ paddingHorizontal: 16, paddingVertical: 12 }} accessibilityRole="menuitem">
               <Text style={{ color: t.ink, fontSize: 15 }}>열기</Text>
+            </Pressable>
+            <Pressable onPress={() => { setMoving(actions); setActions(null); }} style={{ paddingHorizontal: 16, paddingVertical: 12 }} accessibilityRole="menuitem">
+              <Text style={{ color: t.ink, fontSize: 15 }}>📁 폴더로 옮기기</Text>
             </Pressable>
             <Pressable onPress={() => actions && remove(actions)} style={{ paddingHorizontal: 16, paddingVertical: 12 }} accessibilityRole="menuitem">
               <Text style={{ color: t.bad, fontSize: 15 }}>🗑 노트 지우기</Text>
@@ -253,6 +323,52 @@ function NewNoteDialog({ visible, onCancel, onCreate }: { visible: boolean; onCa
           <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
             <Button label="취소" onPress={onCancel} />
             <Button kind="primary" label="만들기" onPress={() => onCreate(paper, title)} />
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function Chip({ label, on, onPress, onLongPress }: { label: string; on: boolean; onPress: () => void; onLongPress?: () => void }) {
+  const t = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      onLongPress={onLongPress}
+      accessibilityRole="button"
+      accessibilityState={{ selected: on }}
+      style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 18, borderWidth: 1, borderColor: on ? t.accent : t.line, backgroundColor: on ? t.accent : t.card }}
+    >
+      <Text style={{ color: on ? t.accentInk : t.ink, fontWeight: "600" }}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function NameDialog({ visible, title, placeholder, onCancel, onDone }: { visible: boolean; title: string; placeholder: string; onCancel: () => void; onDone: (v: string) => void }) {
+  const t = useTheme();
+  const [v, setV] = useState("");
+  useEffect(() => {
+    if (visible) setV("");
+  }, [visible]);
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)", alignItems: "center", justifyContent: "center", padding: 20 }}>
+        <View style={{ backgroundColor: t.card, borderRadius: 12, padding: 18, width: "100%", maxWidth: 420 }}>
+          <Text style={{ color: t.ink, fontWeight: "700", fontSize: 17, marginBottom: 10 }}>{title}</Text>
+          <TextInput
+            value={v}
+            onChangeText={setV}
+            autoFocus
+            placeholder={placeholder}
+            placeholderTextColor={t.muted}
+            accessibilityLabel={title}
+            onSubmitEditing={() => onDone(v)}
+            style={{ borderWidth: 1, borderColor: t.line, borderRadius: 8, padding: 10, color: t.ink, fontSize: 16 }}
+          />
+          <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
+            <Button label="취소" onPress={onCancel} />
+            <Button kind="primary" label="만들기" onPress={() => onDone(v)} />
           </View>
         </View>
       </View>

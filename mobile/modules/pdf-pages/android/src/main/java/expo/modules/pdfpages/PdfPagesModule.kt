@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
@@ -25,6 +26,15 @@ class PdfPagesModule : Module() {
           r.openPage(i).use { p -> out.put(JSONObject().put("w", p.width.toDouble()).put("h", p.height.toDouble())) }
         }
         out.toString()
+      }
+    }
+
+    // 쪽의 글자와 글자 상자 (안드로이드 15 이상만 PDF 글자를 꺼낼 수 있다). 못 하면 null
+    AsyncFunction("textAsync") { uri: String, index: Int ->
+      if (Build.VERSION.SDK_INT < 35) return@AsyncFunction null
+      open(uri) { r ->
+        if (index < 0 || index >= r.pageCount) return@open "[]"
+        r.openPage(index).use { p -> PageText.json(p) }
       }
     }
 

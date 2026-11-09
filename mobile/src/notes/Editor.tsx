@@ -12,6 +12,7 @@ import {
 } from "./model";
 import { pageImage } from "./pageImage";
 import { PageCanvas, type ToolName, type ZoomCmd } from "./PageCanvas";
+import { PageGrid } from "./PageGrid";
 import { loadPrefs, savePrefs, type Prefs } from "./prefs";
 import type { NoteStore } from "./store";
 
@@ -20,10 +21,11 @@ type Props = {
   id: string;
   onClose: () => void;
   onExport: (nb: Notebook, ink: Ink) => Promise<void>;
-  onSummarize: (nb: Notebook, ink: Ink) => void;
+  onSummarize: (nb: Notebook, ink: Ink) => void; // 서버로 자세히
+  onQuick: (nb: Notebook, ink: Ink) => void; // 기기에서 바로
 };
 
-export function Editor({ store, id, onClose, onExport, onSummarize }: Props) {
+export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: Props) {
   const t = useTheme();
   const [nb, setNb] = useState<Notebook | null>(null);
   const [ink, setInk] = useState<Ink>({});
@@ -34,6 +36,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize }: Props) {
   const [zoom, setZoom] = useState<ZoomCmd>({ kind: "fit", n: 0 });
   const [bg, setBg] = useState<Record<number, { uri: string; w: number }>>({});
   const [menu, setMenu] = useState(false);
+  const [grid, setGrid] = useState(false);
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState("");
   const [loadErr, setLoadErr] = useState("");
@@ -280,6 +283,12 @@ export function Editor({ store, id, onClose, onExport, onSummarize }: Props) {
     await flush();
     onSummarize(nbRef.current ?? nb, inkRef.current);
   };
+  const quick = async () => {
+    if (!nb) return;
+    setMenu(false);
+    await flush();
+    onQuick(nbRef.current ?? nb, inkRef.current);
+  };
 
   const strokes = useMemo(() => (page ? ink[page.id] ?? [] : []), [ink, page]);
 
@@ -317,10 +326,12 @@ export function Editor({ store, id, onClose, onExport, onSummarize }: Props) {
         <Btn label="↷" onPress={redo} disabled={!hist.current.canRedo} label2="다시 하기" />
         <Sep />
         <Btn label="◀" onPress={() => go(pi - 1)} disabled={pi === 0} label2="이전 쪽" />
-        <Text style={{ color: t.ink, minWidth: 52, textAlign: "center" }} accessibilityLabel="쪽 번호">{pi + 1} / {nb.pages.length}</Text>
+        <Pressable onPress={() => setGrid(true)} accessibilityRole="button" accessibilityLabel="쪽 모아보기" style={{ paddingHorizontal: 6, paddingVertical: 6, borderRadius: 8, backgroundColor: t.soft }}>
+          <Text style={{ color: t.ink, minWidth: 52, textAlign: "center" }}>{pi + 1} / {nb.pages.length}</Text>
+        </Pressable>
         <Btn label="▶" onPress={() => go(pi + 1)} disabled={pi >= nb.pages.length - 1} label2="다음 쪽" />
         <Btn label="⋯" onPress={() => setMenu(true)} label2="더 보기" />
-        <Pressable onPress={summarize} accessibilityRole="button" accessibilityLabel="요약 만들기" style={{ backgroundColor: t.accent, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 7, marginLeft: 4 }}>
+        <Pressable onPress={quick} accessibilityRole="button" accessibilityLabel="요약 만들기" style={{ backgroundColor: t.accent, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 7, marginLeft: 4 }}>
           <Text style={{ color: t.accentInk, fontWeight: "700" }}>요약</Text>
         </Pressable>
       </View>
@@ -409,7 +420,9 @@ export function Editor({ store, id, onClose, onExport, onSummarize }: Props) {
       <Modal visible={menu} transparent animationType="fade" onRequestClose={() => setMenu(false)}>
         <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)", alignItems: "flex-end" }} onPress={() => setMenu(false)}>
           <Pressable style={{ marginTop: 60, marginRight: 12, backgroundColor: t.card, borderRadius: 12, paddingVertical: 6, minWidth: 240, borderWidth: 1, borderColor: t.line }} onPress={() => {}}>
-            <MenuItem label="✨ 요약 만들기" onPress={summarize} />
+            <MenuItem label="⚡ 바로 요약 (기기에서, 서버 없이)" onPress={quick} />
+            <MenuItem label="✨ 서버로 자세히 요약 (요약집·AI)" onPress={summarize} />
+            <MenuItem label="▦ 쪽 모아보기" onPress={() => { setMenu(false); setGrid(true); }} />
             <MenuItem label="📄 PDF로 내보내기 (필기 포함)" onPress={exportPdf} />
             <MenuItem label="＋ 뒤에 빈 쪽 (같은 속지)" onPress={() => addPage()} />
             <MenuItem label="＋ 뒤에 줄 쪽" onPress={() => addPage("lined")} />
@@ -421,6 +434,20 @@ export function Editor({ store, id, onClose, onExport, onSummarize }: Props) {
       </Modal>
 
       <RenameDialog value={renaming} onDone={rename} />
+      {grid && (
+        <PageGrid
+          visible={grid}
+          nb={nb}
+          ink={ink}
+          pdfUri={pdfUri}
+          current={pi}
+          onPick={(i) => {
+            setGrid(false);
+            go(i);
+          }}
+          onClose={() => setGrid(false)}
+        />
+      )}
     </SafeAreaView>
   );
 }

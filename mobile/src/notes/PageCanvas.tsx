@@ -2,18 +2,15 @@
 // - 펜(스타일러스)은 쓰고, 손가락은 '손가락으로 쓰기'가 꺼져 있으면 화면을 옮긴다 (손바닥이 닿아도 안 써짐)
 // - 두 손가락: 확대·축소·이동
 // - 지금 긋는 획은 UI 스레드에서 바로 그리고(지연 최소), 손을 떼면 JS 쪽에 넘겨 저장한다
-import {
-  BlendMode, Canvas, Circle, Group, Image, PaintStyle, Path, Picture, Rect, Skia, StrokeCap, StrokeJoin,
-  createPicture, useImage, usePathValue, type SkPath,
-} from "@shopify/react-native-skia";
+import { Canvas, Circle, Group, Image, Path, Picture, Rect, useImage, usePathValue, type SkPath } from "@shopify/react-native-skia";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { View, type LayoutChangeEvent } from "react-native";
 import { GestureDetector, PointerType, usePanGesture, usePinchGesture, useSimultaneousGestures } from "react-native-gesture-handler";
 import { useDerivedValue, useSharedValue } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 
-import { strokeSvg } from "./geometry";
 import { HIGHLIGHT_OPACITY, type Page, type Stroke } from "./model";
+import { inkPicture, paperPicture } from "./render";
 
 export type ToolName = "pen" | "highlighter" | "eraser";
 export type ZoomCmd = { kind: "in" | "out" | "fit"; n: number };
@@ -233,41 +230,7 @@ export function PageCanvas(props: Props) {
   }, [strokes, live]);
 
   const paths = useRef(new Map<string, SkPath | null>());
-  const picture = useMemo(() => {
-    const cache = paths.current;
-    const get = (s: Stroke) => {
-      if (!cache.has(s.id)) cache.set(s.id, Skia.Path.MakeFromSVGString(strokeSvg(s)));
-      return cache.get(s.id) ?? null;
-    };
-    return createPicture((c) => {
-      const hl = Skia.Paint();
-      hl.setStyle(PaintStyle.Stroke);
-      hl.setStrokeCap(StrokeCap.Butt);
-      hl.setStrokeJoin(StrokeJoin.Round);
-      hl.setBlendMode(BlendMode.Multiply);
-      hl.setAntiAlias(true);
-      const pen = Skia.Paint();
-      pen.setStyle(PaintStyle.Fill);
-      pen.setAntiAlias(true);
-      // 형광펜은 글씨 밑에 깔리게 먼저
-      for (const s of strokes) {
-        if (s.tool !== "highlighter" || hidden.has(s.id)) continue;
-        const p = get(s);
-        if (!p) continue;
-        hl.setColor(Skia.Color(s.color));
-        hl.setAlphaf(HIGHLIGHT_OPACITY);
-        hl.setStrokeWidth(s.width);
-        c.drawPath(p, hl);
-      }
-      for (const s of strokes) {
-        if (s.tool !== "pen" || hidden.has(s.id)) continue;
-        const p = get(s);
-        if (!p) continue;
-        pen.setColor(Skia.Color(s.color));
-        c.drawPath(p, pen);
-      }
-    }, { width: page.w, height: page.h });
-  }, [strokes, hidden, page.w, page.h]);
+  const picture = useMemo(() => inkPicture(strokes, hidden, page.w, page.h, paths.current), [strokes, hidden, page.w, page.h]);
 
   const paper = useMemo(() => paperPicture(page), [page]);
   const image = useImage(background ?? undefined);
@@ -309,31 +272,6 @@ function EraserRing({ eraser }: { eraser: { value: { x: number; y: number; r: nu
   const r = useDerivedValue(() => eraser.value.r);
   const sw = useDerivedValue(() => Math.max(0.3, eraser.value.r / 10));
   return <Circle cx={cx} cy={cy} r={r} style="stroke" strokeWidth={sw} color="rgba(60,60,60,0.7)" />;
-}
-
-/** 빈 속지 무늬 (줄·모눈·점). PDF 쪽이면 없음. */
-function paperPicture(page: Page) {
-  if (page.pdf !== undefined || !page.paper || page.paper === "plain") return null;
-  const kind = page.paper;
-  return createPicture((c) => {
-    const p = Skia.Paint();
-    p.setAntiAlias(true);
-    if (kind === "lined") {
-      p.setColor(Skia.Color("#B9D3EE"));
-      p.setStrokeWidth(0.6);
-      for (let y = 84; y < page.h - 30; y += 26) c.drawLine(36, y, page.w - 36, y, p);
-      p.setColor(Skia.Color("#F2B8B8"));
-      c.drawLine(64, 40, 64, page.h - 30, p);
-    } else if (kind === "grid") {
-      p.setColor(Skia.Color("#D5DEE8"));
-      p.setStrokeWidth(0.5);
-      for (let x = 18; x < page.w; x += 18) c.drawLine(x, 0, x, page.h, p);
-      for (let y = 18; y < page.h; y += 18) c.drawLine(0, y, page.w, y, p);
-    } else {
-      p.setColor(Skia.Color("#B8BEC6"));
-      for (let x = 18; x < page.w; x += 18) for (let y = 18; y < page.h; y += 18) c.drawCircle(x, y, 0.8, p);
-    }
-  }, { width: page.w, height: page.h });
 }
 
 /** 쪽이 화면보다 작으면 가운데, 크면 가장자리(여백 포함)를 넘어 끌리지 않게. */

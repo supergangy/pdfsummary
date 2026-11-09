@@ -3,10 +3,15 @@ export type PageSize = { w: number; h: number };
 
 export const available = true;
 
+export type PdfChar = [string, number, number, number, number];
+
+type TextItem = { str: string; transform: number[]; width: number; hasEOL?: boolean };
+
 type PdfDoc = {
   numPages: number;
   getPage(n: number): Promise<{
-    getViewport(o: { scale: number }): { width: number; height: number };
+    getTextContent(): Promise<{ items: TextItem[] }>;
+    getViewport(o: { scale: number }): { width: number; height: number; transform: number[]; scale: number };
     render(o: { canvasContext: CanvasRenderingContext2D; viewport: unknown; canvas?: HTMLCanvasElement }): { promise: Promise<void> };
   }>;
 };
@@ -67,4 +72,34 @@ export function renderPage(uri: string, index: number, widthPx: number, _outPath
     images.set(key, p);
   }
   return p;
+}
+
+function mul(m: number[], n: number[]): number[] {
+  return [
+    m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1],
+    m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3],
+    m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5],
+  ];
+}
+
+/** pdf.js 글자 조각 → 글자 상자 (조각 폭을 글자 수로 나눔). 가로쓰기만. */
+export async function pageText(uri: string, index: number): Promise<PdfChar[] | null> {
+  const page = await (await open(uri)).getPage(index + 1);
+  const vp = page.getViewport({ scale: 1 });
+  const { items } = await page.getTextContent();
+  const out: PdfChar[] = [];
+  for (const it of items) {
+    if (!it.str) {
+      if (it.hasEOL && out.length) out.push(["\n", out[out.length - 1][3], out[out.length - 1][2], out[out.length - 1][3], out[out.length - 1][4]]);
+      continue;
+    }
+    const m = mul(vp.transform, it.transform);
+    const fh = Math.hypot(m[2], m[3]);
+    const x0 = m[4], top = m[5] - fh, w = it.width * vp.scale;
+    const chars = [...it.str];
+    const cw = w / chars.length;
+    chars.forEach((c, i) => out.push([c, x0 + cw * i, top, x0 + cw * (i + 1), m[5] + fh * 0.2]));
+    if (it.hasEOL) out.push(["\n", x0 + w, top, x0 + w, m[5]]);
+  }
+  return out;
 }

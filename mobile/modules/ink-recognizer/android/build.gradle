@@ -1,0 +1,21 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.inkrecognizer'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.inkrecognizer"
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+  }
+}
+
+dependencies {
+  implementation 'com.facebook.react:react-android'
+  // 손글씨 획 인식 (한국어 모델은 처음 쓸 때 약 20MB 받음, 그 뒤로는 인터넷 없이)
+  implementation 'com.google.mlkit:digital-ink-recognition:19.0.0'
+}

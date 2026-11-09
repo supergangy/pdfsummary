@@ -21,7 +21,9 @@ import { importPdf } from "./src/notes/importPdf";
 import { Library } from "./src/notes/Library";
 import { QuickScreen } from "./src/notes/QuickScreen";
 import type { Ink, Notebook } from "./src/notes/model";
+import { unpackNotebook } from "./src/notes/pack";
 import { notePayload, strokeCount } from "./src/notes/payload";
+import { readPicked } from "./src/notes/readPicked";
 import { sharePdf } from "./src/notes/sharePdf";
 import { NoteStore } from "./src/notes/store";
 import { ResultView } from "./src/platform/ResultView";
@@ -106,6 +108,14 @@ function Root() {
     if (!hasShareIntent) return;
     const f = shareIntent.files?.[0];
     resetShareIntent();
+    if (f && /\.pnote$/i.test(f.fileName || "")) {
+      // 다른 기기에서 보낸 노트 파일
+      readPicked({ uri: f.path })
+        .then((b) => store.importUnpacked(unpackNotebook(b)))
+        .then((nb) => setScreen({ name: "editor", id: nb.id }))
+        .catch((e) => setShareErr((e as Error).message));
+      return;
+    }
     if (!f || !isPdf(f.fileName || "", f.mimeType)) return;
     importPdf(store, { uri: f.path, name: f.fileName || "공유받은 파일.pdf", size: f.size, mimeType: f.mimeType })
       .then((nb) => setScreen({ name: "editor", id: nb.id }))

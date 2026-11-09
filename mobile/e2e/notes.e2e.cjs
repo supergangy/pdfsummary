@@ -67,6 +67,7 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
+  if (process.env.E2E_DEBUG) page.on("console", (m) => m.type() !== "warning" && console.log(`  [${m.type()}] ${m.text().slice(0, 300)}`));
   try {
     await page.goto(`http://127.0.0.1:${port}/`);
 
@@ -151,6 +152,20 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     await page.getByText("📁 수학", { exact: true }).click();
     await page.getByText("📁 수학 1").waitFor({ timeout: 5000 });
     console.log("✓ 폴더 만들기·노트 옮기기, 쪽 모아보기");
+
+    // ── 노트 파일로 내보냈다가 다시 가져오기 (다른 기기로 옮기기) ──
+    await page.getByLabel("시험 노트 더 보기").click();
+    const [pk] = await Promise.all([page.waitForEvent("download"), page.getByText("📦 다른 기기로 보내기 (노트 파일)").click()]);
+    // (자동화 도구로 고를 때는 영문 파일 이름이어야 한다. 실제 파일 고르기 창에서는 한글 이름도 된다)
+    const packPath = path.join(TMP, "test-note.pnote");
+    await pk.saveAs(packPath);
+    const [fc0] = await Promise.all([page.waitForEvent("filechooser"), page.getByText("📦 노트 파일 가져오기").click()]);
+    await fc0.setFiles(packPath);
+    await canvas.waitFor({ timeout: 15000 });
+    await canvas.getByText("메모 시험: 효소는 촉매").waitFor({ timeout: 10000 });
+    await page.getByLabel("노트 목록으로").click();
+    if ((await page.getByLabel("시험 노트 열기").count()) < 2) fail("가져온 노트가 목록에 없음");
+    console.log("✓ 노트 파일(.pnote)로 내보내기 → 가져오기 (필기·글상자 그대로)");
 
     // ── 서버 설정 ──
     await page.getByText("설정", { exact: true }).click();

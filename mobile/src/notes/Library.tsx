@@ -8,6 +8,9 @@ import { available as pdfAvailable } from "../../modules/pdf-pages";
 import type { Picked } from "../platform/types";
 import { Button, Hint, useTheme } from "../ui";
 import { importPdf } from "./importPdf";
+import { PACK_EXT, packNotebook, unpackNotebook } from "./pack";
+import { readPicked } from "./readPicked";
+import { shareFile } from "./shareFile";
 import { blankNotebook, type Notebook, type Paper } from "./model";
 import { pageImage } from "./pageImage";
 import type { NoteStore } from "./store";
@@ -52,6 +55,39 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh }: P
     if (res.canceled || !res.assets?.length) return;
     const a = res.assets[0];
     await doImport({ uri: a.uri, name: a.name, size: a.size, mimeType: a.mimeType, webFile: a.file });
+  }
+
+  async function pickPack() {
+    setErr("");
+    const res = await DocumentPicker.getDocumentAsync({ type: "*/*", copyToCacheDirectory: true, multiple: false });
+    if (res.canceled || !res.assets?.length) return;
+    const a = res.assets[0];
+    setBusy("노트 파일을 가져오는 중…");
+    try {
+      const nb = await store.importUnpacked(unpackNotebook(await readPicked({ uri: a.uri, webFile: a.file })));
+      if (folder) await store.moveTo(nb.id, folder);
+      reload();
+      onOpen(nb.id);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function sendPack(nb: Notebook) {
+    setActions(null);
+    setBusy("노트 파일을 만드는 중…");
+    try {
+      const full = await store.load(nb.id);
+      if (!full) throw new Error("노트를 열 수 없어요.");
+      const bytes = packNotebook(full, await store.loadInk(full), full.hasPdf ? await store.pdfBytes(full.id) : null);
+      await shareFile(bytes, `${full.title}${PACK_EXT}`, "application/zip");
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy("");
+    }
   }
 
   async function doImport(p: Picked) {
@@ -141,6 +177,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh }: P
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 18 }}>
           <Button kind="primary" label="📄 PDF 가져오기" onPress={pickPdf} disabled={!pdfAvailable} />
           <Button label="＋ 새 노트" onPress={() => setNewOpen(true)} />
+          <Button label="📦 노트 파일 가져오기" onPress={pickPack} />
           <Button label="✨ PDF만 넣어 요약하기" onPress={onSummaryTool} />
         </View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 14 }}>
@@ -212,6 +249,9 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh }: P
             </Pressable>
             <Pressable onPress={() => { setMoving(actions); setActions(null); }} style={{ paddingHorizontal: 16, paddingVertical: 12 }} accessibilityRole="menuitem">
               <Text style={{ color: t.ink, fontSize: 15 }}>📁 폴더로 옮기기</Text>
+            </Pressable>
+            <Pressable onPress={() => actions && sendPack(actions)} style={{ paddingHorizontal: 16, paddingVertical: 12 }} accessibilityRole="menuitem">
+              <Text style={{ color: t.ink, fontSize: 15 }}>📦 다른 기기로 보내기 (노트 파일)</Text>
             </Pressable>
             <Pressable onPress={() => actions && remove(actions)} style={{ paddingHorizontal: 16, paddingVertical: 12 }} accessibilityRole="menuitem">
               <Text style={{ color: t.bad, fontSize: 15 }}>🗑 노트 지우기</Text>

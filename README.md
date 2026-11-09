@@ -95,9 +95,11 @@ Claude API 키가 없어도, 내 컴퓨터에서 AI 모델을 돌려 요약집�
   - Mac "확인되지 않은 개발자" → 앱을 **우클릭 → 열기** (또는 시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기)
 - 직접 만들기: `pip install . pyinstaller==6.22.3` 후 `cd desktop && pyinstaller --noconfirm pdfsummary.spec` (그 OS용만 만들어짐)
 
-## 태블릿·폰 앱 (iOS · Android)
+## 필기 노트 앱 (iPad · 갤럭시탭 · 폰)
 
-아이패드·갤럭시탭에서 PDF를 고르거나 굿노트·삼성노트에서 **공유 → 필기 요약**으로 보내 요약합니다. 앱은 `mobile/`에 있고, 만들고 스토어에 올리는 방법은 [mobile/README.md](mobile/README.md)에 있습니다.
+교재 PDF에 바로 펜·형광펜으로 필기하고, **요약** 단추로 칠하고 쓴 부분만 모아 줍니다 (서버 없이 기기에서 바로, 또는 서버로 자세히).
+펜·형광펜·지우개·올가미·도형 펴기·글상자, 폴더, 쪽 모아보기, PDF 내보내기, 다른 기기로 노트 보내기까지 — 자세한 내용은 [mobile/README.md](mobile/README.md).
+굿노트·삼성노트에서 내보낸 PDF도 **공유 → 필기 요약**으로 받아 이어서 쓰거나 요약할 수 있습니다. 앱은 `mobile/`에 있고, 만들고 스토어에 올리는 방법은 [mobile/README.md](mobile/README.md)에 있습니다.
 PDF 분석은 기기에서 못 하므로 아래 **앱용 서버**가 하나 필요합니다.
 API 키가 없으면 **기기 안 AI**(아이패드 Apple 기기 안 AI, 일부 갤럭시의 Gemini Nano)로 단원 개요와 표시마다 한 줄 설명을 무료로 붙일 수 있습니다 ([자세히](mobile/README.md#기기-안-ai-api-키-없이-무료)).
 

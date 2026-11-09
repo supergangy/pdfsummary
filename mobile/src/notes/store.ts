@@ -52,6 +52,14 @@ export class NoteStore {
     await this.save(nb);
   }
 
+  /** 노트 파일(.pnote)에서 푼 노트를 저장한다 */
+  async importUnpacked(u: { nb: Notebook; ink: Ink; pdf: Uint8Array | null }): Promise<Notebook> {
+    if (u.pdf) await this.fs.writeBytes(`${dir(u.nb.id)}/source.pdf`, u.pdf);
+    for (const [pid, ss] of Object.entries(u.ink)) await this.savePage(u.nb.id, pid, ss);
+    await this.save(u.nb);
+    return u.nb;
+  }
+
   /** 노트를 만들기 전에 원본 PDF부터 복사해 둔다 (쪽 크기를 읽으려고). */
   async attachPdf(id: string, src: { uri: string; blob?: Blob }): Promise<void> {
     await this.fs.importFile(src, `${dir(id)}/source.pdf`);

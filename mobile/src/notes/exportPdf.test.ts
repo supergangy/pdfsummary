@@ -75,3 +75,26 @@ test("highlighter is translucent (text under it stays readable)", async () => {
   const doc = await PDFDocument.load(pdf);
   assert.equal(doc.getPageCount(), 1);
 });
+
+test("text boxes are written with the Korean font (and wrap inside the box)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const font = new Uint8Array(readFileSync(new URL("../../assets/fonts/NanumGothic-Regular.ttf", import.meta.url)));
+  const { makeTextBox } = await import("./model.ts");
+  const nb = blankNotebook("글상자", "plain", 1);
+  const p = nb.pages[0];
+  const box = makeTextBox("t", 100, 100, "효소는 생체 촉매이다\n두 번째 줄 ABC", 16, "#1E4FD8", p.w);
+  const pdf = await buildPdf(nb, { [p.id]: [box] }, null, font);
+  const dir = mkdtempSync(join(tmpdir(), "nb-"));
+  const f = join(dir, "t.pdf");
+  writeFileSync(f, pdf);
+  const out = execFileSync("python3", ["-c", `
+import sys, pymupdf
+p = pymupdf.open(sys.argv[1])[0]
+for b in p.get_text("words"): print(round(b[0]), round(b[1]), b[4])`, f], { encoding: "utf8" });
+  assert.match(out, /효소는/);
+  assert.match(out, /ABC/);
+  const first = out.split("\n").find((l) => l.includes("효소는"))!.split(" ").map(Number);
+  assert.ok(Math.abs(first[0] - 100) < 3 && first[1] >= 99 && first[1] < 120, out);
+  // 글꼴은 쓴 글자만 들어가 작다
+  assert.ok(pdf.length < 200_000, `PDF ${pdf.length}바이트`);
+});

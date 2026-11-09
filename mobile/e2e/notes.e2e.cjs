@@ -93,6 +93,25 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await page.waitForTimeout(400);
     await page.getByLabel("되돌리기").click(); // 지운 것 되살리기
     await page.waitForTimeout(400);
+    // 올가미로 그 획을 골라 아래로 250px 옮긴다
+    await page.getByText("➰ 올가미").click();
+    const lasso = [[x0 - 30, y0 - 30], [x0 + 230, y0 - 30], [x0 + 230, y0 + 50], [x0 - 30, y0 + 50], [x0 - 29, y0 - 29]];
+    await page.mouse.move(lasso[0][0], lasso[0][1]);
+    await page.mouse.down();
+    for (const [x, y] of lasso.slice(1)) await page.mouse.move(x, y, { steps: 4 });
+    await page.mouse.up();
+    await page.getByText(/1개 고름/).waitFor({ timeout: 5000 });
+    await page.mouse.move(x0 + 100, y0 + 8);
+    await page.mouse.down();
+    await page.mouse.move(x0 + 100, y0 + 258, { steps: 10 });
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+    // 글상자
+    await page.getByText("T 글상자").click();
+    await page.mouse.click(x0 + 400, y0 + 120);
+    await page.getByLabel("글상자 내용").fill("메모 시험: 효소는 촉매");
+    await page.getByText("넣기", { exact: true }).click();
+    await canvas.getByText("메모 시험: 효소는 촉매").waitFor({ timeout: 5000 });
     await page.getByText("✒️ 펜").click();
     await page.getByLabel("노트 목록으로").click();
     await page.getByLabel("시험 노트 열기").click();
@@ -102,9 +121,20 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     const [dl] = await Promise.all([page.waitForEvent("download"), page.getByText("📄 PDF로 내보내기 (필기 포함)").click()]);
     const out = path.join(TMP, "export.pdf");
     await dl.saveAs(out);
-    const drawn = execFileSync("python3", ["-c", "import sys, pymupdf; print(len(pymupdf.open(sys.argv[1])[0].get_drawings()))", out], { encoding: "utf8" }).trim();
-    if (Number(drawn) < 1) fail("내보낸 PDF에 획이 없음 (다시 열었을 때 저장이 안 됐거나 내보내기 실패)");
-    console.log("✓ 빈 노트: 쓰기·지우기·되돌리기·저장·PDF 내보내기");
+    // 쪽 좌표로: 빈 A4(595pt)가 화면 폭에 맞춰져 있다
+    const sc = Math.min((box.width - 24) / 595.28, 6);
+    const pg = (sx, sy) => [(sx - box.x - 12) / sc, (sy - box.y - 12) / sc];
+    const probe = JSON.stringify([pg(x0 + 100, y0 + 8), pg(x0 + 100, y0 + 258)]);
+    const dark = JSON.parse(execFileSync("python3", ["-c", `
+import sys, json, pymupdf
+p = pymupdf.open(sys.argv[1])[0]; pix = p.get_pixmap(dpi=72, alpha=False)
+def dark(x, y):
+    return any(sum(pix.pixel(min(max(int(x)+dx,0),pix.width-1), min(max(int(y)+dy,0),pix.height-1))) < 450 for dx in range(-12,13,2) for dy in range(-12,13,2))
+print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { encoding: "utf8" }));
+    const words = execFileSync("python3", ["-c", "import sys, pymupdf; print(pymupdf.open(sys.argv[1])[0].get_text())", out], { encoding: "utf8" });
+    if (!words.includes("메모 시험")) fail("내보낸 PDF에 글상자 글이 없음");
+    if (dark[0] || !dark[1]) fail(`올가미로 옮긴 획이 내보낸 PDF의 새 자리에 없음 (원래 자리 ${dark[0]}, 새 자리 ${dark[1]})`);
+    console.log("✓ 빈 노트: 쓰기·지우기·되돌리기·올가미로 옮기기·글상자·저장·PDF 내보내기(한글 글꼴)");
     await page.getByLabel("쪽 모아보기").click();
     await page.getByLabel("1쪽으로").waitFor({ timeout: 10000 });
     await page.getByLabel("쪽 모아보기 닫기").click();

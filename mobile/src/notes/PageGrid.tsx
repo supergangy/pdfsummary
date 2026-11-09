@@ -1,5 +1,5 @@
 // 쪽 모아보기: 쪽마다 작은 그림(바탕 + 필기)을 격자로 보여 주고, 누르면 그 쪽으로 간다.
-import { Canvas, Group, Image, Picture, Rect, useImage, type SkPath } from "@shopify/react-native-skia";
+import { Canvas, Group, Image, Picture, Rect, useImage } from "@shopify/react-native-skia";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { FlatList, Modal, Pressable, Text, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -7,7 +7,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { useTheme } from "../ui";
 import type { Ink, Notebook, Page } from "./model";
 import { pageImage } from "./pageImage";
-import { inkPicture, paperPicture } from "./render";
+import { inkPicture, paperPicture, type PathCache } from "./render";
 
 type Props = {
   visible: boolean;
@@ -92,7 +92,7 @@ const Thumb = memo(function Thumb({ nbId, page, ink, pdfUri, width, active }: { 
   }, [nbId, pdfUri, page.pdf]);
   const img = useImage(bg ?? undefined);
   const strokes = ink[page.id];
-  const cache = useRef(new Map<string, SkPath | null>());
+  const cache = useRef<PathCache>(new WeakMap());
   const pic = useMemo(() => (strokes?.length ? inkPicture(strokes, new Set(), page.w, page.h, cache.current) : null), [strokes, page.w, page.h]);
   const paper = useMemo(() => paperPicture(page), [page]);
   return (

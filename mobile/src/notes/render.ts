@@ -4,10 +4,13 @@ import { BlendMode, PaintStyle, Skia, StrokeCap, StrokeJoin, createPicture, type
 import { strokeSvg } from "./geometry";
 import { HIGHLIGHT_OPACITY, type Page, type Stroke } from "./model";
 
-export function inkPicture(strokes: Stroke[], hidden: Set<string>, w: number, h: number, cache: Map<string, SkPath | null>) {
+/** 획 객체마다 경로를 기억한다 (옮기거나 바꾼 획은 새 객체라 다시 만든다) */
+export type PathCache = WeakMap<Stroke, SkPath | null>;
+
+export function inkPicture(strokes: Stroke[], hidden: Set<string>, w: number, h: number, cache: PathCache) {
   const get = (s: Stroke) => {
-    if (!cache.has(s.id)) cache.set(s.id, Skia.Path.MakeFromSVGString(strokeSvg(s)));
-    return cache.get(s.id) ?? null;
+    if (!cache.has(s)) cache.set(s, Skia.Path.MakeFromSVGString(strokeSvg(s)));
+    return cache.get(s) ?? null;
   };
   return createPicture((c) => {
     const hl = Skia.Paint();

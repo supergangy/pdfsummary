@@ -3,7 +3,7 @@ import type { Ink, Notebook } from "./model.ts";
 
 export type NotePayload = {
   title: string;
-  pages: { w: number; h: number; pdf?: number; strokes: { tool: string; color: string; width: number; pts: number[] }[] }[];
+  pages: { w: number; h: number; pdf?: number; strokes: { tool: string; color: string; width: number; pts: number[]; text?: string }[] }[];
 };
 
 export function notePayload(nb: Notebook, ink: Ink): NotePayload {
@@ -13,7 +13,7 @@ export function notePayload(nb: Notebook, ink: Ink): NotePayload {
       w: p.w,
       h: p.h,
       ...(p.pdf !== undefined ? { pdf: p.pdf } : {}),
-      strokes: (ink[p.id] ?? []).map((s) => ({ tool: s.tool, color: s.color, width: s.width, pts: s.pts })),
+      strokes: (ink[p.id] ?? []).map((s) => ({ tool: s.tool, color: s.color, width: s.width, pts: s.pts, ...(s.text !== undefined ? { text: s.text } : {}) })),
     })),
   };
 }

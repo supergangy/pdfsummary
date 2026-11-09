@@ -3,10 +3,17 @@ import type { Ink, Stroke } from "./model.ts";
 
 export type Op =
   | { kind: "add"; page: string; strokes: Stroke[] }
-  | { kind: "remove"; page: string; strokes: Stroke[]; at: number[] }; // at: 지우기 전 자리
+  | { kind: "remove"; page: string; strokes: Stroke[]; at: number[] } // at: 지우기 전 자리
+  | { kind: "replace"; page: string; before: Stroke[]; after: Stroke[] }; // 같은 id의 획을 바꿔 끼움 (옮기기·색 바꾸기)
+
+function swap(ink: Ink, page: string, to: Stroke[]): Ink {
+  const by = new Map(to.map((s) => [s.id, s]));
+  return { ...ink, [page]: (ink[page] ?? []).map((s) => by.get(s.id) ?? s) };
+}
 
 export function apply(ink: Ink, op: Op): Ink {
   const cur = ink[op.page] ?? [];
+  if (op.kind === "replace") return swap(ink, op.page, op.after);
   if (op.kind === "add") return { ...ink, [op.page]: [...cur, ...op.strokes] };
   const gone = new Set(op.strokes.map((s) => s.id));
   return { ...ink, [op.page]: cur.filter((s) => !gone.has(s.id)) };
@@ -47,6 +54,7 @@ export class History {
     const op = this.undos.pop();
     if (!op) return { ink };
     this.redos.push(op);
+    if (op.kind === "replace") return { ink: swap(ink, op.page, op.before), page: op.page };
     if (op.kind === "add") return { ink: apply(ink, { kind: "remove", page: op.page, strokes: op.strokes, at: [] }), page: op.page };
     return { ink: restore(ink, op.page, op.strokes, op.at), page: op.page };
   }

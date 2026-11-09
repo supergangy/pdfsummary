@@ -71,7 +71,16 @@ def check_spec(spec: dict, has_source: bool, source_pages: int = 0) -> list[dict
             raise NoteError("획이 너무 많습니다.")
         clean = []
         for s in strokes:
-            if not isinstance(s, dict) or s.get("tool") not in ("pen", "highlighter"):
+            if not isinstance(s, dict) or s.get("tool") not in ("pen", "highlighter", "text"):
+                continue
+            if s["tool"] == "text":   # 글상자: [왼쪽, 위, 0, 오른쪽, 아래, 0] + 글
+                pts, text = s.get("pts"), s.get("text")
+                if isinstance(text, str) and text.strip() and isinstance(pts, list) and len(pts) == 6:
+                    x0, y0, x1, y1 = (_num(pts[i], -2 * w, 3 * w) for i in (0, 1, 3, 4))
+                    if None not in (x0, y0, x1, y1):
+                        clean.append({"tool": "text", "color": s.get("color") or "#000000",
+                                      "width": _num(s.get("width"), 4, 96) or 16, "pts": [(x0, y0), (x1, y1)],
+                                      "text": text[:5000]})
                 continue
             pts = s.get("pts")
             if not isinstance(pts, list) or len(pts) < 3 or len(pts) > MAX_POINTS * 3:
@@ -123,6 +132,15 @@ def _add_strokes(page: pymupdf.Page, p: dict) -> None:
     m = page.derotation_matrix
     groups: dict[tuple, list] = {}
     for s in p["strokes"]:
+        if s["tool"] == "text":
+            # 글상자 = 메모 주석 (분석에서 '메모'로 읽힌다)
+            (x0, y0), (x1, y1) = s["pts"]
+            q = pymupdf.Point(x0 * sx, y0 * sy) * m
+            a = page.add_text_annot(q, s["text"], icon="Note")
+            a.set_colors(stroke=_rgb(s["color"]))
+            a.set_info(title="필기 요약", subject="글상자")
+            a.update()
+            continue
         key = (s["tool"], s["color"], round(s["width"], 2))
         groups.setdefault(key, []).append([pymupdf.Point(x * sx, y * sy) * m for x, y in s["pts"]])
     # 형광펜 먼저 (밑에 깔리게)

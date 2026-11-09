@@ -9,7 +9,7 @@ import type { Ink, Notebook, Stroke } from "./model.ts";
 /** 글자 하나와 상자 (화면 쪽 좌표). "\n"은 줄바꿈. */
 export type PdfChar = [string, number, number, number, number];
 
-export type QuickKind = "highlight" | "underline" | "circle" | "handwriting";
+export type QuickKind = "highlight" | "underline" | "circle" | "handwriting" | "memo";
 
 export type QuickItem = {
   page: number; // 0부터
@@ -167,6 +167,11 @@ export function analyzePage(page: number, strokes: Stroke[], chars: PdfChar[] | 
     }
   }
 
+  // 글상자: 쓴 글 그대로 메모로
+  for (const s of strokes) {
+    if (s.tool === "text" && s.text?.trim()) items.push({ page, kind: "memo", color: s.color, text: s.text.trim(), box: bounds(s), strokes: [] });
+  }
+
   // 펜: 덩어리마다 밑줄 / 동그라미 / 손글씨
   for (const group of clusterStrokes(strokes.filter((s) => s.tool === "pen"))) {
     const box = boxOf(group);
@@ -252,7 +257,7 @@ export function overviewPrompt(q: QuickSummary, limit = 1600): { instructions: s
 // ── HTML ──────────────────────────────────────────────────────────────
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
-const LABEL: Record<QuickKind, string> = { highlight: "형광펜", underline: "밑줄", circle: "동그라미", handwriting: "손글씨" };
+const LABEL: Record<QuickKind, string> = { highlight: "형광펜", underline: "밑줄", circle: "동그라미", handwriting: "손글씨", memo: "메모" };
 
 function inkSvg(it: QuickItem): string {
   const [x0, y0, x1, y1] = it.box;
@@ -268,7 +273,7 @@ function inkSvg(it: QuickItem): string {
 
 export function quickHtml(q: QuickSummary): string {
   const count = (k: QuickKind) => q.pages.reduce((n, p) => n + p.items.filter((i) => i.kind === k).length, 0);
-  const stats = (["highlight", "underline", "circle", "handwriting"] as QuickKind[]).filter((k) => count(k)).map((k) => `${LABEL[k]} ${count(k)}`).join(" · ");
+  const stats = (["highlight", "underline", "circle", "handwriting", "memo"] as QuickKind[]).filter((k) => count(k)).map((k) => `${LABEL[k]} ${count(k)}`).join(" · ");
   const body = q.pages.map(({ page, items }) => {
     const rows = items.map((it) => {
       let main: string;
@@ -276,11 +281,11 @@ export function quickHtml(q: QuickSummary): string {
         const m = `<mark style="background:${it.kind === "highlight" ? it.color + "66" : "transparent"};${it.kind !== "highlight" ? `text-decoration:underline 2px ${it.color};` : ""}">${esc(it.sentence.mark)}</mark>`;
         main = `<p>${esc(it.sentence.before)} ${m} ${esc(it.sentence.after)}</p>`;
       } else if (it.text) {
-        main = `<p>${esc(it.text)}</p>`;
+        main = `<p>${it.kind === "memo" ? "📝 " : ""}${esc(it.text).replace(/\n/g, "<br>")}</p>`;
       } else {
         main = "";
       }
-      const pic = it.kind === "handwriting" || !it.text ? inkSvg(it) : "";
+      const pic = it.kind === "handwriting" || (!it.text && it.kind !== "memo") ? inkSvg(it) : "";
       return `<li style="border-left-color:${it.color}">${main}${pic}<small>${LABEL[it.kind]}</small></li>`;
     }).join("");
     return `<section><h2>${page + 1}쪽</h2><ul>${rows}</ul></section>`;

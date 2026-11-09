@@ -10,6 +10,8 @@ export type Prefs = {
   hlColor: string;
   hlWidth: number;
   straight: boolean; // 형광펜 직선
+  shapes: boolean; // 펜으로 그린 선·사각형·원·삼각형을 반듯하게
+  textSize: number;
   fingerDraw: boolean; // 손가락으로 쓰기 (꺼지면 손가락은 화면 옮기기)
   stylusSeen: boolean;
 };
@@ -21,6 +23,8 @@ export const DEFAULT_PREFS: Prefs = {
   hlColor: HIGHLIGHT_COLORS[0],
   hlWidth: HIGHLIGHT_WIDTHS[1],
   straight: true,
+  shapes: false,
+  textSize: 16,
   fingerDraw: true,
   stylusSeen: false,
 };

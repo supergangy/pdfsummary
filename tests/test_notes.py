@@ -127,3 +127,14 @@ def test_server_notes_flow(server, book_pair):  # noqa: F811
     # 잘못된 요청
     assert call(server, "/api/notes", data={"file": "nope", "note": note})[0] == 400
     assert call(server, "/api/notes", data={"note": {"pages": [{"w": 1, "h": 1, "pdf": 0}]}})[0] == 400
+
+
+def test_text_boxes_become_notes(tmp_path):
+    spec = {"pages": [{"w": 595, "h": 842, "strokes": [
+        {"tool": "text", "color": "#1E4FD8", "width": 16, "pts": [100, 100, 0, 300, 140, 0], "text": "시험에 꼭 나옴: 효소-기질 복합체"},
+        {"tool": "text", "pts": [1, 2, 0, 3, 4, 0], "text": "   "},   # 빈 글은 버림
+    ]}]}
+    out_pdf = tmp_path / "t.pdf"
+    build_note_pdf(spec, None, out_pdf)
+    marks = _run(out_pdf, tmp_path / "o5")
+    assert [(m["kind"], m["text"]) for m in marks] == [("note", "시험에 꼭 나옴: 효소-기질 복합체")]

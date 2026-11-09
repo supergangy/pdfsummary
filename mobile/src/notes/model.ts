@@ -1,15 +1,18 @@
 // 필기 노트의 데이터 모양. 좌표는 모두 '쪽 좌표'(PDF 포인트, 1pt = 1/72인치)로 저장해서
 // 화면 크기·확대와 상관없이 같고, PDF로 내보내거나 요약 서버로 보낼 때 그대로 쓴다.
 
-export type InkTool = "pen" | "highlighter";
+export type InkTool = "pen" | "highlighter" | "text";
 
 export type Stroke = {
   id: string;
   tool: InkTool;
   color: string; // #RRGGBB
-  width: number; // pt
-  pts: number[]; // x, y, 필압(0~1) 이 차례로 반복
+  width: number; // pt (글상자는 글자 크기)
+  pts: number[]; // x, y, 필압(0~1) 이 차례로 반복. 글상자는 [왼쪽, 위, 0, 오른쪽, 아래, 0]
+  text?: string; // 글상자의 글
 };
+
+export const TEXT_SIZES = [12, 16, 22];
 
 export type Paper = "plain" | "lined" | "grid" | "dotted";
 
@@ -120,7 +123,24 @@ export function parseStrokes(raw: unknown): Stroke[] {
   if (!Array.isArray(raw)) return [];
   return raw.filter(
     (s): s is Stroke =>
-      !!s && typeof s.id === "string" && (s.tool === "pen" || s.tool === "highlighter") &&
+      !!s && typeof s.id === "string" && (s.tool === "pen" || s.tool === "highlighter" || (s.tool === "text" && typeof s.text === "string" && s.pts?.length === 6)) &&
       typeof s.color === "string" && s.width > 0 && Array.isArray(s.pts) && s.pts.length >= 3 && s.pts.length % 3 === 0,
   );
+}
+
+/** 글상자 크기 어림: 폭 w 안에서 줄이 몇 줄 될지 (한글·한자는 글자 폭 ≈ 글자 크기, 영문·숫자는 그 절반쯤) */
+export function textBoxHeight(text: string, size: number, w: number): number {
+  let lines = 0;
+  for (const line of text.split("\n")) {
+    let width = 0;
+    for (const c of line) width += /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7A3\u4E00-\u9FFF]/.test(c) ? size : size * 0.55;
+    lines += Math.max(1, Math.ceil(width / Math.max(size, w)));
+  }
+  return Math.max(1, lines) * size * 1.4;
+}
+
+export function makeTextBox(id: string, x: number, y: number, text: string, size: number, color: string, pageW: number): Stroke {
+  const w = Math.max(80, Math.min(320, pageW - x - 18));
+  const h = textBoxHeight(text, size, w);
+  return { id, tool: "text", color, width: size, pts: [x, y, 0, x + w, y + h, 0], text };
 }

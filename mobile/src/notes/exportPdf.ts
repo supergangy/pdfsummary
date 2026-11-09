@@ -1,6 +1,7 @@
 // 필기를 넣은 PDF 만들기 (기기 안에서, 인터넷 없이). 원본 PDF 쪽 위에 획을 벡터로 그린다.
 // 쪽 좌표(화면에 보이는 대로, 왼쪽 위가 0)를 PDF 사용자 좌표(왼쪽 아래가 0, 자르기 상자·회전 반영)로 바꾼다.
-import { BlendMode, LineCapStyle, LineJoinStyle, PDFDocument, rgb, type PDFPage } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit";
+import { BlendMode, LineCapStyle, PDFDocument, degrees, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 
 import { penOutline } from "./geometry.ts";
 import { HIGHLIGHT_OPACITY, type Ink, type Notebook, type Paper, type Stroke } from "./model.ts";
@@ -55,6 +56,29 @@ function drawStroke(page: PDFPage, s: Stroke, crop: Box, rot: number) {
   });
 }
 
+/** 글상자: 폭 안에서 줄을 나눠 위에서부터 쓴다 (한글 글꼴을 넣어서) */
+function drawText(page: PDFPage, s: Stroke, crop: Box, rot: number, font: PDFFont) {
+  const [x0, y0, x1] = [s.pts[0], s.pts[1], s.pts[3]];
+  const size = s.width, w = x1 - x0, lh = size * 1.4;
+  const lines: string[] = [];
+  for (const para of (s.text ?? "").split("\n")) {
+    let cur = "";
+    for (const ch of para) {
+      if (cur && font.widthOfTextAtSize(cur + ch, size) > w) {
+        lines.push(cur);
+        cur = ch;
+      } else cur += ch;
+    }
+    lines.push(cur);
+  }
+  lines.forEach((line, i) => {
+    if (!line) return;
+    // 줄의 글자 바탕선 왼쪽 끝 (화면 좌표) → PDF 좌표
+    const [X, Y] = toUser(x0, y0 + i * lh + size * 1.05, crop, rot);
+    page.drawText(line, { x: X, y: Y, size, font, color: hex(s.color), rotate: degrees(((rot % 360) + 360) % 360) });
+  });
+}
+
 function drawPaper(page: PDFPage, paper: Paper | undefined, w: number, h: number) {
   if (!paper || paper === "plain") return;
   if (paper === "lined") {
@@ -72,8 +96,14 @@ function drawPaper(page: PDFPage, paper: Paper | undefined, w: number, h: number
  * 노트를 PDF로. source: 원본 PDF 바이트(없으면 빈 속지만).
  * 원본의 쪽을 노트의 쪽 순서대로 복사하고(빈 쪽은 새로 만들고), 그 위에 획을 그린다.
  */
-export async function buildPdf(nb: Notebook, ink: Ink, source: Uint8Array | null): Promise<Uint8Array> {
+export async function buildPdf(nb: Notebook, ink: Ink, source: Uint8Array | null, fontBytes?: Uint8Array | null): Promise<Uint8Array> {
   const out = await PDFDocument.create();
+  const hasText = Object.values(ink).some((ss) => ss.some((s) => s.tool === "text" && s.text));
+  let font: PDFFont | null = null;
+  if (hasText && fontBytes) {
+    out.registerFontkit(fontkit);
+    font = await out.embedFont(fontBytes, { subset: true }); // 쓴 글자만 넣어 파일을 작게
+  }
   out.setTitle(nb.title);
   out.setProducer("필기 요약");
   const src = source ? await PDFDocument.load(source, { ignoreEncryption: true, updateMetadata: false }) : null;
@@ -95,6 +125,7 @@ export async function buildPdf(nb: Notebook, ink: Ink, source: Uint8Array | null
     // 형광펜을 먼저(글씨 밑에)
     for (const s of strokes) if (s.tool === "highlighter") drawStroke(page, s, crop, rot);
     for (const s of strokes) if (s.tool === "pen") drawStroke(page, s, crop, rot);
+    if (font) for (const s of strokes) if (s.tool === "text" && s.text) drawText(page, s, crop, rot, font);
   });
   return out.save();
 }

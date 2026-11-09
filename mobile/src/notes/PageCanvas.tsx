@@ -2,17 +2,18 @@
 // - 펜(스타일러스)은 쓰고, 손가락은 '손가락으로 쓰기'가 꺼져 있으면 화면을 옮긴다 (손바닥이 닿아도 안 써짐)
 // - 두 손가락: 확대·축소·이동
 // - 지금 긋는 획은 UI 스레드에서 바로 그리고(지연 최소), 손을 떼면 JS 쪽에 넘겨 저장한다
-import { Canvas, Circle, Group, Image, Path, Picture, Rect, useImage, usePathValue, type SkPath } from "@shopify/react-native-skia";
+import { Canvas, Circle, DashPathEffect, Group, Image, Path, Picture, Rect, useImage, usePathValue } from "@shopify/react-native-skia";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { View, type LayoutChangeEvent } from "react-native";
+import { Text, View, type LayoutChangeEvent } from "react-native";
 import { GestureDetector, PointerType, usePanGesture, usePinchGesture, useSimultaneousGestures } from "react-native-gesture-handler";
-import { useDerivedValue, useSharedValue } from "react-native-reanimated";
+import Animated, { useAnimatedStyle, useDerivedValue, useSharedValue, type SharedValue } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 
 import { HIGHLIGHT_OPACITY, type Page, type Stroke } from "./model";
-import { inkPicture, paperPicture } from "./render";
+import { inkPicture, paperPicture, type PathCache } from "./render";
 
-export type ToolName = "pen" | "highlighter" | "eraser";
+export type ToolName = "pen" | "highlighter" | "eraser" | "lasso" | "text";
+export type Selection = { ids: Set<string>; box: [number, number, number, number] } | null;
 export type ZoomCmd = { kind: "in" | "out" | "fit"; n: number };
 
 const MARGIN = 12;
@@ -31,6 +32,10 @@ type Props = {
   dark?: boolean;
   onStroke: (pts: number[], stylus: boolean) => void;
   onErase: (phase: 0 | 1 | 2, x: number, y: number, radius: number) => void;
+  selection?: Selection;
+  onLasso?: (pts: number[]) => void; // 올가미를 다 그렸을 때
+  onMoveSelection?: (dx: number, dy: number) => void; // 고른 것을 끌어 옮겼을 때
+  onTextTap?: (x: number, y: number) => void; // 글상자 도구로 쪽을 눌렀을 때
   onViewWidth?: (pagePx: number) => void; // 쪽이 화면에서 몇 픽셀 폭인지 (바탕 그림 해상도용)
 };
 
@@ -53,6 +58,9 @@ export function PageCanvas(props: Props) {
   cb.current = props;
   const emitStroke = useCallback((pts: number[], stylus: boolean) => cb.current.onStroke(pts, stylus), []);
   const emitErase = useCallback((phase: 0 | 1 | 2, x: number, y: number, r: number) => cb.current.onErase(phase, x, y, r), []);
+  const emitTextTap = useCallback((x: number, y: number) => cb.current.onTextTap?.(x, y), []);
+  const emitLasso = useCallback((pts: number[]) => cb.current.onLasso?.(pts), []);
+  const emitMove = useCallback((dx: number, dy: number) => cb.current.onMoveSelection?.(dx, dy), []);
   const emitScale = useCallback((s: number) => cb.current.onViewWidth?.(s * cb.current.page.w), []);
 
   const fit = useCallback(() => {
@@ -102,13 +110,25 @@ export function PageCanvas(props: Props) {
   const toolSV = useSharedValue(0);
   const fingerSV = useSharedValue(fingerDraw);
   useEffect(() => {
-    toolSV.value = tool === "pen" ? 0 : tool === "highlighter" ? 1 : 2;
+    toolSV.value = tool === "pen" ? 0 : tool === "highlighter" ? 1 : tool === "eraser" ? 2 : tool === "lasso" ? 3 : 4;
   }, [tool, toolSV]);
+  // 고른 것(올가미) 상자와 끄는 중 옮긴 거리
+  const sel = props.selection ?? null;
+  const selBox = useSharedValue<number[]>([0, 0, 0, 0]);
+  const hasSel = useSharedValue(false);
+  const dragX = useSharedValue(0);
+  const dragY = useSharedValue(0);
+  useEffect(() => {
+    hasSel.value = !!sel && sel.ids.size > 0;
+    if (sel) selBox.value = [...sel.box];
+    dragX.value = 0;
+    dragY.value = 0;
+  }, [sel, hasSel, selBox, dragX, dragY]);
   useEffect(() => {
     fingerSV.value = fingerDraw;
   }, [fingerDraw, fingerSV]);
 
-  const mode = useSharedValue(0); // 0 없음, 1 쓰기, 2 손가락으로 옮기기, 3 지우기, 4 취소됨
+  const mode = useSharedValue(0); // 0 없음, 1 쓰기, 2 손가락으로 옮기기, 3 지우기, 4 취소됨, 5 고른 것 끌기, 6 올가미 그리기
   const started = useSharedValue(0);
   const stylus = useSharedValue(false);
   const sx = useSharedValue(0);
@@ -130,6 +150,25 @@ export function PageCanvas(props: Props) {
       }
       const x = (e.x - tx.value) / scale.value;
       const y = (e.y - ty.value) / scale.value;
+      if (toolSV.value === 4) {
+        mode.value = 7;
+        sx.value = x;
+        sy.value = y;
+        return;
+      }
+      if (toolSV.value === 3) {
+        const b = selBox.value;
+        const pad = 10 / scale.value;
+        if (hasSel.value && x >= b[0] - pad && x <= b[2] + pad && y >= b[1] - pad && y <= b[3] + pad) {
+          mode.value = 5;
+          sx.value = x;
+          sy.value = y;
+          return;
+        }
+        mode.value = 6;
+        live.value = [x, y, 0.5];
+        return;
+      }
       if (toolSV.value === 2) {
         mode.value = 3;
         const r = ERASER_PX / scale.value;
@@ -159,6 +198,19 @@ export function PageCanvas(props: Props) {
         scheduleOnRN(emitErase, 1, x, y, r);
         return;
       }
+      if (mode.value === 5) {
+        dragX.value = x - sx.value;
+        dragY.value = y - sy.value;
+        return;
+      }
+      if (mode.value === 6) {
+        live.modify((a) => {
+          "worklet";
+          a.push(x, y, 0.5);
+          return a;
+        }, true);
+        return;
+      }
       if (mode.value === 1) {
         const p = e.stylusData && e.stylusData.pressure > 0 ? e.stylusData.pressure : 0.5;
         live.modify((a) => {
@@ -179,6 +231,14 @@ export function PageCanvas(props: Props) {
         scheduleOnRN(emitErase, 2, 0, 0, 0);
       } else if (mode.value === 4) {
         live.value = [];
+      } else if (mode.value === 7) {
+        scheduleOnRN(emitTextTap, sx.value, sy.value);
+      } else if (mode.value === 5) {
+        scheduleOnRN(emitMove, dragX.value, dragY.value);
+      } else if (mode.value === 6) {
+        const pts = live.value.slice();
+        live.value = [];
+        scheduleOnRN(emitLasso, pts);
       }
       mode.value = 0;
     },
@@ -229,14 +289,25 @@ export function PageCanvas(props: Props) {
     live.value = [];
   }, [strokes, live]);
 
-  const paths = useRef(new Map<string, SkPath | null>());
-  const picture = useMemo(() => inkPicture(strokes, hidden, page.w, page.h, paths.current), [strokes, hidden, page.w, page.h]);
+  const paths = useRef<PathCache>(new WeakMap());
+  const hiddenAll = useMemo(() => (sel?.ids.size ? new Set([...hidden, ...sel.ids]) : hidden), [hidden, sel]);
+  const picture = useMemo(() => inkPicture(strokes, hiddenAll, page.w, page.h, paths.current), [strokes, hiddenAll, page.w, page.h]);
+  const selPicture = useMemo(() => {
+    if (!sel?.ids.size) return null;
+    return inkPicture(strokes.filter((s) => sel.ids.has(s.id)), new Set(), page.w, page.h, paths.current);
+  }, [strokes, sel, page.w, page.h]);
+  const dragT = useDerivedValue(() => [{ translateX: dragX.value }, { translateY: dragY.value }]);
+  const selRect = useDerivedValue(() => {
+    const b = selBox.value;
+    return { x: b[0] - 4, y: b[1] - 4, width: b[2] - b[0] + 8, height: b[3] - b[1] + 8 };
+  });
 
   const paper = useMemo(() => paperPicture(page), [page]);
   const image = useImage(background ?? undefined);
 
   const hlLive = tool === "highlighter";
-  const liveWidth = hlLive ? width : width * 1.25;
+  const lassoLive = tool === "lasso";
+  const liveWidth = lassoLive ? 1.2 : hlLive ? width : width * 1.25;
 
   return (
     <GestureDetector gesture={gesture}>
@@ -248,21 +319,61 @@ export function PageCanvas(props: Props) {
             {image ? <Image image={image} x={0} y={0} width={page.w} height={page.h} fit="fill" /> : null}
             {paper ? <Picture picture={paper} /> : null}
             <Picture picture={picture} />
+            {selPicture ? (
+              <Group transform={dragT}>
+                <Picture picture={selPicture} />
+                <Rect rect={selRect} style="stroke" strokeWidth={1} color="#2F6FDE">
+                  <DashPathEffect intervals={[5, 4]} />
+                </Rect>
+              </Group>
+            ) : null}
             <Path
               path={livePath}
               style="stroke"
               strokeWidth={liveWidth}
               strokeCap={hlLive ? "butt" : "round"}
               strokeJoin="round"
-              color={color}
+              color={lassoLive ? "#2F6FDE" : color}
               opacity={hlLive ? HIGHLIGHT_OPACITY : 1}
               blendMode={hlLive ? "multiply" : "srcOver"}
-            />
+            >
+              {lassoLive ? <DashPathEffect intervals={[6, 5]} /> : null}
+            </Path>
             <EraserRing eraser={eraser} />
           </Group>
         </Canvas>
+        <TextLayer strokes={strokes} hidden={hiddenAll} page={page} tx={tx} ty={ty} scale={scale} />
+        <TextLayer strokes={sel?.ids.size ? strokes.filter((s) => sel.ids.has(s.id)) : []} hidden={hidden} page={page} tx={tx} ty={ty} scale={scale} dx={dragX} dy={dragY} />
       </View>
     </GestureDetector>
+  );
+}
+
+/** 글상자: 화면 확대·이동을 그대로 따라가는 글자 층 (손가락·펜 입력은 아래 그림판으로 통과) */
+function TextLayer({ strokes, hidden, page, tx, ty, scale, dx, dy }: {
+  strokes: Stroke[]; hidden: Set<string>; page: Page;
+  tx: SharedValue<number>; ty: SharedValue<number>; scale: SharedValue<number>; dx?: SharedValue<number>; dy?: SharedValue<number>;
+}) {
+  const texts = strokes.filter((s) => s.tool === "text" && !hidden.has(s.id));
+  const style = useAnimatedStyle(() => ({
+    transform: [
+      { translateX: tx.value + (dx ? dx.value * scale.value : 0) },
+      { translateY: ty.value + (dy ? dy.value * scale.value : 0) },
+      { scale: scale.value },
+    ],
+  }));
+  if (!texts.length) return null;
+  return (
+    <Animated.View pointerEvents="none" style={[{ position: "absolute", left: 0, top: 0, width: page.w, height: page.h, transformOrigin: "0 0" }, style]}>
+      {texts.map((s) => (
+        <Text
+          key={s.id}
+          style={{ position: "absolute", left: s.pts[0], top: s.pts[1], width: s.pts[3] - s.pts[0], fontSize: s.width, lineHeight: s.width * 1.4, color: s.color }}
+        >
+          {s.text}
+        </Text>
+      ))}
+    </Animated.View>
   );
 }
 

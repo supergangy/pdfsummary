@@ -4,16 +4,17 @@ import { ActivityIndicator, Alert, Modal, PixelRatio, Platform, Pressable, Scrol
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useTheme } from "../ui";
-import { hitAlong, straighten, thin } from "./geometry";
+import { bounds, hitAlong, straighten, thin } from "./geometry";
 import { History, removal } from "./history";
 import {
-  HIGHLIGHT_COLORS, HIGHLIGHT_WIDTHS, PEN_COLORS, PEN_WIDTHS, insertPage, newId, removePage,
+  HIGHLIGHT_COLORS, HIGHLIGHT_WIDTHS, PEN_COLORS, PEN_WIDTHS, TEXT_SIZES, insertPage, makeTextBox, newId, removePage,
   type Ink, type Notebook, type Paper, type Stroke,
 } from "./model";
 import { pageImage } from "./pageImage";
-import { PageCanvas, type ToolName, type ZoomCmd } from "./PageCanvas";
+import { PageCanvas, type Selection, type ToolName, type ZoomCmd } from "./PageCanvas";
 import { PageGrid } from "./PageGrid";
 import { loadPrefs, savePrefs, type Prefs } from "./prefs";
+import { lassoSelect, moved, snapShape } from "./shapes";
 import type { NoteStore } from "./store";
 
 type Props = {
@@ -37,6 +38,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
   const [bg, setBg] = useState<Record<number, { uri: string; w: number }>>({});
   const [menu, setMenu] = useState(false);
   const [grid, setGrid] = useState(false);
+  const [selection, setSelection] = useState<Selection>(null);
+  const [textEdit, setTextEdit] = useState<{ x: number; y: number; stroke?: Stroke } | null>(null);
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState("");
   const [loadErr, setLoadErr] = useState("");
@@ -158,6 +161,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
     const hl = p.tool === "highlighter";
     let clean = thin(pts, 0.35);
     if (hl && p.straight) clean = straighten(clean);
+    if (!hl && p.shapes) clean = snapShape(clean)?.pts ?? clean;
     const s: Stroke = {
       id: newId(),
       tool: hl ? "highlighter" : "pen",
@@ -201,13 +205,84 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
     setHidden(new Set());
   }, [page, touch]);
 
+  // ── 올가미: 고르기 · 옮기기 · 색 바꾸기 · 지우기 ───────────
+  const selBox = (strokes: Stroke[]): [number, number, number, number] => {
+    const bs = strokes.map(bounds);
+    return [Math.min(...bs.map((b) => b[0])), Math.min(...bs.map((b) => b[1])), Math.max(...bs.map((b) => b[2])), Math.max(...bs.map((b) => b[3]))];
+  };
+  const onLasso = useCallback((pts: number[]) => {
+    if (!page) return;
+    const cur = inkRef.current[page.id] ?? [];
+    const ids = lassoSelect(cur, pts);
+    if (!ids.size) return setSelection(null);
+    setSelection({ ids, box: selBox(cur.filter((s) => ids.has(s.id))) });
+  }, [page]);
+  const replaceSelected = (fn: (s: Stroke) => Stroke) => {
+    if (!page || !selection) return;
+    const before = (inkRef.current[page.id] ?? []).filter((s) => selection.ids.has(s.id));
+    if (!before.length) return;
+    const after = before.map(fn);
+    setInk((k) => hist.current.run(k, { kind: "replace", page: page.id, before, after }));
+    setSelection({ ids: selection.ids, box: selBox(after) });
+    touch(page.id);
+    bump((x) => x + 1);
+  };
+  const onMoveSelection = useCallback((dx: number, dy: number) => {
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+    replaceSelected((s) => moved(s, dx, dy));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, selection]);
+  const deleteSelected = () => {
+    if (!page || !selection) return;
+    const op = removal(inkRef.current, page.id, selection.ids);
+    if (op) {
+      setInk((k) => hist.current.run(k, op));
+      touch(page.id);
+      bump((x) => x + 1);
+    }
+    setSelection(null);
+  };
+  useEffect(() => {
+    if (prefs?.tool !== "lasso") setSelection(null);
+  }, [prefs?.tool, pi]);
+
+  // ── 글상자 ──────────────────────────────────────────────
+  const onTextTap = useCallback((x: number, y: number) => {
+    if (!page) return;
+    const hit = [...(inkRef.current[page.id] ?? [])].reverse().find((s) => s.tool === "text" && hitAlong([s], x, y, x, y, 2).length);
+    setTextEdit(hit ? { x: hit.pts[0], y: hit.pts[1], stroke: hit } : { x, y });
+  }, [page]);
+  const saveText = (text: string, size: number) => {
+    const ed = textEdit;
+    setTextEdit(null);
+    if (!ed || !page || !prefs) return;
+    if (size !== prefs.textSize) setP({ textSize: size });
+    const color = ed.stroke?.color ?? prefs.penColor;
+    if (ed.stroke) {
+      if (!text.trim()) {
+        const op = removal(inkRef.current, page.id, new Set([ed.stroke.id]));
+        if (op) setInk((k) => hist.current.run(k, op));
+      } else {
+        const after = makeTextBox(ed.stroke.id, ed.x, ed.y, text, size, color, page.w);
+        setInk((k) => hist.current.run(k, { kind: "replace", page: page.id, before: [ed.stroke!], after: [after] }));
+      }
+    } else if (text.trim()) {
+      const s = makeTextBox(newId(), ed.x, ed.y, text, size, color, page.w);
+      setInk((k) => hist.current.run(k, { kind: "add", page: page.id, strokes: [s] }));
+    }
+    touch(page.id);
+    bump((v) => v + 1);
+  };
+
   const undo = () => {
+    setSelection(null);
     const r = hist.current.undo(inkRef.current);
     setInk(r.ink);
     if (r.page) touch(r.page);
     bump((x) => x + 1);
   };
   const redo = () => {
+    setSelection(null);
     const r = hist.current.redo(inkRef.current);
     setInk(r.ink);
     if (r.page) touch(r.page);
@@ -341,7 +416,27 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
           <ToolBtn label="✒️ 펜" on={tool === "pen"} onPress={() => setP({ tool: "pen" })} />
           <ToolBtn label="🖍 형광펜" on={tool === "highlighter"} onPress={() => setP({ tool: "highlighter" })} />
           <ToolBtn label="⌫ 지우개" on={tool === "eraser"} onPress={() => setP({ tool: "eraser" })} />
-          {tool !== "eraser" && (
+          <ToolBtn label="➰ 올가미" on={tool === "lasso"} onPress={() => setP({ tool: "lasso" })} hint="둘러싸서 고르고 옮기기" />
+          <ToolBtn label="T 글상자" on={tool === "text"} onPress={() => setP({ tool: "text" })} hint="쪽을 누르면 글을 써 넣어요" />
+          {tool === "text" && (
+            <>
+              <Sep />
+              {PEN_COLORS.map((c) => (
+                <Pressable
+                  key={c}
+                  onPress={() => setP({ penColor: c })}
+                  accessibilityRole="button"
+                  accessibilityLabel={`글 색 ${c}`}
+                  accessibilityState={{ selected: c === prefs.penColor }}
+                  style={{ width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", borderWidth: c === prefs.penColor ? 2 : 0, borderColor: t.accent }}
+                >
+                  <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: c }} />
+                </Pressable>
+              ))}
+              <Text style={{ color: t.muted, marginLeft: 6 }}>쪽을 누르면 글상자, 글상자를 누르면 고치기</Text>
+            </>
+          )}
+          {tool !== "eraser" && tool !== "lasso" && tool !== "text" && (
             <>
               <Sep />
               {colors.map((c) => (
@@ -372,6 +467,9 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
               {tool === "highlighter" && (
                 <ToolBtn label="― 직선" on={prefs.straight} onPress={() => setP({ straight: !prefs.straight })} hint="가로로 그으면 곧은 선으로" />
               )}
+              {tool === "pen" && (
+                <ToolBtn label="△ 도형 펴기" on={prefs.shapes} onPress={() => setP({ shapes: !prefs.shapes })} hint="선·사각형·원·삼각형을 반듯하게" />
+              )}
             </>
           )}
           <Sep />
@@ -401,7 +499,22 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
         onStroke={onStroke}
         onErase={onErase}
         onViewWidth={onViewWidth}
+        selection={selection}
+        onLasso={onLasso}
+        onMoveSelection={onMoveSelection}
+        onTextTap={onTextTap}
       />
+
+      {selection && (
+        <View style={{ position: "absolute", bottom: 24, alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: t.card, borderRadius: 24, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: t.line, shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 8, elevation: 4 }}>
+          <Text style={{ color: t.muted, marginRight: 4 }}>{selection.ids.size}개 고름 · 끌어서 옮기기</Text>
+          {PEN_COLORS.slice(0, 5).map((c) => (
+            <Pressable key={c} onPress={() => replaceSelected((s) => ({ ...s, color: c }))} accessibilityRole="button" accessibilityLabel={`고른 것 색 ${c}`} style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: c, borderWidth: 1, borderColor: "rgba(0,0,0,0.15)" }} />
+          ))}
+          <Btn label="🗑" onPress={deleteSelected} label2="고른 것 지우기" />
+          <Btn label="✕" onPress={() => setSelection(null)} label2="고르기 끝내기" />
+        </View>
+      )}
 
       {!!toast && (
         <View pointerEvents="none" style={{ position: "absolute", bottom: 28, left: 16, right: 16, alignItems: "center" }}>
@@ -434,6 +547,14 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
       </Modal>
 
       <RenameDialog value={renaming} onDone={rename} />
+      <TextDialog
+        open={!!textEdit}
+        initial={textEdit?.stroke?.text ?? ""}
+        size={textEdit?.stroke?.width ?? prefs.textSize}
+        editing={!!textEdit?.stroke}
+        onCancel={() => setTextEdit(null)}
+        onSave={saveText}
+      />
       {grid && (
         <PageGrid
           visible={grid}
@@ -449,6 +570,50 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
         />
       )}
     </SafeAreaView>
+  );
+}
+
+function TextDialog({ open, initial, size, editing, onCancel, onSave }: { open: boolean; initial: string; size: number; editing: boolean; onCancel: () => void; onSave: (text: string, size: number) => void }) {
+  const t = useTheme();
+  const [v, setV] = useState("");
+  const [sz, setSz] = useState(size);
+  useEffect(() => {
+    if (open) {
+      setV(initial);
+      setSz(size);
+    }
+  }, [open, initial, size]);
+  return (
+    <Modal visible={open} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)", alignItems: "center", justifyContent: "center", padding: 20 }}>
+        <View style={{ backgroundColor: t.card, borderRadius: 12, padding: 18, width: "100%", maxWidth: 520 }}>
+          <Text style={{ color: t.ink, fontWeight: "700", fontSize: 17, marginBottom: 10 }}>{editing ? "글상자 고치기" : "글상자"}</Text>
+          <TextInput
+            value={v}
+            onChangeText={setV}
+            autoFocus
+            multiline
+            accessibilityLabel="글상자 내용"
+            placeholder="여기에 쓰세요"
+            placeholderTextColor={t.muted}
+            style={{ borderWidth: 1, borderColor: t.line, borderRadius: 8, padding: 10, color: t.ink, fontSize: 16, minHeight: 110, textAlignVertical: "top" }}
+          />
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 12 }}>
+            <Text style={{ color: t.muted }}>글자 크기</Text>
+            {TEXT_SIZES.map((s, i) => (
+              <Pressable key={s} onPress={() => setSz(s)} accessibilityRole="radio" accessibilityState={{ selected: sz === s }} style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: sz === s ? t.accent : t.line, backgroundColor: sz === s ? t.soft : t.card }}>
+                <Text style={{ color: sz === s ? t.accent : t.ink, fontSize: 12 + i * 3 }}>{["작게", "보통", "크게"][i]}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+            {editing && <Btn label="🗑 지우기" onPress={() => onSave("", sz)} />}
+            <Btn label="취소" onPress={onCancel} />
+            <Btn label="넣기" onPress={() => onSave(v, sz)} />
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 

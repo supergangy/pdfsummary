@@ -57,12 +57,14 @@ export function polylineSvg(s: Stroke): string {
 }
 
 export function strokeSvg(s: Stroke): string {
+  if (s.tool === "text") return ""; // 글상자는 글자로 따로 그린다
   return s.tool === "pen" ? outlineToSvg(penOutline(s)) : polylineSvg(s);
 }
 
 const r = (v: number) => Math.round(v * 100) / 100;
 
 export function bounds(s: Stroke): Box {
+  if (s.tool === "text") return [s.pts[0], s.pts[1], s.pts[3], s.pts[4]];
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (let i = 0; i < s.pts.length; i += 3) {
     const x = s.pts[i], y = s.pts[i + 1];
@@ -86,6 +88,10 @@ function segDist2(px: number, py: number, ax: number, ay: number, bx: number, by
 
 /** (x, y)를 반지름 radius인 지우개로 문질렀을 때 이 획에 닿는지. */
 export function hits(s: Stroke, x: number, y: number, radius: number): boolean {
+  if (s.tool === "text") {
+    const [x0, y0, x1, y1] = [s.pts[0], s.pts[1], s.pts[3], s.pts[4]];
+    return x >= x0 - radius && x <= x1 + radius && y >= y0 - radius && y <= y1 + radius;
+  }
   const reach = radius + s.width / 2;
   const b = bounds(s);
   if (x < b[0] - radius || x > b[2] + radius || y < b[1] - radius || y > b[3] + radius) return false;

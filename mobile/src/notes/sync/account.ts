@@ -56,6 +56,14 @@ export class AccountApi {
   login(email: string, password: string) {
     return this.call<{ token: string; email: string }>("login", { email, password, device: deviceName() });
   }
+  /** 비밀번호 찾기 코드 메일 (가입되지 않은 이메일이어도 같은 답) */
+  forgot(email: string) {
+    return this.call<{ ok: true }>("forgot", { email });
+  }
+  /** 메일로 받은 코드로 새 비밀번호 → 로그인 */
+  reset(email: string, code: string, password: string) {
+    return this.call<{ token: string; email: string }>("reset", { email, code, password, device: deviceName() });
+  }
   logout(session: string) {
     return this.call<{ ok: true }>("logout", {}, session);
   }

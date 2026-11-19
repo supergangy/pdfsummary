@@ -3,6 +3,7 @@
 //  → A가 가져온 PDF 교재도 B로.
 //  계정: A가 코드를 계정으로 옮김 → 새 기기 C가 이메일·비밀번호로 로그인 (틀린 비밀번호는 거절) → 노트·PDF를 받음
 //  → C의 필기가 코드로 쓰는 B에 → A가 C를 로그아웃시킴 → 그동안 C에서 쓴 필기는 다시 로그인하면 B에.
+//  비밀번호 찾기: 새 기기 D에서 메일로 받은 6자리 코드로 새 비밀번호 → 바로 로그인, 노트를 받음 (메일은 폴더로).
 //   npx expo export --platform web --output-dir dist-web && node e2e/sync.e2e.cjs dist-web
 const { chromium } = require("playwright");
 const { spawn, execFileSync } = require("child_process");
@@ -80,7 +81,7 @@ async function until(fn, ms, what) {
   const { srv, port } = await staticServer(WEB);
   const apiPort = 19300 + Math.floor(Math.random() * 500);
   const api = spawn("python3", ["-m", "pdfsummary.app", "--server", "--host", "127.0.0.1", "--port", String(apiPort), "--access-code", CODE], {
-    cwd: ROOT, env: { ...process.env, ANTHROPIC_API_KEY: "", HOME: TMP, PDFSUMMARY_SYNC_DIR: path.join(TMP, "sync") }, stdio: "ignore",
+    cwd: ROOT, env: { ...process.env, ANTHROPIC_API_KEY: "", HOME: TMP, PDFSUMMARY_SYNC_DIR: path.join(TMP, "sync"), PDFSUMMARY_MAIL_DIR: path.join(TMP, "mail") }, stdio: "ignore",
   });
   await waitFor(`http://127.0.0.1:${apiPort}/healthz`);
   const browser = await chromium.launch();
@@ -101,7 +102,7 @@ async function until(fn, ms, what) {
     await page.getByText("‹ 노트 목록").first().click();
     return page;
   };
-  let A, B, C;
+  let A, B, C, D;
   try {
     A = await open();
     B = await open();
@@ -231,9 +232,35 @@ async function until(fn, ms, what) {
     await C.getByLabel("로그인한 계정").waitFor({ timeout: 15000 });
     await until(async () => strokesOf(await idb(B)) >= 4, 15000, "다시 로그인한 C가 그동안 쓴 필기를 보냄");
     console.log("✓ A가 C를 로그아웃시키면 C는 멈추고, 다시 로그인하면 그동안 쓴 필기를 이어서 보냄");
+
+    // 비밀번호 찾기 (새 기기 D)
+    D = await open();
+    await D.getByLabel("동기화 켜기").click();
+    await D.getByText("비밀번호를 잊었어요").click();
+    await D.getByLabel("계정 이메일").fill(EMAIL);
+    await D.getByText("코드 메일 받기").click();
+    await D.getByText(/6자리 코드를 보냈어요/).waitFor({ timeout: 10000 });
+    const mailDir = path.join(TMP, "mail");
+    let code = "";
+    await until(async () => {
+      const files = fs.existsSync(mailDir) ? fs.readdirSync(mailDir).filter((f) => f.endsWith(".eml")).sort() : [];
+      if (!files.length) return false;
+      // 메일(.eml)을 파이썬 email로 풀어서 받는 사람·본문
+      const out = execFileSync("python3", ["-c", "import sys, email, email.policy; m = email.message_from_bytes(open(sys.argv[1], 'rb').read(), policy=email.policy.default); print(m['To']); print(m.get_content())", path.join(mailDir, files[files.length - 1])], { encoding: "utf8" });
+      if (!out.startsWith(EMAIL)) fail("코드 메일 받는 사람이 다름: " + out.split("\n")[0]);
+      code = (out.match(/코드: (\d{6})/) || [])[1] || "";
+      return !!code;
+    }, 10000, "코드 메일이 옴");
+    await D.getByLabel("메일로 받은 코드").fill(code);
+    await D.getByLabel("새 비밀번호", { exact: true }).fill("e2e-new-password");
+    await D.getByText("새 비밀번호로 로그인").click();
+    await D.getByLabel("로그인한 계정").waitFor({ timeout: 15000 });
+    await D.getByText("닫기").click();
+    await until(async () => (await D.getByLabel("동기화 노트 열기").count()) > 0 && strokesOf(await idb(D)) >= 4, 20000, "비밀번호를 새로 정한 D에 노트가");
+    console.log("✓ 비밀번호 찾기: 메일로 받은 코드로 새 비밀번호 → D 로그인, 노트를 받음");
     if (errors.length) fail("페이지 오류: " + errors.join(" | "));
   } catch (e) {
-    for (const [n, p] of [["A", A], ["B", B], ["C", C]]) if (p) await p.screenshot({ path: path.join(TMP, `failure-${n}.png`) }).catch(() => {});
+    for (const [n, p] of [["A", A], ["B", B], ["C", C], ["D", D]]) if (p) await p.screenshot({ path: path.join(TMP, `failure-${n}.png`) }).catch(() => {});
     console.error("✗ " + e.message, `\n(화면: ${TMP}/failure-A.png, failure-B.png, failure-C.png)`);
     process.exitCode = 1;
   } finally {

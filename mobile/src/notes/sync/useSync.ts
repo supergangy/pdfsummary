@@ -28,6 +28,8 @@ export type SyncApi = {
   login: (email: string, password: string) => Promise<void>;
   linkAccount: (email: string, password: string) => Promise<void>; // 지금 쓰는 동기화 코드를 새 계정으로 옮기기
   logout: () => Promise<void>;
+  forgot: (email: string) => Promise<void>; // 비밀번호 찾기 코드 메일
+  resetPassword: (email: string, code: string, password: string) => Promise<void>; // 코드로 새 비밀번호 → 로그인
   changePassword: (old: string, next: string) => Promise<void>;
   deleteAccount: (password: string) => Promise<void>;
   sessions: () => Promise<AccountSession[]>;
@@ -148,14 +150,27 @@ export function useSync(store: SyncedStore, fs: Fs): SyncApi {
     setAccount({ email: r.email, expired: false });
   }, [attach]);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const s = await needServer();
-    const r = await new AccountApi(s.serverUrl, s.accessCode).login(email, password);
+  /** 로그인 성공 뒤: 같은 계정으로 다시 로그인(세션이 끝났던 경우)이면 모아 둔 것을 이어서 보낸다 */
+  const afterLogin = useCallback(async (s: Settings, r: { token: string; email: string }) => {
     const cfg = await loadSyncConfig();
-    // 같은 계정으로 다시 로그인(세션이 끝났던 경우): 모아 둔 것을 이어서 보낸다
     const same = !!cfg?.email && cfg.email === r.email && !cfg.code;
     await signedIn(s, r, same);
   }, [signedIn]);
+
+  const login = useCallback(async (email: string, password: string) => {
+    const s = await needServer();
+    await afterLogin(s, await new AccountApi(s.serverUrl, s.accessCode).login(email, password));
+  }, [afterLogin]);
+
+  const forgot = useCallback(async (email: string) => {
+    const s = await needServer();
+    await new AccountApi(s.serverUrl, s.accessCode).forgot(email);
+  }, []);
+
+  const resetPassword = useCallback(async (email: string, code: string, password: string) => {
+    const s = await needServer();
+    await afterLogin(s, await new AccountApi(s.serverUrl, s.accessCode).reset(email, code, password));
+  }, [afterLogin]);
 
   const signup = useCallback(async (email: string, password: string) => {
     const s = await needServer();
@@ -211,6 +226,8 @@ export function useSync(store: SyncedStore, fs: Fs): SyncApi {
     login,
     linkAccount,
     logout,
+    forgot,
+    resetPassword,
     changePassword,
     deleteAccount,
     sessions,

@@ -272,8 +272,9 @@ def account_store():
     with _SYNC_LOCK:
         if _ACCOUNTS is None or _ACCOUNTS.sync is not st:
             from .accounts import AccountStore
+            from .mailer import Mailer
 
-            _ACCOUNTS = AccountStore(st)
+            _ACCOUNTS = AccountStore(st, Mailer.from_env())
         return _ACCOUNTS
 
 RESULT_FILES = {
@@ -371,7 +372,8 @@ class Handler(BaseHTTPRequestHandler):
 
                 return self._json({"server": True, "version": __version__, "server_key": has_credentials(),
                                    "max_upload_mb": STATE.max_upload // (1024 * 1024),
-                                   "keep_minutes": int(STATE.ttl // 60), "sync": True, "accounts": True})
+                                   "keep_minutes": int(STATE.ttl // 60), "sync": True, "accounts": True,
+                                   "mail": account_store().mailer.enabled})
             return self._json(key_state())
         if url.path.startswith("/api/sync/"):
             return self._sync_get(url.path, q)
@@ -554,6 +556,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/account/login" and not get:
                 return self._json(acc.login(str(body.get("email") or ""), str(body.get("password") or ""), device,
                                             self.client_address[0]))
+            if path == "/api/account/forgot" and not get:
+                acc.forgot(str(body.get("email") or ""), self.client_address[0])
+                return self._json({"ok": True})   # 가입된 이메일이든 아니든 같은 답
+            if path == "/api/account/reset" and not get:
+                return self._json(acc.reset(str(body.get("email") or ""), str(body.get("code") or ""),
+                                            str(body.get("password") or ""), device, self.client_address[0]))
             if path == "/api/account/logout" and not get:
                 acc.logout(token)
                 return self._json({"ok": True})

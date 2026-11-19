@@ -38,6 +38,8 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
   const [newPw, setNewPw] = useState("");
   const [delPw, setDelPw] = useState("");
   const [devices, setDevices] = useState<AccountSession[] | null>(null);
+  const [forgotStep, setForgotStep] = useState<"" | "email" | "code">(""); // 비밀번호 찾기
+  const [resetCode, setResetCode] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
@@ -72,12 +74,14 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
       setOldPw("");
       setNewPw("");
       setDelPw("");
+      setResetCode("");
+      setForgotStep("");
       setErr("");
       setNote("");
     }
   }, [visible, signedIn, loadDevices]);
 
-  const input = (label: string, value: string, set: (v: string) => void, o: { secret?: boolean; placeholder?: string; email?: boolean } = {}) => (
+  const input = (label: string, value: string, set: (v: string) => void, o: { secret?: boolean; placeholder?: string; email?: boolean; fresh?: boolean } = {}) => (
     <TextInput
       value={value}
       onChangeText={set}
@@ -87,8 +91,8 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
       autoCapitalize="none"
       autoCorrect={false}
       keyboardType={o.email ? "email-address" : "default"}
-      textContentType={o.email ? "username" : o.secret ? "password" : "none"}
-      autoComplete={o.email ? "email" : o.secret ? "password" : "off"}
+      textContentType={o.email ? "username" : o.fresh ? "newPassword" : o.secret ? "password" : "none"}
+      autoComplete={o.email ? "email" : o.fresh ? "new-password" : o.secret ? "password" : "off"}
       accessibilityLabel={label}
       style={{ borderWidth: 1, borderColor: t.line, borderRadius: 8, padding: 12, color: t.ink, backgroundColor: t.card, fontSize: 16 }}
     />
@@ -112,6 +116,62 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
         <Button label="설정 열기" onPress={onOpenSettings} style={{ marginTop: 10, alignSelf: "flex-start" }} />
       </View>
     );
+  } else if (forgotStep && !signedIn) {
+    // 비밀번호 찾기: 메일로 6자리 코드 → 새 비밀번호 → 로그인
+    const okEmail = /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email.trim());
+    const sendCode = () =>
+      run("보내는 중…", async () => {
+        await sync.forgot(email.trim());
+        setForgotStep("code");
+        setNote(`${email.trim()} 로 6자리 코드를 보냈어요 (가입된 이메일이라면). 받은편지함과 스팸함을 확인해 주세요. 코드는 15분 동안 쓸 수 있어요.`);
+      });
+    body = (
+      <View style={{ marginTop: 18, gap: 10 }}>
+        <Text style={{ color: t.ink, fontWeight: "700", fontSize: 18 }}>🔑 비밀번호 찾기</Text>
+        {forgotStep === "email" ? (
+          <>
+            <Hint>가입한 이메일로 6자리 코드를 보내 드려요. 그 코드로 새 비밀번호를 정하면 바로 로그인돼요.</Hint>
+            {input("계정 이메일", email, setEmail, { email: true, placeholder: "이메일" })}
+            <Button kind="primary" label="코드 메일 받기" disabled={!okEmail} busy={busy === "보내는 중…"} onPress={sendCode} style={{ alignSelf: "flex-start" }} />
+          </>
+        ) : (
+          <>
+            <Text style={{ color: t.ink }}>{email.trim()}</Text>
+            <TextInput
+              value={resetCode}
+              onChangeText={(v) => setResetCode(v.replace(/[^0-9]/g, "").slice(0, 6))}
+              placeholder="메일로 받은 6자리 코드"
+              placeholderTextColor={t.muted}
+              keyboardType="number-pad"
+              textContentType="oneTimeCode"
+              autoComplete="one-time-code"
+              accessibilityLabel="메일로 받은 코드"
+              style={{ borderWidth: 1, borderColor: t.line, borderRadius: 8, padding: 12, color: t.ink, backgroundColor: t.card, fontSize: 22, letterSpacing: 6 }}
+            />
+            {input("새 비밀번호", newPw, setNewPw, { secret: true, fresh: true, placeholder: "새 비밀번호 (8자 이상)" })}
+            <Button
+              kind="primary"
+              label="새 비밀번호로 로그인"
+              disabled={resetCode.length !== 6 || newPw.length < 8}
+              busy={busy === "바꾸는 중…"}
+              onPress={() =>
+                run("바꾸는 중…", async () => {
+                  await sync.resetPassword(email.trim(), resetCode, newPw);
+                  setForgotStep("");
+                  setResetCode("");
+                  setNewPw("");
+                  setNote("새 비밀번호로 바꾸고 로그인했어요. 다른 기기는 모두 로그아웃되었으니 새 비밀번호로 다시 로그인해 주세요.");
+                })
+              }
+              style={{ alignSelf: "flex-start" }}
+            />
+            <Button kind="link" label="코드 다시 받기" onPress={sendCode} disabled={busy === "보내는 중…"} />
+          </>
+        )}
+        <Button kind="link" label="돌아가기" onPress={() => { setForgotStep(""); setErr(""); setNote(""); }} />
+        <Hint>메일이 오지 않으면 서버를 운영하는 사람에게 비밀번호를 새로 정해 달라고 하세요.</Hint>
+      </View>
+    );
   } else if (sync.account?.expired) {
     // 로그인이 끝남 → 같은 계정으로 다시
     body = (
@@ -119,6 +179,7 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
         <Hint color={t.bad}>{sync.account.email} 계정의 로그인이 끝났어요 (다른 기기에서 로그아웃시켰거나 비밀번호가 바뀜). 다시 로그인하면 그동안 이 기기에서 쓴 것도 이어서 보내요.</Hint>
         {input("계정 비밀번호", pw, setPw, { secret: true })}
         <Button kind="primary" label="다시 로그인" onPress={() => run("로그인 중…", () => sync.login(sync.account!.email, pw))} disabled={pw.length < 8} busy={busy === "로그인 중…"} style={{ alignSelf: "flex-start" }} />
+        <Button kind="link" label="비밀번호를 잊었어요" onPress={() => { setEmail(sync.account!.email); setForgotStep("email"); setErr(""); }} />
         <Button kind="link" label="로그아웃" onPress={() => run("로그아웃 중…", sync.logout)} />
       </View>
     );
@@ -163,7 +224,7 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
 
         {h("비밀번호 바꾸기")}
         {input("지금 비밀번호", oldPw, setOldPw, { secret: true })}
-        {input("새 비밀번호", newPw, setNewPw, { secret: true, placeholder: "새 비밀번호 (8자 이상)" })}
+        {input("새 비밀번호", newPw, setNewPw, { secret: true, fresh: true, placeholder: "새 비밀번호 (8자 이상)" })}
         <Button
           label="비밀번호 바꾸기"
           disabled={oldPw.length < 1 || newPw.length < 8}
@@ -247,7 +308,7 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
               <Button kind="primary" label="로그인" disabled={!okLogin} busy={busy === "로그인 중…"} onPress={() => run("로그인 중…", () => sync.login(email, pw))} />
               <Button label="새 계정 만들기" disabled={!okLogin} busy={busy === "만드는 중…"} onPress={() => run("만드는 중…", () => sync.signup(email, pw))} />
             </View>
-            <Hint>비밀번호를 잊으면 서버를 운영하는 사람에게 새로 정해 달라고 하세요.</Hint>
+            <Button kind="link" label="비밀번호를 잊었어요" onPress={() => { setForgotStep("email"); setErr(""); setNote(""); }} />
           </>
         ) : (
           <>

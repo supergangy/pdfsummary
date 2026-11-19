@@ -1,6 +1,7 @@
 """필기 앱 계정: 가입·로그인·세션·비밀번호·삭제·틀린 횟수 제한, 그리고 로그인으로 동기화."""
 
 import json
+import time
 
 import pytest
 
@@ -167,3 +168,183 @@ def test_admin_cli(tmp_path, monkeypatch, capsys):
     s = SyncStore(tmp_path / "sync")
     assert AccountStore(s).login("g@example.com", "new-password")["token"]
     s.close()
+
+
+# ── 비밀번호 찾기 메일 ──
+import re  # noqa: E402
+import socketserver  # noqa: E402
+import threading  # noqa: E402
+from email import message_from_bytes, policy  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from pdfsummary.mailer import Mailer  # noqa: E402
+
+
+def mails(d: Path):
+    out = []
+    for f in sorted(d.glob("*.eml")) if d.exists() else []:
+        m = message_from_bytes(f.read_bytes(), policy=policy.default)
+        out.append((m["To"], m["Subject"], m.get_content()))
+    return out
+
+
+def code_of(text):
+    return re.search(r"코드: (\d{6})", text).group(1)
+
+
+@pytest.fixture()
+def macc(tmp_path):
+    s = SyncStore(tmp_path / "sync")
+    a = AccountStore(s, Mailer(outdir=tmp_path / "mail"))
+    a.deliver = lambda fn: fn()   # 시험에서는 바로 보낸다
+    yield a, tmp_path / "mail"
+    s.close()
+
+
+def test_forgot_and_reset(macc):
+    acc, box = macc
+    t_old = acc.signup("h@example.com", "old-password")["token"]
+    acc.forgot("H@Example.com", ip="1.1.1.1")
+    (to, subject, text), = mails(box)
+    assert to == "h@example.com" and "비밀번호 찾기" in subject
+    code = code_of(text)
+    assert code in subject and "15분" in text
+    # 가입하지 않은 이메일: 같은 답, 메일은 안 감
+    acc.forgot("nobody@example.com", ip="1.1.1.1")
+    assert len(mails(box)) == 1
+    wrong = "000000" if code != "000000" else "111111"
+    with pytest.raises(AccountError) as e:
+        acc.reset("h@example.com", wrong, "new-password")
+    assert e.value.status == 401
+    with pytest.raises(AccountError):
+        acc.reset("h@example.com", code, "short")   # 새 비밀번호가 너무 짧음
+    r = acc.reset("h@example.com", f"{code[:3]} {code[3:]}", "new-password", "폰")   # 띄어 써도
+    assert r["email"] == "h@example.com" and acc.session(r["token"])
+    assert acc.session(t_old) is None   # 다른 기기는 모두 로그아웃
+    with pytest.raises(AccountError):
+        acc.login("h@example.com", "old-password")
+    assert acc.login("h@example.com", "new-password")["token"]
+    with pytest.raises(AccountError):   # 한 번 쓴 코드는 끝
+        acc.reset("h@example.com", code, "other-password")
+
+
+def test_reset_code_limits(macc, monkeypatch):
+    acc, box = macc
+    acc.signup("i@example.com", "password1")
+    acc.forgot("i@example.com")
+    code = code_of(mails(box)[-1][2])
+    wrong = "000000" if code != "000000" else "111111"
+    # 1분 안에 또 요청하면 막힘
+    with pytest.raises(AccountError) as e:
+        acc.forgot("i@example.com")
+    assert e.value.status == 429
+    # 5번 틀리면 맞는 코드도 소용없음
+    for _ in range(A.RESET_TRIES):
+        with pytest.raises(AccountError):
+            acc.reset("i@example.com", wrong, "new-password", ip=f"9.9.9.{_}")
+    with pytest.raises(AccountError):
+        acc.reset("i@example.com", code, "new-password")
+    # 새 코드를 받으면 다시 (1분 뒤)
+    real = A.time.monotonic
+    monkeypatch.setattr(A.time, "monotonic", lambda: real() + A.RESET_GAP + 1)
+    acc.forgot("i@example.com")
+    code2 = code_of(mails(box)[-1][2])
+    # 15분이 지나면 끝
+    real_time = A.time.time
+    monkeypatch.setattr(A.time, "time", lambda: real_time() + A.RESET_TTL + 1)
+    with pytest.raises(AccountError):
+        acc.reset("i@example.com", code2, "new-password")
+    monkeypatch.setattr(A.time, "time", real_time)
+    assert acc.reset("i@example.com", code2, "new-password")["token"]
+
+
+def test_forgot_without_mail_server(acc):
+    acc.signup("j@example.com", "password1")
+    with pytest.raises(AccountError) as e:
+        acc.forgot("j@example.com")
+    assert e.value.status == 503
+
+
+class _SmtpSink(socketserver.StreamRequestHandler):
+    """시험용 아주 작은 SMTP 서버 (받은 메일을 server.got에)"""
+
+    def handle(self):
+        w = lambda s: self.wfile.write((s + "\r\n").encode())  # noqa: E731
+        w("220 sink")
+        rcpt, data = [], None
+        while True:
+            line = self.rfile.readline()
+            if not line:
+                return
+            cmd = line.decode().strip()
+            up = cmd.upper()
+            if up.startswith("EHLO") or up.startswith("HELO"):
+                w("250 sink")
+            elif up.startswith("MAIL FROM") or up.startswith("RSET") or up.startswith("NOOP"):
+                w("250 ok")
+            elif up.startswith("RCPT TO"):
+                rcpt.append(cmd.split(":", 1)[1].strip(" <>"))
+                w("250 ok")
+            elif up == "DATA":
+                w("354 go")
+                buf = b""
+                while True:
+                    ln = self.rfile.readline()
+                    if ln in (b".\r\n", b".\n", b""):
+                        break
+                    buf += ln[1:] if ln.startswith(b"..") else ln
+                self.server.got.append((rcpt, buf))
+                w("250 queued")
+            elif up == "QUIT":
+                w("221 bye")
+                return
+            else:
+                w("502 no")
+
+
+def test_real_smtp_path():
+    srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _SmtpSink)
+    srv.got = []
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        m = Mailer(host="127.0.0.1", port=srv.server_address[1], security="none", sender="notes@example.com")
+        assert m.enabled
+        m.send("k@example.com", "[필기 노트] 시험", "한글 본문 123456")
+        (rcpt, raw), = srv.got
+        assert rcpt == ["k@example.com"]
+        msg = message_from_bytes(raw, policy=policy.default)
+        assert msg["Subject"] == "[필기 노트] 시험" and "한글 본문 123456" in msg.get_content()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    # 닿지 않는 메일 서버 → MailError
+    from pdfsummary.mailer import MailError
+    with pytest.raises(MailError):
+        Mailer(host="127.0.0.1", port=1, security="none", sender="a@b.co", timeout=2).send("x@y.zz", "s", "t")
+
+
+def test_http_forgot_reset(server, tmp_path, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("PDFSUMMARY_SYNC_DIR", str(tmp_path / "sync"))
+    monkeypatch.setattr(app, "_SYNC", None)
+    monkeypatch.setattr(app, "_ACCOUNTS", None)
+    assert json.loads(call(server, "/api/state")[1])["mail"] is False
+    assert call(server, "/api/account/forgot", data={"email": "l@example.com"})[0] == 503
+    box = tmp_path / "mail"
+    monkeypatch.setenv("PDFSUMMARY_MAIL_DIR", str(box))
+    monkeypatch.setattr(app, "_ACCOUNTS", None)
+    assert json.loads(call(server, "/api/state")[1])["mail"] is True
+    t1 = json.loads(call(server, "/api/account/signup", data={"email": "l@example.com", "password": "password1"})[1])["token"]
+    assert call(server, "/api/account/forgot", data={"email": "l@example.com"})[0] == 200
+    assert call(server, "/api/account/forgot", data={"email": "who@example.com"})[0] == 200
+    for _ in range(50):
+        if mails(box):
+            break
+        time.sleep(0.1)
+    (to, _, text), = mails(box)
+    s, b, _ = call(server, "/api/account/reset", data={"email": "l@example.com", "code": code_of(text), "password": "password2", "device": "폰"})
+    assert s == 200 and json.loads(b)["token"]
+    assert call(server, "/api/account/me", headers={"X-Session": t1})[0] == 401
+    assert call(server, "/api/account/login", data={"email": "l@example.com", "password": "password2"})[0] == 200
+    app._SYNC.close()
+    monkeypatch.setattr(app, "_SYNC", None)
+    monkeypatch.setattr(app, "_ACCOUNTS", None)

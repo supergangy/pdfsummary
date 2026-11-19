@@ -22,6 +22,7 @@ export type Page = {
   h: number;
   pdf?: number; // 원본 PDF의 몇 번째 쪽인지 (0부터). 없으면 빈 속지
   paper?: Paper;
+  o?: number; // 동기화용 쪽 순서 값 (작을수록 앞)
 };
 
 export type Notebook = {
@@ -105,7 +106,12 @@ export function parseNotebook(raw: unknown): Notebook | null {
   if (!o || typeof o !== "object" || typeof o.id !== "string" || !Array.isArray(o.pages)) return null;
   const pages = o.pages
     .filter((p): p is Page => !!p && typeof p.id === "string" && p.w > 0 && p.h > 0)
-    .map((p) => ({ id: p.id, w: p.w, h: p.h, ...(Number.isInteger(p.pdf) ? { pdf: p.pdf } : {}), ...(p.paper ? { paper: p.paper } : {}) }));
+    .map((p) => ({
+      id: p.id, w: p.w, h: p.h,
+      ...(Number.isInteger(p.pdf) ? { pdf: p.pdf } : {}),
+      ...(p.paper ? { paper: p.paper } : {}),
+      ...(typeof p.o === "number" && Number.isFinite(p.o) ? { o: p.o } : {}),
+    }));
   if (!pages.length) return null;
   return {
     v: 1,

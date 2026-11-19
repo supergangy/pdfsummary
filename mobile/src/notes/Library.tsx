@@ -13,11 +13,15 @@ import { readPicked } from "./readPicked";
 import { shareFile } from "./shareFile";
 import { blankNotebook, type Notebook, type Paper } from "./model";
 import { pageImage } from "./pageImage";
-import type { NoteStore } from "./store";
+import type { SyncStatus } from "./sync/engine";
+import { statusText } from "./sync/SyncSheet";
+import type { SyncedStore } from "./sync/syncedStore";
 
 type Props = {
-  store: NoteStore;
+  store: SyncedStore;
   onOpen: (id: string) => void;
+  syncStatus: SyncStatus | null; // 동기화가 꺼져 있으면 null
+  onSync: () => void;
   onSummaryTool: () => void; // PDF만 넣어 요약하는 화면 (예전 방식)
   onSettings: () => void;
   refresh: number;
@@ -30,7 +34,7 @@ const PAPERS: { value: Paper; label: string }[] = [
   { value: "plain", label: "무지" },
 ];
 
-export function Library({ store, onOpen, onSummaryTool, onSettings, refresh }: Props) {
+export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syncStatus, onSync }: Props) {
   const t = useTheme();
   const { width } = useWindowDimensions();
   const [list, setList] = useState<Notebook[] | null>(null);
@@ -48,6 +52,18 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh }: P
     store.folders().then(setFolders).catch(() => {});
   }, [store]);
   useEffect(reload, [reload, refresh]);
+  // 다른 기기에서 노트가 바뀌면 목록도 바로
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | null = null;
+    const off = store.subscribe(() => {
+      if (t) clearTimeout(t);
+      t = setTimeout(reload, 300);
+    });
+    return () => {
+      off();
+      if (t) clearTimeout(t);
+    };
+  }, [store, reload]);
 
   async function pickPdf() {
     setErr("");
@@ -171,6 +187,12 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh }: P
             <Text style={{ color: t.ink, fontSize: 26, fontWeight: "800" }}>📚 필기 노트</Text>
             <Text style={{ color: t.muted, marginTop: 2 }}>PDF 교재에 바로 필기하고, 칠한 부분만 모아 요약해요.</Text>
           </View>
+          <Button
+            label={syncStatus ? `☁️ ${syncStatus.state === "offline" ? "연결 안 됨" : syncStatus.waiting || syncStatus.state === "syncing" ? "동기화 중" : "동기화됨"}` : "☁️ 동기화"}
+            accessibilityLabel={syncStatus ? `동기화: ${statusText(syncStatus)}` : "동기화 켜기"}
+            onPress={onSync}
+            style={{ paddingVertical: 8 }}
+          />
           <Button label="설정" onPress={onSettings} style={{ paddingVertical: 8 }} />
         </View>
 
@@ -263,7 +285,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh }: P
   );
 }
 
-function NoteCard({ nb, store, width, onPress, onMore }: { nb: Notebook; store: NoteStore; width: number; onPress: () => void; onMore: () => void }) {
+function NoteCard({ nb, store, width, onPress, onMore }: { nb: Notebook; store: SyncedStore; width: number; onPress: () => void; onMore: () => void }) {
   const t = useTheme();
   const [thumb, setThumb] = useState<string | null>(null);
   const first = nb.pages[0];

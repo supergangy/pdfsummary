@@ -18,7 +18,7 @@ export type Fs = {
 const dir = (id: string) => `notebooks/${id}`;
 
 export class NoteStore {
-  private fs: Fs;
+  protected fs: Fs;
   constructor(fs: Fs) {
     this.fs = fs;
   }
@@ -82,6 +82,24 @@ export class NoteStore {
       }
     }
     return ink;
+  }
+
+  async loadPage(nbId: string, pageId: string): Promise<Stroke[]> {
+    const t = await this.fs.readText(`${dir(nbId)}/ink/${pageId}.json`);
+    if (!t) return [];
+    try {
+      return parseStrokes(JSON.parse(t));
+    } catch {
+      return [];
+    }
+  }
+
+  async hasPdf(nbId: string): Promise<boolean> {
+    return (await this.fs.readBytes(`${dir(nbId)}/source.pdf`)) !== null;
+  }
+
+  async writePdf(nbId: string, bytes: Uint8Array): Promise<void> {
+    await this.fs.writeBytes(`${dir(nbId)}/source.pdf`, bytes);
   }
 
   async savePage(nbId: string, pageId: string, strokes: Stroke[]): Promise<void> {

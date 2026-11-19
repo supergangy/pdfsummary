@@ -25,7 +25,9 @@ import { unpackNotebook } from "./src/notes/pack";
 import { notePayload, strokeCount } from "./src/notes/payload";
 import { readPicked } from "./src/notes/readPicked";
 import { sharePdf } from "./src/notes/sharePdf";
-import { NoteStore } from "./src/notes/store";
+import { SyncSheet } from "./src/notes/sync/SyncSheet";
+import { SyncedStore } from "./src/notes/sync/syncedStore";
+import { useSync } from "./src/notes/sync/useSync";
 import { ResultView } from "./src/platform/ResultView";
 import { shareResult } from "./src/platform/saveResult";
 import { useShareIntent } from "./src/platform/shareIntent";
@@ -97,7 +99,9 @@ type Screen =
   | { name: "quick"; nb: Notebook; ink: Ink; backTo: Screen };
 
 function Root() {
-  const store = useMemo(() => new NoteStore(deviceFs), []);
+  const store = useMemo(() => new SyncedStore(deviceFs), []);
+  const sync = useSync(store, deviceFs);
+  const [syncOpen, setSyncOpen] = useState(false);
   const [screen, setScreen] = useState<Screen>({ name: "library" });
   const [refresh, setRefresh] = useState(0);
   const [shareErr, setShareErr] = useState("");
@@ -179,6 +183,20 @@ function Root() {
         onOpen={(id) => setScreen({ name: "editor", id })}
         onSummaryTool={() => setScreen({ name: "summary" })}
         onSettings={() => setScreen({ name: "summary", settings: true })}
+        syncStatus={sync.code ? sync.status : null}
+        onSync={() => {
+          void sync.reload();
+          setSyncOpen(true);
+        }}
+      />
+      <SyncSheet
+        visible={syncOpen}
+        sync={sync}
+        onClose={() => setSyncOpen(false)}
+        onOpenSettings={() => {
+          setSyncOpen(false);
+          setScreen({ name: "summary", settings: true });
+        }}
       />
       {!!shareErr && (
         <Pressable onPress={() => setShareErr("")} style={{ position: "absolute", bottom: 24, left: 16, right: 16 }}>

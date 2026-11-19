@@ -113,7 +113,7 @@ pdfsummary-app --server --access-code "길고-아무도-모를-접속-코드"
 
 ```bash
 docker build -t pdfsummary-server .
-docker run -p 8080:8080 -e PDFSUMMARY_ACCESS_CODE="길고-아무도-모를-접속-코드" pdfsummary-server
+docker run -p 8080:8080 -e PDFSUMMARY_ACCESS_CODE="길고-아무도-모를-접속-코드" -v pdfsummary-sync:/data pdfsummary-server
 ```
 
 | 환경 변수 | 뜻 |
@@ -123,10 +123,12 @@ docker run -p 8080:8080 -e PDFSUMMARY_ACCESS_CODE="길고-아무도-모를-접�
 | `PDFSUMMARY_TTL_MINUTES` | 올린 PDF·결과를 지우기까지 분 (기본 60) |
 | `PDFSUMMARY_MAX_UPLOAD_MB` | 업로드 한도 (기본 300) |
 | `PORT` | 받을 포트 (기본 8080, 클라우드가 정해 주면 그 값) |
+| `PDFSUMMARY_SYNC_DIR` | 필기 앱 **실시간 동기화** 기록을 둘 폴더 (기본 `~/.pdfsummary/sync`, Docker는 `/data/sync`). 요약용 파일과 달리 지우지 않으니 **디스크(볼륨)에 두세요** |
 
 - 아이폰·아이패드 앱은 **https** 주소만 붙을 수 있습니다. Render · Fly.io · Google Cloud Run 같은 곳에 Docker 이미지를 올리면 https 주소를 줍니다.
 - 요약은 한 번에 하나씩 만듭니다 (여러 명이 동시에 쓰면 차례로 처리).
 - 서버 상태 확인: `GET /healthz`
+- **실시간 동기화**: 같은 서버로 필기 앱 기기끼리 노트를 맞춥니다. 기기마다 '동기화 코드'(긴 무작위 코드)로 공간을 나누고, 서버에는 코드의 해시만 둡니다. 노트 내용은 서버 디스크에 남으므로 믿을 수 있는 곳에 띄우세요.
 
 ## 요약본은 이렇게 정리됩니다
 

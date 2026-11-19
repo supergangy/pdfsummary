@@ -246,6 +246,20 @@ def _safe_name(name: str) -> str:
 # ── HTTP ────────────────────────────────────────────────────────────────
 
 NOTE_LIMIT = 80 * 1024 * 1024   # 노트 획 데이터(JSON) 최대 크기
+SYNC_PUSH_LIMIT = 40 * 1024 * 1024
+_SYNC = None
+_SYNC_LOCK = threading.Lock()
+
+
+def sync_store():
+    """실시간 동기화 저장소 (서버를 껐다 켜도 남는다). 위치: PDFSUMMARY_SYNC_DIR 또는 ~/.pdfsummary/sync"""
+    global _SYNC
+    with _SYNC_LOCK:
+        if _SYNC is None:
+            from .sync import SyncStore
+
+            _SYNC = SyncStore(Path(os.environ.get("PDFSUMMARY_SYNC_DIR") or (CONFIG_DIR / "sync")))
+        return _SYNC
 
 RESULT_FILES = {
     "요약.html": "text/html; charset=utf-8",
@@ -266,7 +280,7 @@ class Handler(BaseHTTPRequestHandler):
         # 서버 모드는 쿠키가 아니라 Authorization 헤더로 인증하므로 출처를 가리지 않아도 된다
         if STATE.server:
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Anthropic-Key")
+            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Anthropic-Key, X-Sync-Space")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 
     def do_OPTIONS(self):
@@ -342,8 +356,10 @@ class Handler(BaseHTTPRequestHandler):
 
                 return self._json({"server": True, "version": __version__, "server_key": has_credentials(),
                                    "max_upload_mb": STATE.max_upload // (1024 * 1024),
-                                   "keep_minutes": int(STATE.ttl // 60)})
+                                   "keep_minutes": int(STATE.ttl // 60), "sync": True})
             return self._json(key_state())
+        if url.path.startswith("/api/sync/"):
+            return self._sync_get(url.path, q)
         if url.path.startswith("/api/job/") and url.path.endswith("/device-tasks"):
             job = STATE.jobs.get(url.path.split("/")[3])
             if not job or job.status != "done":
@@ -380,6 +396,8 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(url.query)
         if not self._authed(q):
             return self._err("권한이 없습니다.", 403)
+        if url.path.startswith("/api/sync/blob/"):
+            return self._sync_put_blob(url.path.rsplit("/", 1)[-1])
         if url.path != "/api/upload":
             return self._err("없는 주소입니다.", 404)
         n = int(self.headers.get("Content-Length") or 0)
@@ -428,8 +446,22 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         if not self._authed(parse_qs(url.query)):
             return self._err("권한이 없습니다.", 403)
-        # 필기 앱 노트(획 데이터)는 클 수 있다
-        body = self._body_json(NOTE_LIMIT if url.path == "/api/notes" else 1_000_000)
+        # 필기 앱 노트(획 데이터)·동기화 작업은 클 수 있다
+        limit = NOTE_LIMIT if url.path == "/api/notes" else SYNC_PUSH_LIMIT if url.path == "/api/sync/push" else 1_000_000
+        body = self._body_json(limit)
+        if url.path == "/api/sync/space":
+            return self._json({"code": sync_store().create_space()})
+        if url.path == "/api/sync/push":
+            sid = self._sync_space()
+            if not sid:
+                return self._err("동기화 코드가 맞지 않습니다.", 403)
+            from .sync import SyncError
+
+            try:
+                seqs = sync_store().push(sid, str(body.get("device") or ""), body.get("ops"))
+            except SyncError as e:
+                return self._err(str(e))
+            return self._json({"seqs": seqs})
         if STATE.server and url.path in ("/api/ping", "/api/quit", "/api/key"):
             return self._err("없는 주소입니다.", 404)   # 서버는 키를 저장하지도, 원격으로 꺼지지도 않는다
         if url.path == "/api/ping":
@@ -467,6 +499,63 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"job": jid})
         return self._err("없는 주소입니다.", 404)
 
+
+    # ── 실시간 동기화 ──
+    def _sync_space(self):
+        from .sync import space_id
+
+        code = self.headers.get("X-Sync-Space") or ""
+        if not code:
+            return None
+        sid = space_id(code)
+        return sid if sync_store().has_space(sid) else None
+
+    def _sync_get(self, path: str, q: dict):
+        sid = self._sync_space()
+        if not sid:
+            return self._err("동기화 코드가 맞지 않습니다.", 403)
+        st = sync_store()
+        if path == "/api/sync/info":
+            return self._json({"ok": True, "last": st.last_seq(sid)})
+        if path == "/api/sync/pull":
+            try:
+                since = max(0, int((q.get("since") or ["0"])[0]))
+                wait = float((q.get("wait") or ["0"])[0])
+            except ValueError:
+                return self._err("잘못된 요청입니다.")
+            return self._json(st.pull(sid, since, wait))
+        if path.startswith("/api/sync/blob/"):
+            from .sync import SyncError
+
+            if q.get("check"):   # 올라와 있는지만
+                try:
+                    return self._json({"exists": st.has_blob(sid, path.rsplit("/", 1)[-1])})
+                except SyncError as e:
+                    return self._err(str(e))
+            try:
+                data = st.get_blob(sid, path.rsplit("/", 1)[-1])
+            except SyncError as e:
+                return self._err(str(e))
+            if data is None:
+                return self._err("파일이 없습니다.", 404)
+            return self._send(200, data, "application/octet-stream")
+        return self._err("없는 주소입니다.", 404)
+
+    def _sync_put_blob(self, sha: str):
+        from .sync import SyncError
+
+        sid = self._sync_space()
+        if not sid:
+            return self._err("동기화 코드가 맞지 않습니다.", 403)
+        n = int(self.headers.get("Content-Length") or 0)
+        if n <= 0 or n > STATE.max_upload:
+            return self._err("파일이 비었거나 너무 큽니다.", 413)
+        data = self.rfile.read(n)
+        try:
+            sync_store().put_blob(sid, sha, data)
+        except SyncError as e:
+            return self._err(str(e))
+        return self._json({"ok": True})
 
     def _notes(self, body: dict):
         """필기 앱의 노트(원본 PDF 업로드 + 획)를 표시가 들어간 PDF로 만들어 새 업로드처럼 등록한다."""

@@ -15,10 +15,11 @@ import { PageCanvas, type Selection, type ToolName, type ZoomCmd } from "./PageC
 import { PageGrid } from "./PageGrid";
 import { loadPrefs, savePrefs, type Prefs } from "./prefs";
 import { lassoSelect, moved, snapShape } from "./shapes";
-import type { NoteStore } from "./store";
+import type { SyncedStore } from "./sync/syncedStore";
+import { applyToInk, applyToNotebook } from "./sync/writes";
 
 type Props = {
-  store: NoteStore;
+  store: SyncedStore;
   id: string;
   onClose: () => void;
   onExport: (nb: Notebook, ink: Ink) => Promise<void>;
@@ -83,14 +84,49 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
     if (!n) return;
     const pages = [...dirty.current];
     dirty.current.clear();
-    for (const pid of pages) await store.savePage(n.id, pid, inkRef.current[pid] ?? []);
+    // 저장 순간의 최신 내용을 읽는다 (그 사이 다른 기기에서 온 필기를 덮지 않게)
+    for (const pid of pages) await store.savePageLatest(n.id, pid, () => inkRef.current[pid] ?? []);
     if (pages.length || metaDirty.current) {
       metaDirty.current = false;
-      const next = { ...n, updated: Date.now() };
-      nbRef.current = next;
-      await store.save(next);
+      await store.saveLatest(() => {
+        const next = { ...(nbRef.current ?? n), updated: Date.now() };
+        nbRef.current = next;
+        return next;
+      });
     }
   }, [store]);
+
+  // ── 다른 기기에서 바뀐 것 바로 반영 (실시간 동기화) ───────
+  const piRef = useRef(0);
+  useEffect(() => store.subscribe((e) => {
+    if (e.kind === "folders" || e.nb !== id) return;
+    if (e.kind === "deleted") {
+      setLoadErr("다른 기기에서 이 노트를 지웠어요.");
+      return;
+    }
+    if (e.kind === "pdf") {
+      setBg({});
+      store.pdfUri(id).then(setPdfUri).catch(() => undefined);
+      return;
+    }
+    if (e.kind !== "remote") return;
+    const cur = nbRef.current;
+    if (!cur) return;
+    const curPage = cur.pages[piRef.current]?.id;
+    const nbNext = applyToNotebook(cur, id, e.writes.filter((w) => w.t === "nb" || w.t === "page"));
+    if (nbNext && nbNext !== cur) {
+      nbRef.current = nbNext;
+      setNb(nbNext);
+      const i = nbNext.pages.findIndex((p) => p.id === curPage);
+      if (i >= 0 && i !== piRef.current) setPi(i); // 앞에 쪽이 끼어도 보던 쪽에 머문다
+      if (nbNext.hasPdf && !cur.hasPdf) store.pdfUri(id).then(setPdfUri).catch(() => undefined);
+    }
+    const inkNext = applyToInk(inkRef.current, id, e.writes);
+    if (inkNext !== inkRef.current) {
+      inkRef.current = inkNext;
+      setInk(inkNext);
+    }
+  }), [store, id]);
 
   const touch = useCallback((pageId?: string) => {
     if (pageId) dirty.current.add(pageId);
@@ -365,6 +401,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
     onQuick(nbRef.current ?? nb, inkRef.current);
   };
 
+  piRef.current = pi;
   const strokes = useMemo(() => (page ? ink[page.id] ?? [] : []), [ink, page]);
 
   if (loadErr) {

@@ -57,6 +57,8 @@ jobs:
           npm install --no-save playwright@1.63.0
           npx playwright install --with-deps chromium
           node e2e/notes.e2e.cjs dist-web
+      - name: 브라우저 두 개(기기 두 대)로 실시간 동기화 시험
+        run: node e2e/sync.e2e.cjs dist-web
 
   ollama:
     # 내 컴퓨터 AI(Ollama) 연결을 진짜 Ollama + 아주 작은 모델로 확인 (요약 품질이 아니라 요청·답 형식 확인)

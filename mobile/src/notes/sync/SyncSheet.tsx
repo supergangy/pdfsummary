@@ -40,6 +40,8 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
   const [devices, setDevices] = useState<AccountSession[] | null>(null);
   const [forgotStep, setForgotStep] = useState<"" | "email" | "code">(""); // 비밀번호 찾기
   const [resetCode, setResetCode] = useState("");
+  const [verifyFor, setVerifyFor] = useState<"" | "signup" | "link">(""); // 가입할 때 이메일 확인
+  const [verifyCode, setVerifyCode] = useState("");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
@@ -76,6 +78,8 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
       setDelPw("");
       setResetCode("");
       setForgotStep("");
+      setVerifyCode("");
+      setVerifyFor("");
       setErr("");
       setNote("");
     }
@@ -97,6 +101,34 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
       style={{ borderWidth: 1, borderColor: t.line, borderRadius: 8, padding: 12, color: t.ink, backgroundColor: t.card, fontSize: 16 }}
     />
   );
+
+  /** 메일로 받은 6자리 코드 칸 (숫자만) */
+  const codeInput = (value: string, set: (v: string) => void) => (
+    <TextInput
+      value={value}
+      onChangeText={(v) => set(v.replace(/[^0-9]/g, "").slice(0, 6))}
+      placeholder="메일로 받은 6자리 코드"
+      placeholderTextColor={t.muted}
+      keyboardType="number-pad"
+      textContentType="oneTimeCode"
+      autoComplete="one-time-code"
+      accessibilityLabel="메일로 받은 코드"
+      style={{ borderWidth: 1, borderColor: t.line, borderRadius: 8, padding: 12, color: t.ink, backgroundColor: t.card, fontSize: value ? 22 : 16, letterSpacing: value ? 6 : 0 }}
+    />
+  );
+
+  /** 가입(또는 코드를 계정으로 옮기기) 시작: 메일 서버가 있는 서버면 확인 코드부터 */
+  const beginSignup = (kind: "signup" | "link") =>
+    run(kind === "signup" ? "만드는 중…" : "옮기는 중…", async () => {
+      const need = await sync.signupStart(email.trim());
+      if (!need) {
+        await (kind === "signup" ? sync.signup(email.trim(), pw) : sync.linkAccount(email.trim(), pw));
+        return;
+      }
+      setVerifyFor(kind);
+      setVerifyCode("");
+      setNote(`${email.trim()} 로 6자리 확인 코드를 보냈어요. 받은편지함과 스팸함을 확인해 주세요. 코드는 15분 동안 쓸 수 있어요.`);
+    });
 
   const okLogin = /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email.trim()) && pw.length >= 8;
   const h = (text: string) => <Text style={{ color: t.ink, fontWeight: "700", fontSize: 16, marginTop: 14 }}>{text}</Text>;
@@ -137,17 +169,7 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
         ) : (
           <>
             <Text style={{ color: t.ink }}>{email.trim()}</Text>
-            <TextInput
-              value={resetCode}
-              onChangeText={(v) => setResetCode(v.replace(/[^0-9]/g, "").slice(0, 6))}
-              placeholder="메일로 받은 6자리 코드"
-              placeholderTextColor={t.muted}
-              keyboardType="number-pad"
-              textContentType="oneTimeCode"
-              autoComplete="one-time-code"
-              accessibilityLabel="메일로 받은 코드"
-              style={{ borderWidth: 1, borderColor: t.line, borderRadius: 8, padding: 12, color: t.ink, backgroundColor: t.card, fontSize: 22, letterSpacing: 6 }}
-            />
+            {codeInput(resetCode, setResetCode)}
             {input("새 비밀번호", newPw, setNewPw, { secret: true, fresh: true, placeholder: "새 비밀번호 (8자 이상)" })}
             <Button
               kind="primary"
@@ -170,6 +192,32 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
         )}
         <Button kind="link" label="돌아가기" onPress={() => { setForgotStep(""); setErr(""); setNote(""); }} />
         <Hint>메일이 오지 않으면 서버를 운영하는 사람에게 비밀번호를 새로 정해 달라고 하세요.</Hint>
+      </View>
+    );
+  } else if (verifyFor && !signedIn) {
+    // 가입할 때 이메일 확인: 메일로 받은 코드를 넣으면 가입 끝
+    body = (
+      <View style={{ marginTop: 18, gap: 10 }}>
+        <Text style={{ color: t.ink, fontWeight: "700", fontSize: 18 }}>📮 이메일 확인</Text>
+        <Hint>본인 이메일이 맞는지 확인해요. 나중에 비밀번호를 잊었을 때 이 이메일로 찾을 수 있어요.</Hint>
+        <Text style={{ color: t.ink }}>{email.trim()}</Text>
+        {codeInput(verifyCode, setVerifyCode)}
+        <Button
+          kind="primary"
+          label={verifyFor === "signup" ? "확인하고 가입" : "확인하고 계정으로 옮기기"}
+          disabled={verifyCode.length !== 6}
+          busy={busy === "확인하는 중…"}
+          onPress={() =>
+            run("확인하는 중…", async () => {
+              await (verifyFor === "signup" ? sync.signup(email.trim(), pw, verifyCode) : sync.linkAccount(email.trim(), pw, verifyCode));
+              setVerifyFor("");
+              setVerifyCode("");
+            })
+          }
+          style={{ alignSelf: "flex-start" }}
+        />
+        <Button kind="link" label="코드 다시 받기" onPress={() => beginSignup(verifyFor)} disabled={!!busy} />
+        <Button kind="link" label="이메일 고치기" onPress={() => { setVerifyFor(""); setVerifyCode(""); setErr(""); setNote(""); }} />
       </View>
     );
   } else if (sync.account?.expired) {
@@ -277,7 +325,7 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
         <Hint>코드를 옮겨 적는 대신 이메일·비밀번호로 로그인해서 쓸 수 있어요. 지금 노트가 그대로 새 계정으로 가고, 이 코드로 연결된 다른 기기도 계속 맞춰져요.</Hint>
         {input("계정 이메일", email, setEmail, { email: true, placeholder: "이메일" })}
         {input("계정 비밀번호", pw, setPw, { secret: true, placeholder: "비밀번호 (8자 이상)" })}
-        <Button label="계정 만들고 옮기기" disabled={!okLogin} busy={busy === "옮기는 중…"} onPress={() => run("옮기는 중…", () => sync.linkAccount(email, pw))} style={{ alignSelf: "flex-start" }} />
+        <Button label="계정 만들고 옮기기" disabled={!okLogin} busy={busy === "옮기는 중…"} onPress={() => beginSignup("link")} style={{ alignSelf: "flex-start" }} />
 
         <Button
           label="이 기기 동기화 끄기"
@@ -306,7 +354,7 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
             {input("계정 비밀번호", pw, setPw, { secret: true, placeholder: "비밀번호 (8자 이상)" })}
             <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>
               <Button kind="primary" label="로그인" disabled={!okLogin} busy={busy === "로그인 중…"} onPress={() => run("로그인 중…", () => sync.login(email, pw))} />
-              <Button label="새 계정 만들기" disabled={!okLogin} busy={busy === "만드는 중…"} onPress={() => run("만드는 중…", () => sync.signup(email, pw))} />
+              <Button label="새 계정 만들기" disabled={!okLogin} busy={busy === "만드는 중…"} onPress={() => beginSignup("signup")} />
             </View>
             <Button kind="link" label="비밀번호를 잊었어요" onPress={() => { setForgotStep("email"); setErr(""); setNote(""); }} />
           </>

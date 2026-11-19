@@ -550,9 +550,12 @@ class Handler(BaseHTTPRequestHandler):
         device = str(body.get("device") or "")[:80]
         get = self.command == "GET"
         try:
+            if path == "/api/account/signup/start" and not get:
+                return self._json(acc.signup_start(str(body.get("email") or ""), self.client_address[0]))
             if path == "/api/account/signup" and not get:
                 return self._json(acc.signup(str(body.get("email") or ""), str(body.get("password") or ""), device,
-                                             str(body.get("link_code") or "")))
+                                             str(body.get("link_code") or ""), str(body.get("code") or ""),
+                                             self.client_address[0]))
             if path == "/api/account/login" and not get:
                 return self._json(acc.login(str(body.get("email") or ""), str(body.get("password") or ""), device,
                                             self.client_address[0]))

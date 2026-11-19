@@ -1,7 +1,7 @@
 // 실시간 동기화 시험 (실제 브라우저 = 기기, 실제 파이썬 서버):
 //  A에서 동기화 시작 → B에서 코드로 연결 → A가 만든 노트·필기가 B에 → B가 쓴 필기가 열려 있는 A 화면에 바로
 //  → A가 가져온 PDF 교재도 B로.
-//  계정: A가 코드를 계정으로 옮김 → 새 기기 C가 이메일·비밀번호로 로그인 (틀린 비밀번호는 거절) → 노트·PDF를 받음
+//  계정: A가 코드를 계정으로 옮김 (가입 확인 메일 코드) → 새 기기 C가 이메일·비밀번호로 로그인 (틀린 비밀번호는 거절) → 노트·PDF를 받음
 //  → C의 필기가 코드로 쓰는 B에 → A가 C를 로그아웃시킴 → 그동안 C에서 쓴 필기는 다시 로그인하면 B에.
 //  비밀번호 찾기: 새 기기 D에서 메일로 받은 6자리 코드로 새 비밀번호 → 바로 로그인, 노트를 받음 (메일은 폴더로).
 //   npx expo export --platform web --output-dir dist-web && node e2e/sync.e2e.cjs dist-web
@@ -75,13 +75,29 @@ async function until(fn, ms, what) {
   fail(`${ms / 1000}초 안에 안 됨: ${what}`);
 }
 
+// 서버가 폴더에 남긴 메일(.eml) 중 n번째 이후의 마지막 것 → 그 안의 6자리 코드
+const MAIL_DIR = path.join(TMP, "mail");
+async function mailCode(to, n, what) {
+  let code = "";
+  await until(async () => {
+    const files = fs.existsSync(MAIL_DIR) ? fs.readdirSync(MAIL_DIR).filter((f) => f.endsWith(".eml")).sort() : [];
+    if (files.length < n) return false;
+    const out = execFileSync("python3", ["-c", "import sys, email, email.policy; m = email.message_from_bytes(open(sys.argv[1], 'rb').read(), policy=email.policy.default); print(m['To']); print(m['Subject']); print(m.get_content())", path.join(MAIL_DIR, files[files.length - 1])], { encoding: "utf8" });
+    if (!out.startsWith(to)) fail("메일 받는 사람이 다름: " + out.split("\n")[0]);
+    if (!out.includes(what)) fail(`'${what}' 메일이 아님: ` + out.split("\n")[1]);
+    code = (out.match(/코드: (\d{6})/) || [])[1] || "";
+    return !!code;
+  }, 10000, `${what} 메일이 옴`);
+  return code;
+}
+
 (async () => {
   const book = path.join(TMP, "book.pdf");
   execFileSync("python3", ["-c", "import sys; sys.path.insert(0, 'examples'); import make_sample as m; m.make_book_pair(sys.argv[1], sys.argv[1] + '.n.pdf')", book], { cwd: ROOT });
   const { srv, port } = await staticServer(WEB);
   const apiPort = 19300 + Math.floor(Math.random() * 500);
   const api = spawn("python3", ["-m", "pdfsummary.app", "--server", "--host", "127.0.0.1", "--port", String(apiPort), "--access-code", CODE], {
-    cwd: ROOT, env: { ...process.env, ANTHROPIC_API_KEY: "", HOME: TMP, PDFSUMMARY_SYNC_DIR: path.join(TMP, "sync"), PDFSUMMARY_MAIL_DIR: path.join(TMP, "mail") }, stdio: "ignore",
+    cwd: ROOT, env: { ...process.env, ANTHROPIC_API_KEY: "", HOME: TMP, PDFSUMMARY_SYNC_DIR: path.join(TMP, "sync"), PDFSUMMARY_MAIL_DIR: MAIL_DIR }, stdio: "ignore",
   });
   await waitFor(`http://127.0.0.1:${apiPort}/healthz`);
   const browser = await chromium.launch();
@@ -179,9 +195,16 @@ async function until(fn, ms, what) {
     await A.getByLabel("계정 이메일").fill(EMAIL);
     await A.getByLabel("계정 비밀번호").fill(PW);
     await A.getByText("계정 만들고 옮기기").click();
+    await A.getByText(/6자리 확인 코드를 보냈어요/).waitFor({ timeout: 10000 });
+    const signupCode = await mailCode(EMAIL, 1, "가입 확인");
+    await A.getByLabel("메일로 받은 코드").fill(signupCode === "000000" ? "111111" : "000000");
+    await A.getByText("확인하고 계정으로 옮기기").click();
+    await A.getByText(/코드가 맞지 않거나/).waitFor({ timeout: 10000 });
+    await A.getByLabel("메일로 받은 코드").fill(signupCode);
+    await A.getByText("확인하고 계정으로 옮기기").click();
     await A.getByLabel("로그인한 계정").waitFor({ timeout: 10000 });
     await A.getByText("닫기").click();
-    console.log("✓ A: 동기화 코드를 계정으로 옮김");
+    console.log("✓ A: 이메일 확인 코드(틀린 코드는 거절)로 가입하며 동기화 코드를 계정으로 옮김");
 
     C = await open();
     await C.getByLabel("동기화 켜기").click();
@@ -240,17 +263,7 @@ async function until(fn, ms, what) {
     await D.getByLabel("계정 이메일").fill(EMAIL);
     await D.getByText("코드 메일 받기").click();
     await D.getByText(/6자리 코드를 보냈어요/).waitFor({ timeout: 10000 });
-    const mailDir = path.join(TMP, "mail");
-    let code = "";
-    await until(async () => {
-      const files = fs.existsSync(mailDir) ? fs.readdirSync(mailDir).filter((f) => f.endsWith(".eml")).sort() : [];
-      if (!files.length) return false;
-      // 메일(.eml)을 파이썬 email로 풀어서 받는 사람·본문
-      const out = execFileSync("python3", ["-c", "import sys, email, email.policy; m = email.message_from_bytes(open(sys.argv[1], 'rb').read(), policy=email.policy.default); print(m['To']); print(m.get_content())", path.join(mailDir, files[files.length - 1])], { encoding: "utf8" });
-      if (!out.startsWith(EMAIL)) fail("코드 메일 받는 사람이 다름: " + out.split("\n")[0]);
-      code = (out.match(/코드: (\d{6})/) || [])[1] || "";
-      return !!code;
-    }, 10000, "코드 메일이 옴");
+    const code = await mailCode(EMAIL, 2, "비밀번호 찾기");
     await D.getByLabel("메일로 받은 코드").fill(code);
     await D.getByLabel("새 비밀번호", { exact: true }).fill("e2e-new-password");
     await D.getByText("새 비밀번호로 로그인").click();

@@ -124,13 +124,14 @@ docker run -p 8080:8080 -e PDFSUMMARY_ACCESS_CODE="길고-아무도-모를-접�
 | `PDFSUMMARY_MAX_UPLOAD_MB` | 업로드 한도 (기본 300) |
 | `PORT` | 받을 포트 (기본 8080, 클라우드가 정해 주면 그 값) |
 | `PDFSUMMARY_SYNC_DIR` | 필기 앱 **실시간 동기화** 기록을 둘 폴더 (기본 `~/.pdfsummary/sync`, Docker는 `/data/sync`). 요약용 파일과 달리 지우지 않으니 **디스크(볼륨)에 두세요** |
-| `PDFSUMMARY_SMTP_HOST` · `_PORT` · `_SECURITY` · `_USER` · `_PASSWORD` · `_FROM` | 필기 앱 **비밀번호 찾기 메일**을 보낼 메일 서버. `_SECURITY`는 `starttls`(기본, 587) · `ssl`(465) · `none`. Gmail이면 `smtp.gmail.com`, 아이디는 Gmail 주소, 비밀번호는 Google 계정의 '앱 비밀번호'. 없으면 비밀번호 찾기 메일이 꺼집니다 |
+| `PDFSUMMARY_SMTP_HOST` · `_PORT` · `_SECURITY` · `_USER` · `_PASSWORD` · `_FROM` | 필기 앱 **가입 확인·비밀번호 찾기 메일**을 보낼 메일 서버. `_SECURITY`는 `starttls`(기본, 587) · `ssl`(465) · `none`. Gmail이면 `smtp.gmail.com`, 아이디는 Gmail 주소, 비밀번호는 Google 계정의 '앱 비밀번호'. 없으면 가입할 때 이메일을 확인하지 않고, 비밀번호 찾기 메일도 꺼집니다 |
 
 - 아이폰·아이패드 앱은 **https** 주소만 붙을 수 있습니다. Render · Fly.io · Google Cloud Run 같은 곳에 Docker 이미지를 올리면 https 주소를 줍니다.
 - 요약은 한 번에 하나씩 만듭니다 (여러 명이 동시에 쓰면 차례로 처리).
 - 서버 상태 확인: `GET /healthz`
 - **실시간 동기화**: 같은 서버로 필기 앱 기기끼리 노트를 맞춥니다. **계정**(이메일·비밀번호) 또는 '동기화 코드'(긴 무작위 코드)로 공간을 나누고, 서버에는 코드·비밀번호(scrypt)·로그인 세션의 해시만 둡니다. 노트 내용은 서버 디스크에 남으므로 믿을 수 있는 곳에 띄우세요.
   - 계정 가입·로그인도 서버 접속 코드가 있어야 할 수 있습니다 (모르는 사람이 가입하지 못함). 비밀번호를 5번 틀리면 1분 동안 막습니다.
+  - 메일 서버를 정해 두면 가입할 때 그 이메일로 6자리 확인 코드를 보내, 받은 사람만 가입할 수 있습니다 (오타 난 이메일·남의 이메일로 가입 방지). `python -m pdfsummary.accounts list`에 계정마다 이메일 확인 여부가 나옵니다.
   - 비밀번호를 잊은 사람: 메일 서버(위 `PDFSUMMARY_SMTP_*`)를 정해 두면 앱의 **비밀번호를 잊었어요**에서 6자리 코드를 메일로 받아 스스로 새 비밀번호를 정합니다 (코드는 15분, 5번 틀리면 끝, 같은 이메일로 1분에 한 번·한 시간에 5번까지, 가입되지 않은 이메일이어도 같은 답). 설정 확인: `python -m pdfsummary.accounts test-mail 받을주소`.
     메일 서버가 없으면 서버에서 `python -m pdfsummary.accounts reset-password 이메일` (그 계정의 모든 기기가 로그아웃됨). 가입한 계정 보기: `python -m pdfsummary.accounts list`. Docker라면 `docker exec -it <컨테이너> python -m pdfsummary.accounts …`.
 

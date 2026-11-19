@@ -192,6 +192,12 @@ def code_of(text):
     return re.search(r"코드: (\d{6})", text).group(1)
 
 
+def signup_by_mail(acc, box, email, pw, **kw):
+    """메일 서버가 있는 서버에서 가입: 확인 코드 메일 → 코드로 가입"""
+    assert acc.signup_start(email) == {"verify": True}
+    return acc.signup(email, pw, code=code_of(mails(box)[-1][2]), **kw)
+
+
 @pytest.fixture()
 def macc(tmp_path):
     s = SyncStore(tmp_path / "sync")
@@ -203,15 +209,15 @@ def macc(tmp_path):
 
 def test_forgot_and_reset(macc):
     acc, box = macc
-    t_old = acc.signup("h@example.com", "old-password")["token"]
+    t_old = signup_by_mail(acc, box, "h@example.com", "old-password")["token"]
     acc.forgot("H@Example.com", ip="1.1.1.1")
-    (to, subject, text), = mails(box)
+    (to, subject, text) = mails(box)[-1]
     assert to == "h@example.com" and "비밀번호 찾기" in subject
     code = code_of(text)
     assert code in subject and "15분" in text
     # 가입하지 않은 이메일: 같은 답, 메일은 안 감
     acc.forgot("nobody@example.com", ip="1.1.1.1")
-    assert len(mails(box)) == 1
+    assert len(mails(box)) == 2
     wrong = "000000" if code != "000000" else "111111"
     with pytest.raises(AccountError) as e:
         acc.reset("h@example.com", wrong, "new-password")
@@ -230,7 +236,7 @@ def test_forgot_and_reset(macc):
 
 def test_reset_code_limits(macc, monkeypatch):
     acc, box = macc
-    acc.signup("i@example.com", "password1")
+    signup_by_mail(acc, box, "i@example.com", "password1")
     acc.forgot("i@example.com")
     code = code_of(mails(box)[-1][2])
     wrong = "000000" if code != "000000" else "111111"
@@ -329,18 +335,33 @@ def test_http_forgot_reset(server, tmp_path, monkeypatch):  # noqa: F811
     monkeypatch.setattr(app, "_ACCOUNTS", None)
     assert json.loads(call(server, "/api/state")[1])["mail"] is False
     assert call(server, "/api/account/forgot", data={"email": "l@example.com"})[0] == 503
+    # 메일 서버가 없는 서버: 확인 없이 가입
+    assert json.loads(call(server, "/api/account/signup/start", data={"email": "m@example.com"})[1]) == {"verify": False}
+    assert call(server, "/api/account/signup", data={"email": "m@example.com", "password": "password1"})[0] == 200
     box = tmp_path / "mail"
     monkeypatch.setenv("PDFSUMMARY_MAIL_DIR", str(box))
     monkeypatch.setattr(app, "_ACCOUNTS", None)
     assert json.loads(call(server, "/api/state")[1])["mail"] is True
-    t1 = json.loads(call(server, "/api/account/signup", data={"email": "l@example.com", "password": "password1"})[1])["token"]
+    def wait_mail(n):
+        for _ in range(50):
+            if len(mails(box)) >= n:
+                return mails(box)[-1]
+            time.sleep(0.1)
+        raise AssertionError("메일이 안 옴")
+
+    # 가입: 확인 코드 없이는 안 됨 → 코드 메일 → 코드로 가입
+    assert call(server, "/api/account/signup", data={"email": "l@example.com", "password": "password1"})[0] == 400
+    s, b, _ = call(server, "/api/account/signup/start", data={"email": "l@example.com"})
+    assert s == 200 and json.loads(b) == {"verify": True}
+    (to, subject, text) = wait_mail(1)
+    assert to == "l@example.com" and "가입 확인" in subject
+    assert call(server, "/api/account/signup", data={"email": "l@example.com", "password": "password1", "code": "999999" if code_of(text) != "999999" else "888888"})[0] == 401
+    s, b, _ = call(server, "/api/account/signup", data={"email": "l@example.com", "password": "password1", "code": code_of(text)})
+    t1 = json.loads(b)["token"]
+    assert call(server, "/api/account/signup/start", data={"email": "l@example.com"})[0] == 409
     assert call(server, "/api/account/forgot", data={"email": "l@example.com"})[0] == 200
     assert call(server, "/api/account/forgot", data={"email": "who@example.com"})[0] == 200
-    for _ in range(50):
-        if mails(box):
-            break
-        time.sleep(0.1)
-    (to, _, text), = mails(box)
+    (to, _, text) = wait_mail(2)
     s, b, _ = call(server, "/api/account/reset", data={"email": "l@example.com", "code": code_of(text), "password": "password2", "device": "폰"})
     assert s == 200 and json.loads(b)["token"]
     assert call(server, "/api/account/me", headers={"X-Session": t1})[0] == 401
@@ -348,3 +369,54 @@ def test_http_forgot_reset(server, tmp_path, monkeypatch):  # noqa: F811
     app._SYNC.close()
     monkeypatch.setattr(app, "_SYNC", None)
     monkeypatch.setattr(app, "_ACCOUNTS", None)
+
+
+def test_signup_email_verification(macc, tmp_path):
+    acc, box = macc
+    with pytest.raises(AccountError) as e:   # 코드 없이 가입 불가
+        acc.signup("n@example.com", "password1")
+    assert e.value.status == 400
+    assert acc.signup_start("N@Example.com") == {"verify": True}
+    (to, subject, text), = mails(box)
+    assert to == "n@example.com" and "가입 확인" in subject
+    code = code_of(text)
+    wrong = "000000" if code != "000000" else "111111"
+    with pytest.raises(AccountError) as e:
+        acc.signup("n@example.com", "password1", code=wrong)
+    assert e.value.status == 401
+    with pytest.raises(AccountError):   # 다른 이메일의 코드로는 안 됨
+        acc.signup("o@example.com", "password1", code=code)
+    t = acc.signup("n@example.com", "password1", code=code)["token"]
+    assert acc.session(t)
+    with acc.lock:
+        assert acc.db.execute("SELECT verified FROM accounts WHERE email = 'n@example.com'").fetchone()[0] == 1
+    with pytest.raises(AccountError) as e:   # 이미 가입됨
+        acc.signup_start("n@example.com")
+    assert e.value.status == 409
+    # 동기화 코드 옮기기도 확인 코드가 있어야
+    space_code = acc.sync.create_space()
+    acc.signup_start("p@example.com")
+    r = acc.signup("p@example.com", "password1", link_code=space_code, code=code_of(mails(box)[-1][2]))
+    assert acc.session(r["token"])["space"] == space_id(space_code)
+    # 가입 확인 메일을 보낸 직후에도 비밀번호 찾기 메일은 보낼 수 있다 (따로 셈)
+    acc.forgot("p@example.com")
+    assert "비밀번호 찾기" in mails(box)[-1][1]
+
+
+def test_old_database_gets_verified_column(tmp_path):
+    import sqlite3
+
+    root = tmp_path / "sync"
+    root.mkdir()
+    db = sqlite3.connect(root / "sync.db")
+    db.executescript("CREATE TABLE accounts (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, pw TEXT NOT NULL, "
+                     "space TEXT NOT NULL, created REAL NOT NULL);")
+    db.execute("INSERT INTO accounts VALUES ('a1', 'old@example.com', ?, 's', 0)", (hash_password("password1"),))
+    db.commit()
+    db.close()
+    s = SyncStore(root)
+    acc = AccountStore(s)
+    assert acc.login("old@example.com", "password1")["token"]   # 예전 계정은 그대로 로그인
+    with acc.lock:
+        assert acc.db.execute("SELECT verified FROM accounts").fetchone()[0] == 0
+    s.close()

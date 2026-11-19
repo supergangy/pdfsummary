@@ -50,8 +50,19 @@ export class AccountApi {
     return j as T;
   }
 
-  signup(email: string, password: string, linkCode?: string) {
-    return this.call<{ token: string; email: string }>("signup", { email, password, device: deviceName(), ...(linkCode ? { link_code: linkCode } : {}) });
+  /** 가입 1단계: 이메일 확인 코드 메일. verify가 false면 이 서버는 확인 없이 가입 (메일 서버 없음) */
+  signupStart(email: string) {
+    return this.call<{ verify: boolean }>("signup/start", { email });
+  }
+  /** 가입 2단계 (code: 메일로 받은 확인 코드, linkCode: 계정으로 옮길 동기화 코드) */
+  signup(email: string, password: string, opts: { linkCode?: string; code?: string } = {}) {
+    return this.call<{ token: string; email: string }>("signup", {
+      email,
+      password,
+      device: deviceName(),
+      ...(opts.linkCode ? { link_code: opts.linkCode } : {}),
+      ...(opts.code ? { code: opts.code } : {}),
+    });
   }
   login(email: string, password: string) {
     return this.call<{ token: string; email: string }>("login", { email, password, device: deviceName() });

@@ -5,7 +5,9 @@
   기기는 동기화할 때 X-Session 헤더로 토큰을 보내고, 서버는 그 계정의 공간을 쓴다.
 - 비밀번호를 여러 번 틀리면 잠시 막는다.
 - 계정은 동기화 코드로 쓰던 공간을 그대로 이어받을 수 있다 (코드 → 계정으로 옮기기).
-- 비밀번호를 잊으면: 메일로 6자리 코드를 받아 새 비밀번호를 정한다 (메일 서버 설정: mailer.py).
+- 메일 서버가 설정되어 있으면(mailer.py) 가입할 때 이메일로 6자리 확인 코드를 보내, 받은 사람만 가입할 수 있다
+  (오타 난 이메일로 가입해 비밀번호를 못 찾는 일이 없게, 남의 이메일로 가입하지 못하게).
+- 비밀번호를 잊으면: 메일로 6자리 코드를 받아 새 비밀번호를 정한다.
   코드는 15분 동안, 5번 틀리면 끝. 가입된 이메일인지 아닌지는 답에서 드러나지 않는다.
   메일 서버가 없으면 서버 관리자가 바꿔 준다:
     python -m pdfsummary.accounts reset-password 이메일   (PDFSUMMARY_SYNC_DIR이 서버와 같아야 함)
@@ -32,7 +34,7 @@ FAIL_WINDOW = 60.0
 FAIL_PER_EMAIL = 5
 FAIL_PER_IP = 30
 SCRYPT = {"n": 2 ** 14, "r": 8, "p": 1}
-RESET_TTL = 15 * 60          # 비밀번호 찾기 코드가 살아 있는 시간
+RESET_TTL = 15 * 60          # 메일 코드(가입 확인·비밀번호 찾기)가 살아 있는 시간
 RESET_TRIES = 5              # 코드를 이만큼 틀리면 끝
 RESET_GAP = 60.0             # 같은 이메일로 코드 메일은 1분에 한 번
 RESET_PER_HOUR = 5           # 같은 이메일로 한 시간에
@@ -102,9 +104,13 @@ class AccountStore:
                 token TEXT PRIMARY KEY, account TEXT NOT NULL, device TEXT NOT NULL,
                 created REAL NOT NULL, used REAL NOT NULL);
             CREATE INDEX IF NOT EXISTS sessions_account ON sessions (account);
-            CREATE TABLE IF NOT EXISTS resets (
-                account TEXT PRIMARY KEY, code TEXT NOT NULL, expires REAL NOT NULL, tries INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS codes (
+                purpose TEXT NOT NULL, key TEXT NOT NULL, code TEXT NOT NULL, expires REAL NOT NULL,
+                tries INTEGER NOT NULL, PRIMARY KEY (purpose, key));
         """)
+        cols = [r[1] for r in self.db.execute("PRAGMA table_info(accounts)")]
+        if "verified" not in cols:   # 이메일 확인을 거친 계정인지 (예전 계정은 0)
+            self.db.execute("ALTER TABLE accounts ADD COLUMN verified INTEGER NOT NULL DEFAULT 0")
         self.sent: dict[str, list[float]] = {}
         self.fails: dict[str, list[float]] = {}
         self.fail_lock = threading.Lock()
@@ -165,11 +171,36 @@ class AccountStore:
         return s
 
     # ── 가입·로그인 ──
-    def signup(self, email: str, password: str, device: str = "", link_code: str = "") -> dict:
+    def _taken(self, email: str) -> bool:
+        with self.lock:
+            return self.db.execute("SELECT 1 FROM accounts WHERE email = ?", (email,)).fetchone() is not None
+
+    def signup_start(self, email: str, ip: str = "") -> dict:
+        """가입 1단계: 이메일 확인 코드를 보낸다. 메일 서버가 없는 서버면 {verify: False} (확인 없이 가입)."""
+        email = normalize_email(email)
+        if not EMAIL.match(email):
+            raise AccountError("이메일 주소 모양이 아니에요.")
+        if self._taken(email):
+            raise AccountError("이미 가입된 이메일이에요. 로그인해 주세요.", 409)
+        if not self.mailer.enabled:
+            return {"verify": False}
+        self._limit_mail("signup", email, ip)
+        code = self._issue("signup", email)
+        self._mail(email, f"[필기 노트] 가입 확인 코드 {code}",
+                   f"필기 노트 가입 확인 코드: {code}\n\n"
+                   "앱의 가입 화면에 이 코드를 넣으면 가입이 끝나요.\n"
+                   f"코드는 {RESET_TTL // 60}분 동안만 쓸 수 있어요.\n\n"
+                   "직접 가입하려던 것이 아니라면 이 메일은 무시하세요. 가입되지 않아요.\n")
+        return {"verify": True}
+
+    def signup(self, email: str, password: str, device: str = "", link_code: str = "", code: str = "", ip: str = "") -> dict:
+        """가입 2단계 (메일 서버가 있으면 1단계에서 받은 코드가 필요)"""
         email = normalize_email(email)
         if not EMAIL.match(email):
             raise AccountError("이메일 주소 모양이 아니에요.")
         _check_new_password(password)
+        if self._taken(email):
+            raise AccountError("이미 가입된 이메일이에요. 로그인해 주세요.", 409)
         if link_code:
             space = space_id(link_code)
             if not self.sync.has_space(space):
@@ -180,17 +211,20 @@ class AccountStore:
                 raise AccountError("이 동기화 코드는 이미 다른 계정에 연결되어 있어요. 그 계정으로 로그인해 주세요.", 409)
         else:
             space = None
+        verified = 0
+        if self.mailer.enabled:
+            if not re.sub(r"\D", "", code or ""):
+                raise AccountError("이메일로 받은 6자리 확인 코드를 넣어 주세요.")
+            self._verify("signup", email, code, ip)
+            verified = 1
         pw = hash_password(password)
         aid = secrets.token_hex(12)
-        with self.lock:
-            if self.db.execute("SELECT 1 FROM accounts WHERE email = ?", (email,)).fetchone():
-                raise AccountError("이미 가입된 이메일이에요. 로그인해 주세요.", 409)
         if space is None:
             space = self.sync.create_space_id()
         with self.lock:
             try:
-                self.db.execute("INSERT INTO accounts (id, email, pw, space, created) VALUES (?, ?, ?, ?, ?)",
-                                (aid, email, pw, space, time.time()))
+                self.db.execute("INSERT INTO accounts (id, email, pw, space, created, verified) VALUES (?, ?, ?, ?, ?, ?)",
+                                (aid, email, pw, space, time.time(), verified))
             except Exception:
                 raise AccountError("이미 가입된 이메일이에요. 로그인해 주세요.", 409)
         return {"token": self._new_session(aid, device), "email": email}
@@ -230,7 +264,7 @@ class AccountStore:
         with self.lock:
             self.db.execute("UPDATE accounts SET pw = ? WHERE id = ?", (hash_password(new), s["account"]))
             self.db.execute("DELETE FROM sessions WHERE account = ? AND token != ?", (s["account"], s["token_hash"]))
-            self.db.execute("DELETE FROM resets WHERE account = ?", (s["account"],))
+            self.db.execute("DELETE FROM codes WHERE purpose = 'reset' AND key = ?", (s["account"],))
 
     def delete(self, token: str, password: str) -> None:
         """계정과 서버에 있던 노트(동기화 기록·원본 PDF)를 모두 지운다. 기기 안의 노트는 남는다."""
@@ -241,7 +275,7 @@ class AccountStore:
             raise AccountError("비밀번호가 맞지 않아요.", 401)
         with self.lock:
             self.db.execute("DELETE FROM sessions WHERE account = ?", (s["account"],))
-            self.db.execute("DELETE FROM resets WHERE account = ?", (s["account"],))
+            self.db.execute("DELETE FROM codes WHERE purpose = 'reset' AND key = ?", (s["account"],))
             self.db.execute("DELETE FROM accounts WHERE id = ?", (s["account"],))
         self.sync.delete_space(s["space"])
 
@@ -260,18 +294,58 @@ class AccountStore:
         with self.lock:
             self.db.execute("DELETE FROM sessions WHERE account = ? AND substr(token, 1, 16) = ?", (s["account"], sid))
 
-    # ── 비밀번호 찾기 (메일 코드) ──
-    def _limit_mail(self, email: str, ip: str) -> None:
+    # ── 메일 코드 (가입 확인·비밀번호 찾기) ──
+    def _limit_mail(self, purpose: str, email: str, ip: str) -> None:
         now = time.monotonic()
         with self.fail_lock:
-            mine = [t for t in self.sent.get(f"e:{email}", []) if now - t < 3600]
+            mine = [t for t in self.sent.get(f"e:{purpose}:{email}", []) if now - t < 3600]
             here = [t for t in self.sent.get(f"i:{ip}", []) if now - t < 3600]
             if mine and now - mine[-1] < RESET_GAP:
                 raise AccountError("코드 메일은 1분에 한 번 보낼 수 있어요. 잠시 뒤에 다시 해 주세요.", 429)
             if len(mine) >= RESET_PER_HOUR or len(here) >= RESET_PER_IP_HOUR:
                 raise AccountError("코드 메일을 너무 많이 요청했어요. 한 시간 뒤에 다시 해 주세요.", 429)
-            self.sent[f"e:{email}"] = mine + [now]
+            self.sent[f"e:{purpose}:{email}"] = mine + [now]
             self.sent[f"i:{ip}"] = here + [now]
+
+    def _issue(self, purpose: str, key: str) -> str:
+        """6자리 코드를 새로 만든다 (그 전 코드는 끝). 서버에는 해시만."""
+        code = f"{secrets.randbelow(10 ** 6):06d}"
+        salt = secrets.token_hex(8)
+        with self.lock:
+            self.db.execute("INSERT OR REPLACE INTO codes (purpose, key, code, expires, tries) VALUES (?, ?, ?, ?, 0)",
+                            (purpose, key, f"{salt}${hashlib.sha256((salt + code).encode()).hexdigest()}",
+                             time.time() + RESET_TTL))
+        return code
+
+    def _verify(self, purpose: str, key: str, code: str, ip: str) -> None:
+        """맞으면 코드를 지우고 지나간다. 틀리면(시간 지남·5번 틀림 포함) AccountError(401)."""
+        bad = AccountError("코드가 맞지 않거나 시간이 지났어요. 메일의 6자리 코드를 확인하거나 새 코드를 받아 주세요.", 401)
+        if self._throttled([(f"i:{ip}", FAIL_PER_IP)]):
+            raise AccountError("너무 여러 번 틀렸어요. 1분 뒤에 다시 해 주세요.", 429)
+        code = re.sub(r"\D", "", code or "")
+        with self.lock:
+            row = self.db.execute("SELECT code, expires, tries FROM codes WHERE purpose = ? AND key = ?",
+                                  (purpose, key)).fetchone()
+        if not row or row[1] < time.time() or row[2] >= RESET_TRIES:
+            self._failed([f"i:{ip}"])
+            raise bad
+        salt, want = row[0].split("$")
+        if len(code) != 6 or not hmac.compare_digest(hashlib.sha256((salt + code).encode()).hexdigest(), want):
+            with self.lock:
+                self.db.execute("UPDATE codes SET tries = tries + 1 WHERE purpose = ? AND key = ?", (purpose, key))
+            self._failed([f"i:{ip}"])
+            raise bad
+        with self.lock:
+            self.db.execute("DELETE FROM codes WHERE purpose = ? AND key = ?", (purpose, key))
+
+    def _mail(self, to: str, subject: str, text: str) -> None:
+        def send():
+            try:
+                self.mailer.send(to, subject, text)
+            except MailError as e:
+                self.mail_errors.append(str(e))
+
+        self.deliver(send)
 
     def forgot(self, email: str, ip: str = "") -> None:
         """비밀번호 찾기 코드를 메일로. 가입되지 않은 이메일이어도 같은 답(보내지는 않음)."""
@@ -280,54 +354,31 @@ class AccountStore:
         email = normalize_email(email)
         if not EMAIL.match(email):
             raise AccountError("이메일 주소 모양이 아니에요.")
-        self._limit_mail(email, ip)
+        self._limit_mail("reset", email, ip)
         with self.lock:
             row = self.db.execute("SELECT id FROM accounts WHERE email = ?", (email,)).fetchone()
         if not row:
             return
-        code = f"{secrets.randbelow(10 ** 6):06d}"
-        salt = secrets.token_hex(8)
-        with self.lock:
-            self.db.execute("INSERT OR REPLACE INTO resets (account, code, expires, tries) VALUES (?, ?, ?, 0)",
-                            (row[0], f"{salt}${hashlib.sha256((salt + code).encode()).hexdigest()}", time.time() + RESET_TTL))
-        text = (f"필기 노트 비밀번호 찾기 코드: {code}\n\n"
-                f"앱의 ☁️ 동기화 → '비밀번호를 잊었어요' 화면에 이 코드를 넣고 새 비밀번호를 정하세요.\n"
-                f"코드는 {RESET_TTL // 60}분 동안만 쓸 수 있어요.\n\n"
-                "직접 요청하지 않았다면 이 메일은 무시하세요. 비밀번호는 바뀌지 않아요.\n")
-
-        def send():
-            try:
-                self.mailer.send(email, f"[필기 노트] 비밀번호 찾기 코드 {code}", text)
-            except MailError as e:
-                self.mail_errors.append(str(e))
-
-        self.deliver(send)
+        code = self._issue("reset", row[0])
+        self._mail(email, f"[필기 노트] 비밀번호 찾기 코드 {code}",
+                   f"필기 노트 비밀번호 찾기 코드: {code}\n\n"
+                   "앱의 ☁️ 동기화 → '비밀번호를 잊었어요' 화면에 이 코드를 넣고 새 비밀번호를 정하세요.\n"
+                   f"코드는 {RESET_TTL // 60}분 동안만 쓸 수 있어요.\n\n"
+                   "직접 요청하지 않았다면 이 메일은 무시하세요. 비밀번호는 바뀌지 않아요.\n")
 
     def reset(self, email: str, code: str, new: str, device: str = "", ip: str = "") -> dict:
         """메일로 받은 코드로 새 비밀번호 정하기 → 모든 기기 로그아웃, 이 기기는 로그인"""
         _check_new_password(new)
         email = normalize_email(email)
-        bad = AccountError("코드가 맞지 않거나 시간이 지났어요. 메일의 6자리 코드를 확인하거나 새 코드를 받아 주세요.", 401)
-        if self._throttled([(f"i:{ip}", FAIL_PER_IP)]):
-            raise AccountError("너무 여러 번 틀렸어요. 1분 뒤에 다시 해 주세요.", 429)
-        code = re.sub(r"\D", "", code or "")
         with self.lock:
-            row = self.db.execute("SELECT r.account, r.code, r.expires, r.tries FROM resets r JOIN accounts a ON a.id = r.account "
-                                  "WHERE a.email = ?", (email,)).fetchone()
-        if not row or row[2] < time.time() or row[3] >= RESET_TRIES:
-            self._failed([f"i:{ip}"])
-            raise bad
-        account, stored, _, _ = row
-        salt, want = stored.split("$")
-        if len(code) != 6 or not hmac.compare_digest(hashlib.sha256((salt + code).encode()).hexdigest(), want):
-            with self.lock:
-                self.db.execute("UPDATE resets SET tries = tries + 1 WHERE account = ?", (account,))
-            self._failed([f"i:{ip}"])
-            raise bad
+            row = self.db.execute("SELECT id FROM accounts WHERE email = ?", (email,)).fetchone()
+        # 없는 이메일도 같은 답 (가입 여부가 드러나지 않게)
+        self._verify("reset", row[0] if row else f"none:{email}", code, ip)
+        account = row[0]
         with self.lock:
-            self.db.execute("UPDATE accounts SET pw = ? WHERE id = ?", (hash_password(new), account))
+            # 메일로 코드를 받았으니 이메일도 확인된 셈
+            self.db.execute("UPDATE accounts SET pw = ?, verified = 1 WHERE id = ?", (hash_password(new), account))
             self.db.execute("DELETE FROM sessions WHERE account = ?", (account,))
-            self.db.execute("DELETE FROM resets WHERE account = ?", (account,))
         with self.fail_lock:   # 비밀번호를 틀려 막혀 있었다면 풀어 준다
             self.fails.pop(f"e:{email}", None)
         return {"token": self._new_session(account, device), "email": email}
@@ -376,9 +427,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if a.cmd == "list":
             with store.lock:
-                rows = store.db.execute("SELECT email, created FROM accounts ORDER BY created").fetchall()
-            for email, created in rows:
-                print(f"{email}\t{time.strftime('%Y-%m-%d', time.localtime(created))}")
+                rows = store.db.execute("SELECT email, created, verified FROM accounts ORDER BY created").fetchall()
+            for email, created, verified in rows:
+                print(f"{email}\t{time.strftime('%Y-%m-%d', time.localtime(created))}\t{'이메일 확인됨' if verified else '이메일 확인 안 됨'}")
             return 0
         new = os.environ.get("PDFSUMMARY_NEW_PASSWORD") or getpass.getpass("새 비밀번호: ")
         store.reset_password(a.email, new)

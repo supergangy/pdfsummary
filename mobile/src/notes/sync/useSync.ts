@@ -24,9 +24,10 @@ export type SyncApi = {
   start: (code?: string) => Promise<void>; // code 없으면 새 공간 만들기
   stop: () => Promise<void>;
   // 계정으로
-  signup: (email: string, password: string) => Promise<void>;
+  signupStart: (email: string) => Promise<boolean>; // 가입 확인 코드 메일 (false면 이 서버는 확인 없이 가입)
+  signup: (email: string, password: string, code?: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
-  linkAccount: (email: string, password: string) => Promise<void>; // 지금 쓰는 동기화 코드를 새 계정으로 옮기기
+  linkAccount: (email: string, password: string, code?: string) => Promise<void>; // 지금 쓰는 동기화 코드를 새 계정으로 옮기기
   logout: () => Promise<void>;
   forgot: (email: string) => Promise<void>; // 비밀번호 찾기 코드 메일
   resetPassword: (email: string, code: string, password: string) => Promise<void>; // 코드로 새 비밀번호 → 로그인
@@ -172,16 +173,21 @@ export function useSync(store: SyncedStore, fs: Fs): SyncApi {
     await afterLogin(s, await new AccountApi(s.serverUrl, s.accessCode).reset(email, code, password));
   }, [afterLogin]);
 
-  const signup = useCallback(async (email: string, password: string) => {
+  const signupStart = useCallback(async (email: string) => {
     const s = await needServer();
-    const r = await new AccountApi(s.serverUrl, s.accessCode).signup(email, password);
+    return (await new AccountApi(s.serverUrl, s.accessCode).signupStart(email)).verify;
+  }, []);
+
+  const signup = useCallback(async (email: string, password: string, code?: string) => {
+    const s = await needServer();
+    const r = await new AccountApi(s.serverUrl, s.accessCode).signup(email, password, { code });
     await signedIn(s, r, false);
   }, [signedIn]);
 
-  const linkAccount = useCallback(async (email: string, password: string) => {
+  const linkAccount = useCallback(async (email: string, password: string, verifyCode?: string) => {
     const s = await needServer();
     if (!code) throw new Error("동기화 코드로 쓰고 있을 때만 옮길 수 있어요.");
-    const r = await new AccountApi(s.serverUrl, s.accessCode).signup(email, password, code);
+    const r = await new AccountApi(s.serverUrl, s.accessCode).signup(email, password, { linkCode: code, code: verifyCode });
     await signedIn(s, r, true); // 같은 공간이라 동기화 기록을 그대로 잇는다
   }, [code, signedIn]);
 
@@ -222,6 +228,7 @@ export function useSync(store: SyncedStore, fs: Fs): SyncApi {
     reload,
     start,
     stop: off,
+    signupStart,
     signup,
     login,
     linkAccount,

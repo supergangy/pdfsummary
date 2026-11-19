@@ -74,6 +74,22 @@ class SyncStore:
             self.db.execute("INSERT INTO spaces (id, created) VALUES (?, ?)", (space_id(code), time.time()))
         return code
 
+    def create_space_id(self) -> str:
+        """코드 없이 공간 만들기 (계정용: 계정이 공간을 가리킨다)"""
+        sid = secrets.token_hex(32)
+        with self.lock:
+            self.db.execute("INSERT INTO spaces (id, created) VALUES (?, ?)", (sid, time.time()))
+        return sid
+
+    def delete_space(self, sid: str) -> None:
+        """공간과 그 안의 작업·큰 파일을 모두 지운다 (계정 삭제)"""
+        import shutil
+
+        with self.lock:
+            self.db.execute("DELETE FROM ops WHERE space = ?", (sid,))
+            self.db.execute("DELETE FROM spaces WHERE id = ?", (sid,))
+        shutil.rmtree(self.root / "blobs" / sid[:32], ignore_errors=True)
+
     def has_space(self, sid: str) -> bool:
         with self.lock:
             return self.db.execute("SELECT 1 FROM spaces WHERE id = ?", (sid,)).fetchone() is not None

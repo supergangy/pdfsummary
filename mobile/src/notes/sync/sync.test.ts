@@ -241,3 +241,33 @@ test("sha256 matches Node", async () => {
     assert.equal(sha256(d), createHash("sha256").update(d).digest("hex"), `len ${n}`);
   }
 });
+
+test("joining with a stale copy: the server's newer content wins, device-only notes are uploaded", async () => {
+  const server = new FakeServer();
+  const A = await device(server);
+  const nb = blankNotebook("공유 노트", "plain", 1);
+  const pid = nb.pages[0].id;
+  await A.store.create(nb);
+  await A.store.savePage(nb.id, pid, [S("x")]);
+  await settle(A);
+  // B는 예전에 같은 노트의 사본을 받아 두었다 (동기화를 끈 사이 A가 고침)
+  const fs = memoryFs();
+  const B = new SyncedStore(fs);
+  await B.create(nb);
+  await B.savePage(nb.id, pid, [S("x")]);
+  const mine = blankNotebook("B에만 있는 노트", "lined", 1);
+  await B.create(mine);
+  await A.store.savePage(nb.id, pid, [S("x", 1, "#FF0000"), S("a2", 20)]);
+  await A.store.save({ ...(await A.store.load(nb.id))!, title: "공유 노트 (고침)" });
+  await settle(A);
+  // B가 다시 동기화를 켬
+  B.engine = new SyncEngine(fs, B, server.transport(), emptyState());
+  await B.engine.join(() => B.snapshotWrites());
+  await settle({ engine: B.engine }, A);
+  const a = await snapshot(A.store);
+  assert.deepEqual(await snapshot(B), a);
+  assert.equal((a[nb.id] as { title: string }).title, "공유 노트 (고침)");
+  const ink = (a[nb.id] as { ink: Record<string, Stroke[]> }).ink[pid];
+  assert.equal(ink.find((s) => s.id === "x")!.color, "#FF0000");
+  assert.ok(a[mine.id], "B에만 있던 노트가 A에도");
+});

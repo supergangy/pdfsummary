@@ -1,6 +1,8 @@
-// 실시간 동기화 시험 (실제 브라우저 두 개 = 기기 두 대, 실제 파이썬 서버):
+// 실시간 동기화 시험 (실제 브라우저 = 기기, 실제 파이썬 서버):
 //  A에서 동기화 시작 → B에서 코드로 연결 → A가 만든 노트·필기가 B에 → B가 쓴 필기가 열려 있는 A 화면에 바로
 //  → A가 가져온 PDF 교재도 B로.
+//  계정: A가 코드를 계정으로 옮김 → 새 기기 C가 이메일·비밀번호로 로그인 (틀린 비밀번호는 거절) → 노트·PDF를 받음
+//  → C의 필기가 코드로 쓰는 B에 → A가 C를 로그아웃시킴 → 그동안 C에서 쓴 필기는 다시 로그인하면 B에.
 //   npx expo export --platform web --output-dir dist-web && node e2e/sync.e2e.cjs dist-web
 const { chromium } = require("playwright");
 const { spawn, execFileSync } = require("child_process");
@@ -87,6 +89,7 @@ async function until(fn, ms, what) {
     const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 } });
     const page = await ctx.newPage();
     page.on("pageerror", (e) => errors.push(e.message));
+    page.on("dialog", (d) => d.accept());
     await page.goto(`http://127.0.0.1:${port}/`);
     await page.getByText("설정", { exact: true }).click();
     await page.waitForTimeout(800);
@@ -98,13 +101,14 @@ async function until(fn, ms, what) {
     await page.getByText("‹ 노트 목록").first().click();
     return page;
   };
-  let A, B;
+  let A, B, C;
   try {
     A = await open();
     B = await open();
 
     // A: 동기화 시작 → 코드
     await A.getByLabel("동기화 켜기").click();
+    await A.getByText("계정 없이 코드로").click();
     await A.getByText("새로 동기화 시작").click();
     const codeEl = A.getByLabel("동기화 코드", { exact: true });
     await codeEl.waitFor({ timeout: 10000 });
@@ -113,6 +117,7 @@ async function until(fn, ms, what) {
     await A.getByText("닫기").click();
     // B: 코드로 연결
     await B.getByLabel("동기화 켜기").click();
+    await B.getByText("계정 없이 코드로").click();
     await B.getByLabel("동기화 코드 넣기").fill(syncCode.toLowerCase());
     await B.getByText("코드로 연결").click();
     await B.getByText(/상태:/).waitFor({ timeout: 10000 });
@@ -165,10 +170,71 @@ async function until(fn, ms, what) {
     }, 20000, "A가 가져온 PDF가 B에");
     await B.getByLabel("book 열기").waitFor({ timeout: 5000 });
     console.log(`✓ A가 가져온 PDF 교재가 원본 파일째 B에 (${(ms3 / 1000).toFixed(1)}초)`);
+
+    // ── 계정 ──
+    const EMAIL = "e2e@example.com", PW = "e2e-password-1";
+    await A.getByLabel("노트 목록으로").click();
+    await A.getByLabel(/^동기화: /).click();
+    await A.getByLabel("계정 이메일").fill(EMAIL);
+    await A.getByLabel("계정 비밀번호").fill(PW);
+    await A.getByText("계정 만들고 옮기기").click();
+    await A.getByLabel("로그인한 계정").waitFor({ timeout: 10000 });
+    await A.getByText("닫기").click();
+    console.log("✓ A: 동기화 코드를 계정으로 옮김");
+
+    C = await open();
+    await C.getByLabel("동기화 켜기").click();
+    await C.getByLabel("계정 이메일").fill(EMAIL);
+    await C.getByLabel("계정 비밀번호").fill("wrong-password");
+    await C.getByRole("button", { name: "로그인", exact: true }).click();
+    await C.getByText("이메일이나 비밀번호가 맞지 않아요.").waitFor({ timeout: 10000 });
+    await C.getByLabel("계정 비밀번호").fill(PW);
+    await C.getByRole("button", { name: "로그인", exact: true }).click();
+    await C.getByLabel("로그인한 계정").waitFor({ timeout: 15000 });
+    await C.getByText("(이 기기)").waitFor({ timeout: 5000 });
+    await C.getByText("닫기").click();
+    const ms4 = await until(async () => {
+      const files = await idb(C);
+      return (await C.getByLabel("동기화 노트 열기").count()) > 0 && strokesOf(files) >= 2 &&
+        Object.entries(files).some(([k, v]) => k.endsWith("/source.pdf") && /^<blob [1-9]/.test(v));
+    }, 20000, "C가 로그인하자 노트·필기·PDF가");
+    console.log(`✓ 틀린 비밀번호는 거절, 맞는 비밀번호로 C 로그인 → 노트·필기·PDF가 C에 (${(ms4 / 1000).toFixed(1)}초)`);
+
+    const draw = async (P, y) => {
+      const cv = P.getByTestId("page-canvas");
+      const bx = await cv.boundingBox();
+      await P.mouse.move(bx.x + 150, bx.y + y);
+      await P.mouse.down();
+      for (let i = 1; i <= 15; i++) await P.mouse.move(bx.x + 150 + i * 10, bx.y + y + (i % 2 ? 10 : 0), { steps: 2 });
+      await P.mouse.up();
+    };
+    await C.getByLabel("동기화 노트 열기").click();
+    await C.getByTestId("page-canvas").waitFor({ timeout: 15000 });
+    await C.waitForTimeout(1200);
+    await draw(C, 300);
+    await until(async () => strokesOf(await idb(B)) >= 3, 15000, "계정으로 쓴 C의 필기가 코드로 쓰는 B에");
+    console.log("✓ 계정으로 로그인한 C의 필기가 코드로 연결된 B에도");
+
+    // A가 C를 로그아웃시킨다 (잃어버린 기기)
+    await A.getByLabel(/^동기화: /).click();
+    await A.getByLabel(/로그아웃시키기$/).click();
+    await until(async () => (await A.getByLabel(/로그아웃시키기$/).count()) === 0, 10000, "C가 목록에서 사라짐");
+    await A.getByText("닫기").click();
+    // 그동안 C에서 쓴 필기 → 보내지 못하고 '로그인이 끝남'
+    await draw(C, 520);
+    await C.getByLabel("노트 목록으로").click();
+    await C.getByLabel(/^동기화: /).click();
+    await C.getByText(/계정의 로그인이 끝났어요/).waitFor({ timeout: 15000 });
+    if (strokesOf(await idb(B)) !== 3) fail("로그아웃된 C의 필기가 서버로 감");
+    await C.getByLabel("계정 비밀번호").fill(PW);
+    await C.getByRole("button", { name: "다시 로그인" }).click();
+    await C.getByLabel("로그인한 계정").waitFor({ timeout: 15000 });
+    await until(async () => strokesOf(await idb(B)) >= 4, 15000, "다시 로그인한 C가 그동안 쓴 필기를 보냄");
+    console.log("✓ A가 C를 로그아웃시키면 C는 멈추고, 다시 로그인하면 그동안 쓴 필기를 이어서 보냄");
     if (errors.length) fail("페이지 오류: " + errors.join(" | "));
   } catch (e) {
-    for (const [n, p] of [["A", A], ["B", B]]) if (p) await p.screenshot({ path: path.join(TMP, `failure-${n}.png`) }).catch(() => {});
-    console.error("✗ " + e.message, `\n(화면: ${TMP}/failure-A.png, failure-B.png)`);
+    for (const [n, p] of [["A", A], ["B", B], ["C", C]]) if (p) await p.screenshot({ path: path.join(TMP, `failure-${n}.png`) }).catch(() => {});
+    console.error("✗ " + e.message, `\n(화면: ${TMP}/failure-A.png, failure-B.png, failure-C.png)`);
     process.exitCode = 1;
   } finally {
     await browser.close();

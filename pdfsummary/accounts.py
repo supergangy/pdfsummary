@@ -1,0 +1,292 @@
+"""필기 앱 계정 (서버 쪽): 이메일·비밀번호로 로그인하면 그 계정의 동기화 공간을 쓴다.
+
+- 비밀번호는 scrypt(무작위 소금)로만 둔다. 원래 비밀번호는 서버 어디에도 남지 않는다.
+- 로그인하면 기기마다 '세션 토큰'을 준다. 서버에는 토큰의 해시만 둔다.
+  기기는 동기화할 때 X-Session 헤더로 토큰을 보내고, 서버는 그 계정의 공간을 쓴다.
+- 비밀번호를 여러 번 틀리면 잠시 막는다.
+- 계정은 동기화 코드로 쓰던 공간을 그대로 이어받을 수 있다 (코드 → 계정으로 옮기기).
+- 메일 발송이 없으므로 비밀번호를 잊으면 서버 관리자가 바꿔 준다:
+    python -m pdfsummary.accounts reset-password 이메일   (PDFSUMMARY_SYNC_DIR이 서버와 같아야 함)
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import re
+import secrets
+import threading
+import time
+from typing import Optional
+
+from .sync import SyncStore, space_id
+
+EMAIL = re.compile(r"^[^@\s]{1,64}@[^@\s]+\.[^@\s]{2,}$")
+MIN_PASSWORD = 8
+MAX_PASSWORD = 200
+SESSION_IDLE = 180 * 24 * 3600   # 이만큼 안 쓴 세션은 끝남
+FAIL_WINDOW = 60.0
+FAIL_PER_EMAIL = 5
+FAIL_PER_IP = 30
+SCRYPT = {"n": 2 ** 14, "r": 8, "p": 1}
+
+
+class AccountError(ValueError):
+    """status: 400 잘못된 입력, 401 로그인 실패·세션 끝, 409 이미 있음, 429 너무 자주"""
+
+    def __init__(self, msg: str, status: int = 400):
+        super().__init__(msg)
+        self.status = status
+
+
+def normalize_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def hash_password(password: str, salt: Optional[bytes] = None) -> str:
+    salt = salt or secrets.token_bytes(16)
+    h = hashlib.scrypt(password.encode("utf-8"), salt=salt, dklen=32, maxmem=64 * 1024 * 1024, **SCRYPT)
+    return f"scrypt${SCRYPT['n']}${SCRYPT['r']}${SCRYPT['p']}${salt.hex()}${h.hex()}"
+
+
+def check_password(password: str, stored: str) -> bool:
+    try:
+        kind, n, r, p, salt, want = stored.split("$")
+        if kind != "scrypt":
+            return False
+        got = hashlib.scrypt(password.encode("utf-8"), salt=bytes.fromhex(salt), n=int(n), r=int(r), p=int(p),
+                             dklen=len(want) // 2, maxmem=64 * 1024 * 1024)
+    except (ValueError, TypeError):
+        return False
+    return hmac.compare_digest(got.hex(), want)
+
+
+_DUMMY = hash_password("not-a-real-password", b"0" * 16)
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256((token or "").encode()).hexdigest()
+
+
+def _check_new_password(pw: str) -> None:
+    if not isinstance(pw, str) or len(pw) < MIN_PASSWORD:
+        raise AccountError(f"비밀번호는 {MIN_PASSWORD}자 이상이어야 해요.")
+    if len(pw) > MAX_PASSWORD:
+        raise AccountError("비밀번호가 너무 길어요.")
+
+
+class AccountStore:
+    """동기화 저장소(sync.db) 안에 계정·세션 표를 둔다."""
+
+    def __init__(self, sync: SyncStore):
+        self.sync = sync
+        self.db = sync.db
+        self.lock = sync.lock
+        self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS accounts (
+                id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, pw TEXT NOT NULL,
+                space TEXT NOT NULL, created REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS sessions (
+                token TEXT PRIMARY KEY, account TEXT NOT NULL, device TEXT NOT NULL,
+                created REAL NOT NULL, used REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS sessions_account ON sessions (account);
+        """)
+        self.fails: dict[str, list[float]] = {}
+        self.fail_lock = threading.Lock()
+
+    # ── 틀린 횟수 ──
+    def _throttled(self, keys: list[tuple[str, int]]) -> bool:
+        now = time.monotonic()
+        with self.fail_lock:
+            for k, limit in keys:
+                xs = [t for t in self.fails.get(k, []) if now - t < FAIL_WINDOW]
+                self.fails[k] = xs
+                if len(xs) >= limit:
+                    return True
+        return False
+
+    def _failed(self, keys: list[str]) -> None:
+        now = time.monotonic()
+        with self.fail_lock:
+            for k in keys:
+                self.fails.setdefault(k, []).append(now)
+            if len(self.fails) > 10000:   # 오래된 것 정리
+                for k in [k for k, xs in self.fails.items() if not xs or now - xs[-1] > FAIL_WINDOW]:
+                    del self.fails[k]
+
+    # ── 세션 ──
+    def _new_session(self, account: str, device: str) -> str:
+        token = secrets.token_urlsafe(32)
+        now = time.time()
+        with self.lock:
+            self.db.execute("INSERT INTO sessions (token, account, device, created, used) VALUES (?, ?, ?, ?, ?)",
+                            (_token_hash(token), account, (device or "기기")[:80], now, now))
+        return token
+
+    def session(self, token: str) -> Optional[dict]:
+        """토큰 → {account, email, space}. 없거나 끝났으면 None."""
+        if not token:
+            return None
+        th = _token_hash(token)
+        now = time.time()
+        with self.lock:
+            row = self.db.execute(
+                "SELECT s.account, s.used, a.email, a.space, a.created FROM sessions s JOIN accounts a ON a.id = s.account "
+                "WHERE s.token = ?", (th,)).fetchone()
+            if not row:
+                return None
+            account, used, email, space, created = row
+            if now - used > SESSION_IDLE:
+                self.db.execute("DELETE FROM sessions WHERE token = ?", (th,))
+                return None
+            if now - used > 3600:   # 쓸 때마다 적지 않고 한 시간에 한 번만
+                self.db.execute("UPDATE sessions SET used = ? WHERE token = ?", (now, th))
+        return {"account": account, "email": email, "space": space, "created": created, "token_hash": th}
+
+    def _need(self, token: str) -> dict:
+        s = self.session(token)
+        if not s:
+            raise AccountError("로그인이 끝났어요. 다시 로그인해 주세요.", 401)
+        return s
+
+    # ── 가입·로그인 ──
+    def signup(self, email: str, password: str, device: str = "", link_code: str = "") -> dict:
+        email = normalize_email(email)
+        if not EMAIL.match(email):
+            raise AccountError("이메일 주소 모양이 아니에요.")
+        _check_new_password(password)
+        if link_code:
+            space = space_id(link_code)
+            if not self.sync.has_space(space):
+                raise AccountError("동기화 코드가 맞지 않아요.")
+            with self.lock:
+                taken = self.db.execute("SELECT 1 FROM accounts WHERE space = ?", (space,)).fetchone()
+            if taken:
+                raise AccountError("이 동기화 코드는 이미 다른 계정에 연결되어 있어요. 그 계정으로 로그인해 주세요.", 409)
+        else:
+            space = None
+        pw = hash_password(password)
+        aid = secrets.token_hex(12)
+        with self.lock:
+            if self.db.execute("SELECT 1 FROM accounts WHERE email = ?", (email,)).fetchone():
+                raise AccountError("이미 가입된 이메일이에요. 로그인해 주세요.", 409)
+        if space is None:
+            space = self.sync.create_space_id()
+        with self.lock:
+            try:
+                self.db.execute("INSERT INTO accounts (id, email, pw, space, created) VALUES (?, ?, ?, ?, ?)",
+                                (aid, email, pw, space, time.time()))
+            except Exception:
+                raise AccountError("이미 가입된 이메일이에요. 로그인해 주세요.", 409)
+        return {"token": self._new_session(aid, device), "email": email}
+
+    def login(self, email: str, password: str, device: str = "", ip: str = "") -> dict:
+        email = normalize_email(email)
+        keys = [(f"e:{email}", FAIL_PER_EMAIL), (f"i:{ip}", FAIL_PER_IP)]
+        if self._throttled(keys):
+            raise AccountError("비밀번호를 여러 번 틀렸어요. 1분 뒤에 다시 해 주세요.", 429)
+        with self.lock:
+            row = self.db.execute("SELECT id, pw FROM accounts WHERE email = ?", (email,)).fetchone()
+        # 없는 이메일도 같은 시간이 걸리게 (어떤 이메일이 가입됐는지 알아내지 못하게)
+        ok = check_password(password or "", row[1] if row else _DUMMY) and row is not None
+        if not ok:
+            self._failed([k for k, _ in keys])
+            raise AccountError("이메일이나 비밀번호가 맞지 않아요.", 401)
+        return {"token": self._new_session(row[0], device), "email": email}
+
+    def logout(self, token: str) -> None:
+        with self.lock:
+            self.db.execute("DELETE FROM sessions WHERE token = ?", (_token_hash(token),))
+
+    def me(self, token: str) -> dict:
+        s = self._need(token)
+        with self.lock:
+            n = self.db.execute("SELECT COUNT(*) FROM sessions WHERE account = ?", (s["account"],)).fetchone()[0]
+        return {"email": s["email"], "created": s["created"], "devices": n}
+
+    def change_password(self, token: str, old: str, new: str) -> None:
+        """비밀번호 바꾸기. 이 기기 말고 다른 기기는 모두 로그아웃된다."""
+        s = self._need(token)
+        _check_new_password(new)
+        with self.lock:
+            pw = self.db.execute("SELECT pw FROM accounts WHERE id = ?", (s["account"],)).fetchone()[0]
+        if not check_password(old or "", pw):
+            raise AccountError("지금 비밀번호가 맞지 않아요.", 401)
+        with self.lock:
+            self.db.execute("UPDATE accounts SET pw = ? WHERE id = ?", (hash_password(new), s["account"]))
+            self.db.execute("DELETE FROM sessions WHERE account = ? AND token != ?", (s["account"], s["token_hash"]))
+
+    def delete(self, token: str, password: str) -> None:
+        """계정과 서버에 있던 노트(동기화 기록·원본 PDF)를 모두 지운다. 기기 안의 노트는 남는다."""
+        s = self._need(token)
+        with self.lock:
+            pw = self.db.execute("SELECT pw FROM accounts WHERE id = ?", (s["account"],)).fetchone()[0]
+        if not check_password(password or "", pw):
+            raise AccountError("비밀번호가 맞지 않아요.", 401)
+        with self.lock:
+            self.db.execute("DELETE FROM sessions WHERE account = ?", (s["account"],))
+            self.db.execute("DELETE FROM accounts WHERE id = ?", (s["account"],))
+        self.sync.delete_space(s["space"])
+
+    def sessions(self, token: str) -> list[dict]:
+        s = self._need(token)
+        with self.lock:
+            rows = self.db.execute("SELECT token, device, created, used FROM sessions WHERE account = ? ORDER BY used DESC",
+                                   (s["account"],)).fetchall()
+        return [{"id": t[:16], "device": d, "created": c, "used": u, "current": t == s["token_hash"]} for t, d, c, u in rows]
+
+    def revoke(self, token: str, sid: str) -> None:
+        """로그인된 다른 기기를 로그아웃시키기 (잃어버린 기기 등)"""
+        s = self._need(token)
+        if not re.fullmatch(r"[0-9a-f]{16}", sid or ""):
+            raise AccountError("잘못된 요청입니다.")
+        with self.lock:
+            self.db.execute("DELETE FROM sessions WHERE account = ? AND substr(token, 1, 16) = ?", (s["account"], sid))
+
+    # ── 관리자 ──
+    def reset_password(self, email: str, new: str) -> None:
+        _check_new_password(new)
+        email = normalize_email(email)
+        with self.lock:
+            row = self.db.execute("SELECT id FROM accounts WHERE email = ?", (email,)).fetchone()
+            if not row:
+                raise AccountError("그런 계정이 없어요.", 404)
+            self.db.execute("UPDATE accounts SET pw = ? WHERE id = ?", (hash_password(new), row[0]))
+            self.db.execute("DELETE FROM sessions WHERE account = ?", (row[0],))
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    import getpass
+    import os
+    import sys
+    from pathlib import Path
+
+    p = argparse.ArgumentParser(prog="python -m pdfsummary.accounts", description="필기 앱 계정 관리 (서버 관리자용)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("reset-password", help="비밀번호를 잊은 사람의 비밀번호를 새로 정하기 (모든 기기 로그아웃)")
+    r.add_argument("email")
+    sub.add_parser("list", help="가입한 계정 목록")
+    a = p.parse_args(argv)
+    root = Path(os.environ.get("PDFSUMMARY_SYNC_DIR") or (Path.home() / ".pdfsummary" / "sync"))
+    store = AccountStore(SyncStore(root))
+    try:
+        if a.cmd == "list":
+            with store.lock:
+                rows = store.db.execute("SELECT email, created FROM accounts ORDER BY created").fetchall()
+            for email, created in rows:
+                print(f"{email}\t{time.strftime('%Y-%m-%d', time.localtime(created))}")
+            return 0
+        new = os.environ.get("PDFSUMMARY_NEW_PASSWORD") or getpass.getpass("새 비밀번호: ")
+        store.reset_password(a.email, new)
+        print("바꿨어요. 그 계정의 모든 기기가 로그아웃되었어요.")
+        return 0
+    except AccountError as e:
+        print(e, file=sys.stderr)
+        return 1
+    finally:
+        store.sync.close()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

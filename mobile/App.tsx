@@ -183,7 +183,7 @@ function Root() {
         onOpen={(id) => setScreen({ name: "editor", id })}
         onSummaryTool={() => setScreen({ name: "summary" })}
         onSettings={() => setScreen({ name: "summary", settings: true })}
-        syncStatus={sync.code ? sync.status : null}
+        syncStatus={sync.on ? sync.status : null}
         onSync={() => {
           void sync.reload();
           setSyncOpen(true);

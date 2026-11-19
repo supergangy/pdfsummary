@@ -1,8 +1,9 @@
-// 동기화 코드 보관 (기기 보안 저장소). 코드를 아는 사람은 노트를 볼 수 있으므로 비밀로.
+// 동기화 코드·로그인 세션 보관 (기기 보안 저장소). 아는 사람은 노트를 볼 수 있으므로 비밀로.
 import * as SecureStore from "expo-secure-store";
 
 const KEY = "pdfsummary.sync";
-export type SyncConfig = { code: string };
+/** 동기화 코드로 쓰거나(code), 계정으로 로그인해서 쓴다(token·email). 둘 다 비밀. */
+export type SyncConfig = { code?: string; token?: string; email?: string };
 
 export async function loadSyncConfig(): Promise<SyncConfig | null> {
   try {

@@ -261,6 +261,21 @@ def sync_store():
             _SYNC = SyncStore(Path(os.environ.get("PDFSUMMARY_SYNC_DIR") or (CONFIG_DIR / "sync")))
         return _SYNC
 
+
+_ACCOUNTS = None
+
+
+def account_store():
+    """계정·로그인 세션 (동기화 저장소와 같은 곳)"""
+    global _ACCOUNTS
+    st = sync_store()
+    with _SYNC_LOCK:
+        if _ACCOUNTS is None or _ACCOUNTS.sync is not st:
+            from .accounts import AccountStore
+
+            _ACCOUNTS = AccountStore(st)
+        return _ACCOUNTS
+
 RESULT_FILES = {
     "요약.html": "text/html; charset=utf-8",
     "요약.md": "text/markdown; charset=utf-8",
@@ -280,7 +295,7 @@ class Handler(BaseHTTPRequestHandler):
         # 서버 모드는 쿠키가 아니라 Authorization 헤더로 인증하므로 출처를 가리지 않아도 된다
         if STATE.server:
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Anthropic-Key, X-Sync-Space")
+            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Anthropic-Key, X-Sync-Space, X-Session")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 
     def do_OPTIONS(self):
@@ -356,10 +371,12 @@ class Handler(BaseHTTPRequestHandler):
 
                 return self._json({"server": True, "version": __version__, "server_key": has_credentials(),
                                    "max_upload_mb": STATE.max_upload // (1024 * 1024),
-                                   "keep_minutes": int(STATE.ttl // 60), "sync": True})
+                                   "keep_minutes": int(STATE.ttl // 60), "sync": True, "accounts": True})
             return self._json(key_state())
         if url.path.startswith("/api/sync/"):
             return self._sync_get(url.path, q)
+        if url.path.startswith("/api/account/"):
+            return self._account(url.path, {})
         if url.path.startswith("/api/job/") and url.path.endswith("/device-tasks"):
             job = STATE.jobs.get(url.path.split("/")[3])
             if not job or job.status != "done":
@@ -451,10 +468,12 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body_json(limit)
         if url.path == "/api/sync/space":
             return self._json({"code": sync_store().create_space()})
+        if url.path.startswith("/api/account/"):
+            return self._account(url.path, body)
         if url.path == "/api/sync/push":
             sid = self._sync_space()
             if not sid:
-                return self._err("동기화 코드가 맞지 않습니다.", 403)
+                return self._sync_denied()
             from .sync import SyncError
 
             try:
@@ -502,18 +521,63 @@ class Handler(BaseHTTPRequestHandler):
 
     # ── 실시간 동기화 ──
     def _sync_space(self):
+        """동기화할 공간: 로그인 세션(X-Session) 또는 동기화 코드(X-Sync-Space)"""
         from .sync import space_id
 
+        token = self.headers.get("X-Session") or ""
+        if token:
+            s = account_store().session(token)
+            return s["space"] if s else None
         code = self.headers.get("X-Sync-Space") or ""
         if not code:
             return None
         sid = space_id(code)
         return sid if sync_store().has_space(sid) else None
 
+    def _sync_denied(self):
+        if self.headers.get("X-Session"):
+            return self._err("로그인이 끝났어요. 다시 로그인해 주세요.", 401)
+        return self._err("동기화 코드가 맞지 않습니다.", 403)
+
+    # ── 계정 ──
+    def _account(self, path: str, body: dict):
+        from .accounts import AccountError
+
+        acc = account_store()
+        token = self.headers.get("X-Session") or ""
+        device = str(body.get("device") or "")[:80]
+        get = self.command == "GET"
+        try:
+            if path == "/api/account/signup" and not get:
+                return self._json(acc.signup(str(body.get("email") or ""), str(body.get("password") or ""), device,
+                                             str(body.get("link_code") or "")))
+            if path == "/api/account/login" and not get:
+                return self._json(acc.login(str(body.get("email") or ""), str(body.get("password") or ""), device,
+                                            self.client_address[0]))
+            if path == "/api/account/logout" and not get:
+                acc.logout(token)
+                return self._json({"ok": True})
+            if path == "/api/account/me" and get:
+                return self._json(acc.me(token))
+            if path == "/api/account/password" and not get:
+                acc.change_password(token, str(body.get("old") or ""), str(body.get("new") or ""))
+                return self._json({"ok": True})
+            if path == "/api/account/delete" and not get:
+                acc.delete(token, str(body.get("password") or ""))
+                return self._json({"ok": True})
+            if path == "/api/account/sessions" and get:
+                return self._json({"sessions": acc.sessions(token)})
+            if path == "/api/account/sessions/revoke" and not get:
+                acc.revoke(token, str(body.get("id") or ""))
+                return self._json({"ok": True})
+        except AccountError as e:
+            return self._err(str(e), e.status)
+        return self._err("없는 주소입니다.", 404)
+
     def _sync_get(self, path: str, q: dict):
         sid = self._sync_space()
         if not sid:
-            return self._err("동기화 코드가 맞지 않습니다.", 403)
+            return self._sync_denied()
         st = sync_store()
         if path == "/api/sync/info":
             return self._json({"ok": True, "last": st.last_seq(sid)})
@@ -546,7 +610,7 @@ class Handler(BaseHTTPRequestHandler):
 
         sid = self._sync_space()
         if not sid:
-            return self._err("동기화 코드가 맞지 않습니다.", 403)
+            return self._sync_denied()
         n = int(self.headers.get("Content-Length") or 0)
         if n <= 0 or n > STATE.max_upload:
             return self._err("파일이 비었거나 너무 큽니다.", 413)

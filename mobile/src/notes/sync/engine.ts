@@ -38,7 +38,7 @@ export type SyncState = {
   missingPdf: Record<string, string>; // 받아야 할 원본 PDF (노트 → 해시)
 };
 
-export type SyncStatus = { state: "off" | "syncing" | "synced" | "offline"; waiting: number; lastOk?: number; error?: string };
+export type SyncStatus = { state: "off" | "syncing" | "synced" | "offline"; waiting: number; lastOk?: number; error?: string; httpStatus?: number };
 
 const STATE_PATH = "sync/state.json";
 const MAX_WRITES_PER_OP = 400;
@@ -197,6 +197,22 @@ export class SyncEngine {
     }
   }
 
+  /**
+   * 동기화를 처음 켤 때(또는 다른 공간·계정으로 바꿀 때): 서버에 있는 것을 먼저 모두 받아 적용하고,
+   * 서버에 없는 것(이 기기에만 있던 노트·쪽·획)만 올린다.
+   * → 같은 노트의 오래된 사본이 이 기기에 남아 있어도 다른 기기의 새 내용을 덮어쓰지 않는다.
+   */
+  async join(snapshot: () => Promise<{ writes: Write[]; blobs: { sha: string; nb: string }[] }>): Promise<void> {
+    await this.pullOnce(0);
+    await this.lock(() => this.persist());
+    const snap = await snapshot();
+    const onServer = this.state.seqs;
+    const writes = snap.writes.filter((w) => !(wkey(w) in onServer));
+    const nbs = new Set(writes.filter((w) => w.t === "nb").map((w) => (w as { nb: string }).nb)); // 원본 PDF는 노트 정보와 함께
+    const blobs = snap.blobs.filter((b) => nbs.has(b.nb) && !this.state.missingPdf[b.nb]);
+    await this.record(writes, blobs);
+  }
+
   /** 시험용: 보내기와 받기를 한 번씩 (보낼 것이 없어질 때까지) */
   async syncOnce(): Promise<void> {
     while ((await this.pushOnce()) > 0);
@@ -245,10 +261,10 @@ export class SyncEngine {
         const n = await this.pushOnce();
         backoff = 1000;
         if (n) continue;
-        this.setStatus({ state: "synced", lastOk: Date.now(), error: undefined });
+        this.setStatus({ state: "synced", lastOk: Date.now(), error: undefined, httpStatus: undefined });
         await this.sleep(30000); // 새 쓰기가 생기면 kick으로 바로 깬다
       } catch (e) {
-        this.setStatus({ state: "offline", error: (e as Error).message });
+        this.setStatus({ state: "offline", error: (e as Error).message, httpStatus: (e as { status?: number }).status });
         await this.sleep(backoff);
         backoff = Math.min(backoff * 2, 30000);
       }
@@ -260,13 +276,13 @@ export class SyncEngine {
     while (this.running) {
       try {
         this.abort = new AbortController();
-        await this.pullOnce(25, this.abort.signal);
-        await this.fetchMissingPdfs();
+        await this.fetchMissingPdfs(); // 처음 켤 때(join) 받아 둔 노트의 PDF도 오래 기다리기 전에
+        if (await this.pullOnce(25, this.abort.signal)) await this.fetchMissingPdfs();
         backoff = 1000;
-        if (!this.state.outbox.length) this.setStatus({ state: "synced", lastOk: Date.now(), error: undefined });
+        if (!this.state.outbox.length) this.setStatus({ state: "synced", lastOk: Date.now(), error: undefined, httpStatus: undefined });
       } catch (e) {
         if (!this.running) return;
-        this.setStatus({ state: "offline", error: (e as Error).message });
+        this.setStatus({ state: "offline", error: (e as Error).message, httpStatus: (e as { status?: number }).status });
         await new Promise((r) => setTimeout(r, backoff));
         backoff = Math.min(backoff * 2, 30000);
       }

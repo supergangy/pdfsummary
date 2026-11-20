@@ -50,7 +50,8 @@
           "android": {
             "minSdkVersion": 26,
             "enableMinifyInReleaseBuilds": false,
-            "enableShrinkResourcesInReleaseBuilds": false
+            "enableShrinkResourcesInReleaseBuilds": false,
+            "useLegacyPackaging": true
           }
         }
       ]

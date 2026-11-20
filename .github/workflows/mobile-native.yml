@@ -1,7 +1,11 @@
 name: 앱 네이티브 빌드
 
 # 기기 안 AI 모듈(mobile/modules/device-ai)처럼 네이티브 코드가 들어간 앱을
-# 실제 Android·iOS 빌드 도구로 빌드해 본다 (컴파일 확인용, 서명·배포 없음).
+# 실제 Android·iOS 빌드 도구로 빌드해 본다.
+# 안드로이드는 갤럭시탭 등에 바로 설치할 수 있는 APK를 만들어 이 실행의 'Artifacts'에 올린다.
+#   - 앱 코드(JS)가 APK 안에 들어 있어 컴퓨터 없이 실행됨
+#   - 서명: 프로젝트 템플릿에 들어 있는 고정 키(android/app/debug.keystore) → 빌드마다 서명이 같아
+#     새 APK를 덮어 설치할 수 있다 (기기 안 노트 유지). 플레이 스토어에 올릴 때는 자기 키로 바꿔야 함.
 on:
   push:
     paths:
@@ -34,19 +38,37 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - run: npm ci
       - name: 네이티브 프로젝트 만들기
-        run: npx expo prebuild --platform android --no-install
-      - name: 빌드 (Debug, arm64)
+        env:
+          ANDROID_VERSION_CODE: ${{ github.run_number }}
+        run: |
+          npx expo prebuild --platform android --no-install
+          grep -n "versionCode" android/app/build.gradle
+      - name: 빌드 (설치용 APK, 64비트·32비트 ARM 태블릿·폰)
         working-directory: mobile/android
-        run: ./gradlew :app:assembleDebug --no-daemon -PreactNativeArchitectures=arm64-v8a
+        run: ./gradlew :app:assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
       - name: 우리 네이티브 모듈이 들어갔는지 (기기 안 AI, PDF 쪽, 손글씨 인식, Google 로그인)
         run: |
-          apk=$(ls android/app/build/outputs/apk/debug/*.apk | head -1)
+          apk=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
           unzip -l "$apk" | grep -q "classes" && echo "APK: $apk"
           grep -rn "minSdk" android/gradle.properties android/build.gradle android/app/build.gradle || true
           for m in deviceai/DeviceAiModule pdfpages/PdfPagesModule pdfpages/PageText inkrecognizer/InkRecognizerModule; do
             unzip -p "$apk" 'classes*.dex' | grep -a -q "expo/modules/$m" && echo "있음: $m" || (echo "APK에 없음: $m"; exit 1)
           done
           unzip -p "$apk" 'classes*.dex' | grep -a -q "com/reactnativegooglesignin/RNGoogleSigninModule" && echo "있음: Google 로그인" || (echo "APK에 없음: Google 로그인"; exit 1)
+          # 앱 코드(JS)가 APK 안에 들어 있어야 컴퓨터 없이 실행된다
+          unzip -l "$apk" | grep -q "assets/index.android.bundle" && echo "있음: 앱 코드(JS)" || (echo "APK에 앱 코드가 없음"; exit 1)
+          ls -la "$apk"
+      - name: APK 이름 붙이기
+        run: |
+          mkdir -p ../apk-out
+          cp android/app/build/outputs/apk/release/*.apk "../apk-out/pdfsummary-${{ github.run_number }}.apk"
+      - name: APK 올리기 (이 실행 화면의 Artifacts에서 받기)
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdfsummary-android-${{ github.run_number }}
+          path: apk-out/*.apk
+          retention-days: 30
+          if-no-files-found: error
 
   ios:
     runs-on: macos-26

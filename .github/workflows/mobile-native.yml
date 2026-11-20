@@ -73,6 +73,39 @@ jobs:
           unzip -l "$apk" | grep -q "assets/index.android.bundle" && echo "있음: 앱 코드(JS)" || (echo "APK에 앱 코드가 없음"; exit 1)
           ls -la "$apk"
 
+  android-smoke:
+    # 만든 APK를 안드로이드 에뮬레이터(64비트 x86, ARM 앱 번역 포함)에 설치해 실행해 본다
+    needs: android
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: pdfsummary-android-${{ github.run_number }}
+          path: apk
+      - name: KVM 켜기 (에뮬레이터 속도)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: 에뮬레이터에서 설치·실행
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          script: bash mobile/scripts/smoke-android.sh "$(ls apk/*.apk | head -1)" smoke
+      - name: 화면·기록 올리기
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-smoke-${{ github.run_number }}
+          path: smoke/
+          retention-days: 14
+
   ios:
     runs-on: macos-26
     timeout-minutes: 90

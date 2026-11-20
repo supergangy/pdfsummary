@@ -106,6 +106,40 @@ jobs:
           path: smoke/
           retention-days: 14
 
+  android-release:
+    # 에뮬레이터에서 켜지는 것까지 확인한 APK만 GitHub 릴리스로 올린다 → 로그인 없이 받는 고정 주소
+    #   https://github.com/<저장소>/releases/latest/download/pdfsummary.apk  (항상 가장 최근 것)
+    needs: android-smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pdfsummary-android-${{ github.run_number }}
+          path: apk
+      - name: 릴리스 만들기
+        env:
+          GH_TOKEN: ${{ github.token }}
+          N: ${{ github.run_number }}
+        run: |
+          cp apk/*.apk pdfsummary.apk
+          cat > notes.md <<EOF
+          갤럭시탭·안드로이드 폰에 바로 설치하는 APK (빌드 $N, 커밋 ${GITHUB_SHA::7}, 브랜치 ${GITHUB_REF_NAME}).
+          에뮬레이터(안드로이드 14)에 설치해 켜지고 첫 화면이 뜨는 것까지 확인한 파일입니다.
+
+          설치: 태블릿 브라우저로 pdfsummary.apk 받기 → 열기 → '출처를 알 수 없는 앱' 허용 → 설치.
+          새 버전은 그냥 설치하면 덮어 설치되고 기기 안 노트는 그대로 남습니다.
+          (프로젝트에 들어 있는 공용 시험 키로 서명됨. 플레이 스토어용이 아닙니다.)
+          EOF
+          gh release create "android-$N" pdfsummary.apk --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "필기 요약 안드로이드 (빌드 $N)" --notes-file notes.md --latest
+          # 자동으로 만든 예전 안드로이드 릴리스는 최근 5개만 남긴다
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName -q '.[].tagName' \
+            | grep -E '^android-[0-9]+$' | tail -n +6 \
+            | xargs -r -I{} gh release delete {} --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+          echo "받기: https://github.com/$GITHUB_REPOSITORY/releases/latest/download/pdfsummary.apk"
+
   ios:
     runs-on: macos-26
     timeout-minutes: 90

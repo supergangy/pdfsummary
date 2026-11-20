@@ -5,10 +5,11 @@
 
 ## 갤럭시탭·안드로이드에 설치하기 (APK)
 
-GitHub에 코드를 올릴 때마다 '앱 네이티브 빌드'가 설치용 APK를 만듭니다 (64비트·32비트 ARM, 앱 코드가 들어 있어 컴퓨터 없이 실행).
+GitHub에 코드를 올릴 때마다 '앱 네이티브 빌드'가 설치용 APK를 만들고, 에뮬레이터에 설치해 켜지는지 확인한 뒤 릴리스로 올립니다 (64비트·32비트 ARM, 앱 코드가 들어 있어 컴퓨터 없이 실행).
 
-1. 저장소의 **Actions → 앱 네이티브 빌드 →** 맨 위(가장 최근) 실행 → 아래 **Artifacts**의 `pdfsummary-android-번호`를 받습니다 (GitHub 로그인 필요, zip으로 받아짐).
-2. 태블릿의 **내 파일**에서 zip을 눌러 압축을 풀고, `pdfsummary-번호.apk`를 누릅니다.
+1. 태블릿 브라우저로 **https://github.com/supergangy/pdfsummary/releases/latest/download/pdfsummary.apk** 를 엽니다 (항상 가장 최근 것, 로그인 필요 없음).
+   에뮬레이터에서 켜지는 것까지 확인한 APK만 이 주소에 올라갑니다. 지난 빌드는 [Releases](https://github.com/supergangy/pdfsummary/releases) (최근 5개).
+2. 받은 `pdfsummary.apk`를 누릅니다.
 3. 처음이면 '출처를 알 수 없는 앱' 설치를 허용하라고 나옵니다 → **설정 → 이 출처 허용**을 켜고 설치.
 4. 새 버전은 같은 방법으로 받아 그냥 설치하면 덮어 설치되고, 기기 안 노트는 그대로 남습니다.
 

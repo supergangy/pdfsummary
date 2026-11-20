@@ -1,0 +1,6 @@
+{
+  "name": "stylus",
+  "version": "0.1.0",
+  "private": true,
+  "description": "S펜 등 스타일러스 옆 단추를 누르고 있는지 알려 주는 감싸개 (Android)"
+}

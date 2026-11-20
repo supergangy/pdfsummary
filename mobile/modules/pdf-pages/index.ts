@@ -9,6 +9,7 @@ export type PdfChar = [string, number, number, number, number];
 type Native = {
   infoAsync(uri: string): Promise<string>;
   textAsync(uri: string, index: number): Promise<string | null>;
+  ocrAsync?(uri: string, index: number, widthPx: number): Promise<string>;
   renderAsync(uri: string, index: number, widthPx: number, outPath: string): Promise<string>;
 };
 
@@ -27,9 +28,34 @@ export async function renderPage(uri: string, index: number, widthPx: number, ou
   return N.renderAsync(uri, index, Math.round(widthPx), outPath);
 }
 
-/** 쪽의 글자들. 이 기기에서 꺼낼 수 없으면 null (안드로이드 14 이하 등). */
-export async function pageText(uri: string, index: number): Promise<PdfChar[] | null> {
-  if (!N) return null;
-  const s = await N.textAsync(uri, index);
-  return s ? (JSON.parse(s) as PdfChar[]) : null;
+const hasText = (cs: PdfChar[] | null) => !!cs && cs.some((c) => c[0].trim());
+const cache = new Map<string, Promise<PdfChar[] | null>>();
+
+/** 쪽의 글자들. PDF 글자 층을 먼저 쓰고, 없으면(스캔본·안드로이드 14 이하) 글자 인식(OCR)으로 읽는다.
+ *  둘 다 안 되면 null. 같은 쪽은 한 번만 읽는다 (글자 인식은 쪽마다 1초쯤 걸림). */
+export function pageText(uri: string, index: number): Promise<PdfChar[] | null> {
+  if (!N) return Promise.resolve(null);
+  const key = `${uri}#${index}`;
+  let p = cache.get(key);
+  if (!p) {
+    p = (async () => {
+      let cs: PdfChar[] | null = null;
+      try {
+        const s = await N.textAsync(uri, index);
+        cs = s ? (JSON.parse(s) as PdfChar[]) : null;
+      } catch {
+        cs = null;
+      }
+      if (hasText(cs) || !N.ocrAsync) return cs;
+      try {
+        const o = JSON.parse(await N.ocrAsync(uri, index, 2200)) as PdfChar[];
+        return hasText(o) ? o : cs;
+      } catch {
+        return cs;
+      }
+    })();
+    cache.set(key, p);
+    if (cache.size > 60) cache.delete(cache.keys().next().value!);
+  }
+  return p;
 }

@@ -3,11 +3,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Modal, PixelRatio, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { pageText } from "../../modules/pdf-pages";
 import { useTheme } from "../ui";
-import { bounds, hitAlong, straighten, thin } from "./geometry";
-import { History, removal } from "./history";
+import { bounds, eraseFrom, fitHighlight, hitAlong, straighten, thin, type CharBox } from "./geometry";
+import { History, removal, type Op } from "./history";
 import {
-  HIGHLIGHT_COLORS, HIGHLIGHT_WIDTHS, PEN_COLORS, PEN_WIDTHS, TEXT_SIZES, insertPage, makeTextBox, newId, removePage,
+  HIGHLIGHT_COLORS, HIGHLIGHT_OPACITY, HIGHLIGHT_WIDTHS, PEN_COLORS, PEN_WIDTHS, PENS, TEXT_SIZES, insertPage, makeTextBox, newId, removePage,
   type Ink, type Notebook, type Paper, type Stroke,
 } from "./model";
 import { pageImage } from "./pageImage";
@@ -15,6 +16,7 @@ import { PageCanvas, type Selection, type ToolName, type ZoomCmd } from "./PageC
 import { PageGrid } from "./PageGrid";
 import { loadPrefs, savePrefs, type Prefs } from "./prefs";
 import { lassoSelect, moved, snapShape } from "./shapes";
+import { ToolPanel } from "./ToolPanel";
 import type { SyncedStore } from "./sync/syncedStore";
 import { applyToInk, applyToNotebook } from "./sync/writes";
 
@@ -38,6 +40,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
   const [zoom, setZoom] = useState<ZoomCmd>({ kind: "fit", n: 0 });
   const [bg, setBg] = useState<Record<number, { uri: string; w: number }>>({});
   const [menu, setMenu] = useState(false);
+  const [panel, setPanel] = useState(false); // 도구 설정 창
   const [grid, setGrid] = useState(false);
   const [selection, setSelection] = useState<Selection>(null);
   const [textEdit, setTextEdit] = useState<{ x: number; y: number; stroke?: Stroke } | null>(null);
@@ -196,14 +199,26 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
     }
     const hl = p.tool === "highlighter";
     let clean = thin(pts, 0.35);
+    let w = hl ? p.hlWidth : p.penWidth;
     if (hl && p.straight) clean = straighten(clean);
+    if (hl && p.hlFit && chars.current.page === page.id && chars.current.chars) {
+      // 글자 크기에 맞춰: 칠한 글줄의 높이·글자 끝에 맞춘다
+      const f = fitHighlight(clean, w, chars.current.chars);
+      if (f) {
+        clean = f.pts;
+        w = f.width;
+      }
+    }
     if (!hl && p.shapes) clean = snapShape(clean)?.pts ?? clean;
     const s: Stroke = {
       id: newId(),
       tool: hl ? "highlighter" : "pen",
       color: hl ? p.hlColor : p.penColor,
-      width: hl ? p.hlWidth : p.penWidth,
+      width: w,
       pts: clean.map((v) => Math.round(v * 100) / 100),
+      ...(hl
+        ? p.hlOpacity !== HIGHLIGHT_OPACITY ? { opacity: p.hlOpacity } : {}
+        : { ...(p.penBrush !== "fountain" ? { brush: p.penBrush } : {}), ...(p.penDash !== "solid" ? { dash: p.penDash } : {}) }),
     };
     setInk((k) => hist.current.run(k, { kind: "add", page: page.id, strokes: [s] }));
     touch(page.id);
@@ -211,24 +226,73 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefs, page, touch]);
 
-  // 지우개: 문지르는 동안 닿은 획을 감췄다가, 손을 떼면 한 번의 작업으로 지운다
+  // 지우개
+  //  - 획 지우개: 문지르는 동안 닿은 획을 감췄다가, 손을 떼면 한 번의 작업으로 지운다
+  //  - 영역 지우개: 문지른 자리만 지우고 획을 조각낸다 (바로 보이게), 손을 떼면 한 번의 작업으로 기록
   const erased = useRef(new Set<string>());
   const lastErase = useRef<[number, number] | null>(null);
+  const area = useRef<{ start: Ink; at: Map<string, number>; orig: Map<string, Stroke>; root: Map<string, string> } | null>(null);
   const onErase = useCallback((phase: 0 | 1 | 2, x: number, y: number, r: number) => {
-    if (!page) return;
+    if (!page || !prefs) return;
+    const canErase = (s: Stroke) => !prefs.eraserHlOnly || s.tool === "highlighter";
     if (phase === 0) {
       erased.current = new Set();
       lastErase.current = [x, y];
+      if (prefs.eraserMode === "area") {
+        const start = inkRef.current;
+        area.current = { start, at: new Map((start[page.id] ?? []).map((s, i) => [s.id, i])), orig: new Map(), root: new Map() };
+      }
     }
     if (phase === 0 || phase === 1) {
       const from = lastErase.current ?? [x, y];
-      const cur = (inkRef.current[page.id] ?? []).filter((s) => !erased.current.has(s.id));
-      const hit = hitAlong(cur, from[0], from[1], x, y, r);
       lastErase.current = [x, y];
+      const A = area.current;
+      if (prefs.eraserMode === "area" && A) {
+        const cur = inkRef.current[page.id] ?? [];
+        let changed = false;
+        const next: Stroke[] = [];
+        for (const s of cur) {
+          const pieces = canErase(s) ? eraseFrom(s, from[0], from[1], x, y, r, newId) : null;
+          if (!pieces) {
+            next.push(s);
+            continue;
+          }
+          changed = true;
+          const root = A.root.get(s.id) ?? s.id;
+          if (!A.orig.has(root)) A.orig.set(root, s);
+          for (const p of pieces) {
+            A.root.set(p.id, root);
+            next.push(p);
+          }
+        }
+        if (changed) {
+          const k = { ...inkRef.current, [page.id]: next };
+          inkRef.current = k;
+          setInk(k);
+        }
+        return;
+      }
+      const cur = (inkRef.current[page.id] ?? []).filter((s) => !erased.current.has(s.id) && canErase(s));
+      const hit = hitAlong(cur, from[0], from[1], x, y, r);
       if (hit.length) {
         for (const s of hit) erased.current.add(s.id);
         setHidden(new Set(erased.current));
       }
+      return;
+    }
+    const A = area.current;
+    area.current = null;
+    if (A) {
+      if (!A.orig.size) return;
+      // 처음 모습(start)에 '조각내기' 한 번으로 기록 → 되돌리기 한 번에 원래대로
+      const before = [...A.orig.values()].sort((p, q) => (A.at.get(p.id) ?? 0) - (A.at.get(q.id) ?? 0));
+      const after = (inkRef.current[page.id] ?? []).filter((s) => A.root.has(s.id));
+      const op: Op = { kind: "split", page: page.id, before, at: before.map((s) => A.at.get(s.id) ?? 0), after, from: after.map((s) => A.root.get(s.id)!) };
+      const k = hist.current.run(A.start, op);
+      inkRef.current = k;
+      setInk(k);
+      touch(page.id);
+      bump((v) => v + 1);
       return;
     }
     const op = removal(inkRef.current, page.id, erased.current);
@@ -239,7 +303,51 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
     }
     erased.current = new Set();
     setHidden(new Set());
-  }, [page, touch]);
+  }, [page, prefs, touch]);
+
+  // 이 쪽 손글씨 모두 지우기 (글상자 포함, 되돌리기 가능)
+  const clearPage = () => {
+    if (!page) return;
+    const all = inkRef.current[page.id] ?? [];
+    const go2 = () => {
+      const op = removal(inkRef.current, page.id, new Set(all.map((s) => s.id)));
+      if (op) {
+        setInk((k) => hist.current.run(k, op));
+        touch(page.id);
+        bump((v) => v + 1);
+      }
+      setPanel(false);
+    };
+    if (!all.length) return setPanel(false);
+    const msg = `이 쪽의 필기 ${all.length}개를 모두 지울까요? (되돌리기로 되살릴 수 있어요)`;
+    if (Platform.OS === "web") {
+      if (globalThis.confirm?.(msg) ?? true) go2();
+    } else {
+      Alert.alert("손글씨 모두 지우기", msg, [{ text: "취소", style: "cancel" }, { text: "지우기", style: "destructive", onPress: go2 }]);
+    }
+  };
+
+  // 형광펜 '글자 크기에 맞춰': 지금 쪽의 PDF 글자 상자 (없으면 글자 인식으로)
+  const chars = useRef<{ page: string; chars: CharBox[] | null }>({ page: "", chars: null });
+  const charCache = useRef(new Map<string, CharBox[] | null>());
+  useEffect(() => {
+    if (!page || page.pdf === undefined || !pdfUri || prefs?.tool !== "highlighter" || !prefs.hlFit) return;
+    const key = page.id;
+    if (charCache.current.has(key)) {
+      chars.current = { page: key, chars: charCache.current.get(key) ?? null };
+      return;
+    }
+    let alive = true;
+    pageText(pdfUri, page.pdf)
+      .then((c) => {
+        charCache.current.set(key, c);
+        if (alive) chars.current = { page: key, chars: c };
+      })
+      .catch(() => charCache.current.set(key, null));
+    return () => {
+      alive = false;
+    };
+  }, [page?.id, page?.pdf, pdfUri, prefs?.tool, prefs?.hlFit]);
 
   // ── 올가미: 고르기 · 옮기기 · 색 바꾸기 · 지우기 ───────────
   const selBox = (strokes: Stroke[]): [number, number, number, number] => {
@@ -249,10 +357,10 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
   const onLasso = useCallback((pts: number[]) => {
     if (!page) return;
     const cur = inkRef.current[page.id] ?? [];
-    const ids = lassoSelect(cur, pts);
+    const ids = lassoSelect(cur, pts, prefs?.lassoPartial ?? false);
     if (!ids.size) return setSelection(null);
     setSelection({ ids, box: selBox(cur.filter((s) => ids.has(s.id))) });
-  }, [page]);
+  }, [page, prefs?.lassoPartial]);
   const replaceSelected = (fn: (s: Stroke) => Stroke) => {
     if (!page || !selection) return;
     const before = (inkRef.current[page.id] ?? []).filter((s) => selection.ids.has(s.id));
@@ -425,6 +533,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
   const widths = tool === "highlighter" ? HIGHLIGHT_WIDTHS : PEN_WIDTHS;
   const color = tool === "highlighter" ? prefs.hlColor : prefs.penColor;
   const width = tool === "highlighter" ? prefs.hlWidth : prefs.penWidth;
+  /** 도구 고르기 — 이미 고른 도구를 한 번 더 누르면 설정 창 */
+  const pick = (next: ToolName) => (tool === next ? setPanel(true) : setP({ tool: next }));
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.card }} edges={["top", "left", "right"]}>
@@ -450,10 +560,10 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
       {/* 아랫줄: 도구 (좁으면 옆으로 밀어서) */}
       <View style={{ borderBottomWidth: 1, borderColor: t.line, backgroundColor: t.card }}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: "center", paddingHorizontal: 8, paddingVertical: 5, gap: 4 }} keyboardShouldPersistTaps="handled">
-          <ToolBtn label="✒️ 펜" on={tool === "pen"} onPress={() => setP({ tool: "pen" })} />
-          <ToolBtn label="🖍 형광펜" on={tool === "highlighter"} onPress={() => setP({ tool: "highlighter" })} />
-          <ToolBtn label="⌫ 지우개" on={tool === "eraser"} onPress={() => setP({ tool: "eraser" })} />
-          <ToolBtn label="➰ 올가미" on={tool === "lasso"} onPress={() => setP({ tool: "lasso" })} hint="둘러싸서 고르고 옮기기" />
+          <ToolBtn label={`✒️ ${PENS.find((x) => x.id === prefs.penBrush)?.label ?? "펜"}`} on={tool === "pen"} onPress={() => pick("pen")} hint="한 번 더 누르면 펜 설정" />
+          <ToolBtn label="🖍 형광펜" on={tool === "highlighter"} onPress={() => pick("highlighter")} hint="한 번 더 누르면 형광펜 설정" />
+          <ToolBtn label={prefs.eraserMode === "area" ? "⌫ 영역 지우개" : "⌫ 지우개"} on={tool === "eraser"} onPress={() => pick("eraser")} hint="한 번 더 누르면 지우개 설정" />
+          <ToolBtn label={prefs.lassoMode === "rect" ? "⬚ 올가미" : "➰ 올가미"} on={tool === "lasso"} onPress={() => pick("lasso")} hint="둘러싸서 고르고 옮기기, 한 번 더 누르면 설정" />
           <ToolBtn label="T 글상자" on={tool === "text"} onPress={() => setP({ tool: "text" })} hint="쪽을 누르면 글을 써 넣어요" />
           {tool === "text" && (
             <>
@@ -473,6 +583,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
               <Text style={{ color: t.muted, marginLeft: 6 }}>쪽을 누르면 글상자, 글상자를 누르면 고치기</Text>
             </>
           )}
+          {tool !== "text" && <Btn label="⚙︎" onPress={() => setPanel(true)} label2="도구 설정" />}
           {tool !== "eraser" && tool !== "lasso" && tool !== "text" && (
             <>
               <Sep />
@@ -531,6 +642,10 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
         tool={tool}
         color={color}
         width={width}
+        opacity={prefs.hlOpacity}
+        dash={prefs.penDash}
+        eraserPx={prefs.eraserSize}
+        lassoRect={prefs.lassoMode === "rect"}
         fingerDraw={prefs.fingerDraw}
         zoom={zoom}
         onStroke={onStroke}
@@ -583,6 +698,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
         </Pressable>
       </Modal>
 
+      <ToolPanel open={panel} prefs={prefs} setP={setP} onClearPage={clearPage} onClose={() => setPanel(false)} />
       <RenameDialog value={renaming} onDone={rename} />
       <TextDialog
         open={!!textEdit}

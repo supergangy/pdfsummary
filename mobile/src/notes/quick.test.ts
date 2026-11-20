@@ -71,3 +71,25 @@ test("sentence boundaries", () => {
   assert.equal(s.after, "문장이다.");
   assert.match(quickHtml({ title: "<t>", pages: [] }), /&lt;t&gt;/);
 });
+
+test("multi-line handwriting is split into lines (top to bottom, strokes in writing order)", async () => {
+  const { splitInkLines } = await import("./quick.ts");
+  const st = (id: string, x: number, y: number, w = 12, h = 14): Stroke => ({ id, tool: "pen", color: "#000000", width: 2, pts: [x, y, 0.5, x + w, y + h, 0.5] });
+  // "?" 하나가 위에 크게, 그 밑에 세 줄 (사진의 '안녕하세요 / 만나서 / 반가워요' 처럼)
+  const strokes = [
+    st("q", 10, 0, 20, 60),
+    st("l1a", 40, 80), st("l1b", 56, 78), st("l1c", 72, 82),
+    st("l2a", 60, 120), st("l2b", 78, 122),
+    st("l3a", 90, 160), st("dot", 104, 170, 2, 2), st("l3b", 110, 158),
+  ];
+  const lines = splitInkLines(strokes).map((l) => l.map((s) => s.id));
+  assert.deepEqual(lines, [["q"], ["l1a", "l1b", "l1c"], ["l2a", "l2b"], ["l3a", "dot", "l3b"]]);
+});
+
+test("a short flat line or a dot with no text under it is a mark, not handwriting", () => {
+  const dash: Stroke = { id: "d", tool: "pen", color: "#000000", width: 2, pts: [10, 50, 0.5, 40, 51, 0.5] };
+  const dot: Stroke = { id: "o", tool: "pen", color: "#000000", width: 2, pts: [200, 200, 0.5, 202, 201, 0.5] };
+  const items = analyzePage(0, [dash, dot], null);
+  assert.deepEqual(items.map((i) => i.kind), ["mark", "mark"]);
+  assert.match(quickHtml({ title: "t", pages: [{ page: 0, items }] }), /표시 2/);
+});

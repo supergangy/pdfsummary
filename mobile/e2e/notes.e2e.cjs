@@ -45,6 +45,30 @@ async function waitFor(url) {
   fail("server did not start: " + url);
 }
 
+// 기기 안(IndexedDB)의 노트 파일
+async function idb(page) {
+  return page.evaluate(() => new Promise((resolve, reject) => {
+    const req = indexedDB.open("pdfsummary-notes", 1);
+    req.onsuccess = () => {
+      const tx = req.result.transaction("files", "readonly").objectStore("files");
+      const out = {};
+      const cur = tx.openCursor();
+      cur.onsuccess = () => {
+        const c = cur.result;
+        if (!c) return resolve(out);
+        out[c.key] = typeof c.value === "string" ? c.value : null;
+        c.continue();
+      };
+    };
+    req.onerror = () => reject(req.error);
+  }));
+}
+/** 지금 노트들의 모든 획 */
+async function allStrokes(page) {
+  const files = await idb(page);
+  return Object.entries(files).filter(([k, v]) => /\/ink\//.test(k) && v).flatMap(([, v]) => JSON.parse(v));
+}
+
 (async () => {
   // 책 PDF와 칠할 글자 자리
   const book = path.join(TMP, "book.pdf");
@@ -94,6 +118,77 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await page.waitForTimeout(400);
     await page.getByLabel("되돌리기").click(); // 지운 것 되살리기
     await page.waitForTimeout(400);
+
+    // ── 도구 설정: 붓펜·파선 / 영역 지우개 / S펜 단추 지우개 ──
+    await page.getByText(/^✒️ /).click(); // 펜 고르기
+    await page.getByText(/^✒️ /).click(); // 한 번 더 → 설정 창
+    const panel = page.getByLabel("펜 설정", { exact: true });
+    await panel.waitFor({ timeout: 5000 });
+    await panel.getByLabel("붓펜", { exact: true }).click();
+    await panel.getByLabel("파선", { exact: true }).click();
+    await panel.getByLabel("닫기", { exact: true }).click();
+    const y3 = y0 + 420;
+    await page.mouse.move(x0, y3);
+    await page.mouse.down();
+    await page.mouse.move(x0 + 260, y3, { steps: 20 });
+    await page.mouse.up();
+    await page.waitForTimeout(1300);
+    let all = await allStrokes(page);
+    const fancy = all.find((st) => st.brush === "calligraphy" && st.dash === "dash");
+    if (!fancy) fail("붓펜·파선으로 그은 획이 그 설정으로 저장되지 않음: " + JSON.stringify(all.map((x) => [x.brush, x.dash])));
+    const before = all.length;
+    await page.getByText(/^⌫ /).click();
+    await page.getByText(/^⌫ /).click();
+    const ep = page.getByLabel("지우개 설정", { exact: true });
+    await ep.waitFor({ timeout: 5000 });
+    await ep.getByLabel("영역 지우개", { exact: true }).click();
+    await ep.getByLabel("닫기", { exact: true }).click();
+    await page.mouse.move(x0 + 130, y3 - 25);
+    await page.mouse.down();
+    await page.mouse.move(x0 + 130, y3 + 25, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(1300);
+    all = await allStrokes(page);
+    if (all.length !== before + 1) fail(`영역 지우개가 획을 둘로 나누지 않음 (${before} → ${all.length})`);
+    await page.getByLabel("되돌리기").click();
+    await page.waitForTimeout(1300);
+    if ((await allStrokes(page)).length !== before) fail("영역 지우개를 되돌리기로 한 번에 되살리지 못함");
+    // S펜(웹: 펜) 단추를 누른 채 문지르면 펜 도구여도 지우개 — 붓펜 획을 가로질러
+    await page.getByText(/^✒️ /).click();
+    // 진짜(신뢰된) 펜 입력(크롬 개발자 도구 입력): 펜을 대고 긋다가 옆 단추(buttons 2)를 누르면 그때부터 지우개.
+    // (단추를 누른 채 떠 있다가 닿는 경우는 웹 브라우저가 '오른쪽 단추 누름'으로 보내 그리기 자체가 시작되지 않는다 —
+    //  태블릿 앱은 네이티브 S펜 감싸개로 떠 있을 때부터 단추를 안다)
+    const cdp = await ctx.newCDPSession(page);
+    const pen = (type, x, y, button, buttons) => cdp.send("Input.dispatchMouseEvent", { type, x, y, button, buttons, pointerType: "pen", force: buttons & 1 ? 0.5 : 0, clickCount: type === "mouseMoved" ? 0 : 1 });
+    const px = x0 + 60;
+    await pen("mouseMoved", px, y3 - 60, "none", 0);
+    await pen("mousePressed", px, y3 - 50, "left", 1);
+    await pen("mouseMoved", px, y3 - 46, "left", 1);
+    await pen("mouseMoved", px, y3 - 42, "left", 3); // 단추 누름
+    await page.waitForTimeout(150);
+    for (let i = 1; i <= 16; i++) await pen("mouseMoved", px, y3 - 42 + i * 5, "left", 3);
+    await pen("mouseReleased", px, y3 + 40, "left", 2);
+    await pen("mouseMoved", px, y3 + 60, "none", 0);
+    await page.waitForTimeout(1300);
+    all = await allStrokes(page);
+    // 지우개(지금은 영역 지우개)였다면 가로 붓펜 획이 두 조각, 그냥 펜이었다면 세로 붓펜 획이 새로 생긴다
+    const cal = all.filter((st) => st.brush === "calligraphy");
+    const tall = (st) => {
+      const ys = st.pts.filter((_, i) => i % 3 === 1);
+      return Math.max(...ys) - Math.min(...ys) > 30;
+    };
+    if (cal.some(tall)) fail("펜 단추를 누른 채 문질렀는데 지우지 않고 새로 그어짐");
+    if (cal.length !== 2) fail(`펜 단추 지우개가 획을 나누지 않음 (붓펜 획 ${cal.length}개)`);
+    console.log("✓ 도구 설정: 붓펜·파선 저장, 영역 지우개로 획 나누기·한 번에 되돌리기, 펜 단추 누르고 문지르면 지우개");
+    await page.getByText(/^✒️ /).click();
+    const pp = page.getByLabel("펜 설정", { exact: true });
+    await pp.getByLabel("만년필", { exact: true }).click();
+    await pp.getByLabel("실선", { exact: true }).click();
+    await pp.getByLabel("닫기", { exact: true }).click();
+    await page.getByText(/^⌫ /).click();
+    await page.getByText(/^⌫ /).click();
+    await page.getByLabel("지우개 설정", { exact: true }).getByLabel("획 지우개", { exact: true }).click();
+    await page.getByLabel("지우개 설정", { exact: true }).getByLabel("닫기", { exact: true }).click();
     // 올가미로 그 획을 골라 아래로 250px 옮긴다
     await page.getByText("➰ 올가미").click();
     const lasso = [[x0 - 30, y0 - 30], [x0 + 230, y0 - 30], [x0 + 230, y0 + 50], [x0 - 30, y0 + 50], [x0 - 29, y0 - 29]];
@@ -113,7 +208,7 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await page.getByLabel("글상자 내용").fill("메모 시험: 효소는 촉매");
     await page.getByText("넣기", { exact: true }).click();
     await canvas.getByText("메모 시험: 효소는 촉매").waitFor({ timeout: 5000 });
-    await page.getByText("✒️ 펜").click();
+    await page.getByText(/^✒️ /).click();
     await page.getByLabel("노트 목록으로").click();
     await page.getByLabel("시험 노트 열기").click();
     await canvas.waitFor();
@@ -186,13 +281,22 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     const s = Math.min((b2.width - 24) / info.w, 6);
     const tx = 12 + Math.max(0, (b2.width - 24 - info.w * s) / 2), ty = 12;
     const [rx0, ry0, rx1, ry1] = info.r;
-    const yy = b2.y + ty + ((ry0 + ry1) / 2) * s;
+    // 글줄 가운데에서 조금 아래로 비껴 그어도 '글자 크기에 맞춰'가 글줄 높이·글자 끝에 맞춘다
+    const lineH = ry1 - ry0;
+    const yy = b2.y + ty + ((ry0 + ry1) / 2 + lineH * 0.3) * s;
     await page.getByText("🖍 형광펜").click();
-    await page.mouse.move(b2.x + tx + rx0 * s, yy);
+    await page.waitForTimeout(800); // 쪽 글자 상자를 읽을 시간
+    await page.mouse.move(b2.x + tx + (rx0 + 1) * s, yy);
     await page.mouse.down();
-    await page.mouse.move(b2.x + tx + rx1 * s, yy + 1, { steps: 12 });
+    await page.mouse.move(b2.x + tx + (rx1 - 1) * s, yy + 1, { steps: 12 });
     await page.mouse.up();
-    await page.waitForTimeout(600);
+    await page.waitForTimeout(1300);
+    const hl = (await allStrokes(page)).filter((st) => st.tool === "highlighter").pop();
+    const cy = (ry0 + ry1) / 2;
+    if (!hl || Math.abs(hl.pts[1] - cy) > 2 || hl.width < lineH * 0.8 || hl.width > lineH * 1.9) {
+      fail(`형광펜이 글줄에 맞춰지지 않음: y ${hl && hl.pts[1]} (글줄 가운데 ${cy.toFixed(1)}), 굵기 ${hl && hl.width} (글자 높이 ${lineH.toFixed(1)})`);
+    }
+    console.log(`✓ 형광펜 글자 크기에 맞춤: 글줄 가운데 ${hl.pts[1]} (기대 ${cy.toFixed(1)}), 굵기 ${hl.width} (글자 높이 ${lineH.toFixed(1)})`);
     await page.getByLabel("요약 만들기").click();
     // 먼저 기기에서 바로 만든 요약 (서버 없이): PDF 글자층에서 칠한 글자를 읽는다
     await page.getByText("✨ 서버로 자세히").waitFor({ timeout: 20000 });

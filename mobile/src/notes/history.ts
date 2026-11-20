@@ -4,7 +4,9 @@ import type { Ink, Stroke } from "./model.ts";
 export type Op =
   | { kind: "add"; page: string; strokes: Stroke[] }
   | { kind: "remove"; page: string; strokes: Stroke[]; at: number[] } // at: 지우기 전 자리
-  | { kind: "replace"; page: string; before: Stroke[]; after: Stroke[] }; // 같은 id의 획을 바꿔 끼움 (옮기기·색 바꾸기)
+  | { kind: "replace"; page: string; before: Stroke[]; after: Stroke[] } // 같은 id의 획을 바꿔 끼움 (옮기기·색 바꾸기)
+  // 영역 지우개: before 획들을 지우고 그 자리에 조각들(after, from = 어느 획에서 나왔는지)을 끼움
+  | { kind: "split"; page: string; before: Stroke[]; at: number[]; after: Stroke[]; from: string[] };
 
 function swap(ink: Ink, page: string, to: Stroke[]): Ink {
   const by = new Map(to.map((s) => [s.id, s]));
@@ -14,6 +16,15 @@ function swap(ink: Ink, page: string, to: Stroke[]): Ink {
 export function apply(ink: Ink, op: Op): Ink {
   const cur = ink[op.page] ?? [];
   if (op.kind === "replace") return swap(ink, op.page, op.after);
+  if (op.kind === "split") {
+    const gone = new Set(op.before.map((s) => s.id));
+    const out: Stroke[] = [];
+    for (const s of cur) {
+      if (!gone.has(s.id)) out.push(s);
+      else op.after.forEach((p, i) => op.from[i] === s.id && out.push(p));
+    }
+    return { ...ink, [op.page]: out };
+  }
   if (op.kind === "add") return { ...ink, [op.page]: [...cur, ...op.strokes] };
   const gone = new Set(op.strokes.map((s) => s.id));
   return { ...ink, [op.page]: cur.filter((s) => !gone.has(s.id)) };
@@ -55,6 +66,11 @@ export class History {
     if (!op) return { ink };
     this.redos.push(op);
     if (op.kind === "replace") return { ink: swap(ink, op.page, op.before), page: op.page };
+    if (op.kind === "split") {
+      const pieces = new Set(op.after.map((s) => s.id));
+      const without = { ...ink, [op.page]: (ink[op.page] ?? []).filter((s) => !pieces.has(s.id)) };
+      return { ink: restore(without, op.page, op.before, op.at), page: op.page };
+    }
     if (op.kind === "add") return { ink: apply(ink, { kind: "remove", page: op.page, strokes: op.strokes, at: [] }), page: op.page };
     return { ink: restore(ink, op.page, op.strokes, op.at), page: op.page };
   }

@@ -13,7 +13,8 @@ export function inside(x: number, y: number, poly: number[]): boolean {
 }
 
 /** 올가미(닫힌 선) 안에 점의 절반 이상이 든 획들 */
-export function lassoSelect(strokes: Stroke[], lasso: number[]): Set<string> {
+/** 올가미 안의 획. partial이면 조금이라도 걸친 것도, 아니면 거의 다(90%) 들어온 것만 (예전 기본은 절반) */
+export function lassoSelect(strokes: Stroke[], lasso: number[], partial?: boolean): Set<string> {
   const poly: number[] = [];
   for (let i = 0; i < lasso.length; i += 3) poly.push(lasso[i], lasso[i + 1]);
   const out = new Set<string>();
@@ -24,7 +25,8 @@ export function lassoSelect(strokes: Stroke[], lasso: number[]): Set<string> {
       k++;
       if (inside(s.pts[i], s.pts[i + 1], poly)) n++;
     }
-    if (k && n / k >= 0.5) out.add(s.id);
+    const need = partial === undefined ? 0.5 : partial ? 1e-9 : 0.9;
+    if (k && n / k >= need) out.add(s.id);
   }
   return out;
 }

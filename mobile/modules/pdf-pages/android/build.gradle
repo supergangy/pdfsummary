@@ -16,4 +16,6 @@ android {
 
 dependencies {
   implementation 'com.facebook.react:react-android'
+  // 글자 층이 없는 PDF(스캔본)나 안드로이드 14 이하에서 쪽 글자를 읽는 글자 인식 (한국어+영어, 기기 안 모델)
+  implementation 'com.google.mlkit:text-recognition-korean:16.0.1'
 }

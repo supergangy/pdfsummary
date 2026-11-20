@@ -6,7 +6,15 @@ import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import com.google.android.gms.tasks.Task
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import expo.modules.kotlin.exception.CodedException
+import expo.modules.kotlin.functions.Coroutine
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import org.json.JSONArray
@@ -38,6 +46,29 @@ class PdfPagesModule : Module() {
       }
     }
 
+    // 글자 인식(OCR)으로 쪽 글자와 글자 상자: 쪽을 크게 그려 ML Kit(한국어)으로 읽는다. textAsync와 같은 모양.
+    AsyncFunction("ocrAsync") Coroutine { uri: String, index: Int, widthPx: Int ->
+      val (bmp, pageW) = open(uri) { r ->
+        if (index < 0 || index >= r.pageCount) throw CodedException("ERR_PAGE", "${index + 1}쪽이 없어요.", null)
+        r.openPage(index).use { p ->
+          val w = widthPx.coerceIn(800, 3200)
+          val h = Math.max(1, Math.round(w.toDouble() * p.height / Math.max(1, p.width)).toInt())
+          val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+          b.eraseColor(Color.WHITE)
+          p.render(b, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+          Pair(b, p.width.toDouble())
+        }
+      }
+      val recognizer = TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
+      try {
+        val text = await(recognizer.process(InputImage.fromBitmap(bmp, 0)))
+        OcrText.json(text, pageW / bmp.width)
+      } finally {
+        recognizer.close()
+        bmp.recycle()
+      }
+    }
+
     AsyncFunction("renderAsync") { uri: String, index: Int, widthPx: Int, outPath: String ->
       open(uri) { r ->
         if (index < 0 || index >= r.pageCount) throw CodedException("ERR_PAGE", "${index + 1}쪽이 없어요.", null)
@@ -55,6 +86,11 @@ class PdfPagesModule : Module() {
         }
       }
     }
+  }
+
+  private suspend fun <T> await(task: Task<T>): T = suspendCancellableCoroutine { cont ->
+    task.addOnSuccessListener { cont.resume(it) }
+    task.addOnFailureListener { cont.resumeWithException(it) }
   }
 
   private fun file(s: String): File = if (s.startsWith("file://")) File(Uri.parse(s).path!!) else File(s)

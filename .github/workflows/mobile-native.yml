@@ -57,12 +57,12 @@ jobs:
           path: apk-out/*.apk
           retention-days: 30
           if-no-files-found: error
-      - name: 우리 네이티브 모듈이 들어갔는지 (기기 안 AI, PDF 쪽, 손글씨 인식, Google 로그인)
+      - name: 우리 네이티브 모듈이 들어갔는지 (기기 안 AI, PDF 쪽·글자 인식, 손글씨 인식, S펜 단추, Google 로그인)
         run: |
           apk=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
           unzip -l "$apk" | grep -q "classes" && echo "APK: $apk"
           grep -rn "minSdk" android/gradle.properties android/build.gradle android/app/build.gradle || true
-          for m in deviceai/DeviceAiModule pdfpages/PdfPagesModule pdfpages/PageText inkrecognizer/InkRecognizerModule; do
+          for m in deviceai/DeviceAiModule pdfpages/PdfPagesModule pdfpages/PageText pdfpages/OcrText inkrecognizer/InkRecognizerModule stylus/StylusView; do
             unzip -p "$apk" 'classes*.dex' | grep -a -q "expo/modules/$m" && echo "있음: $m" || {
               echo "APK에 없음: $m"; unzip -l "$apk" | grep dex
               unzip -p "$apk" 'classes*.dex' | grep -a -o "expo/modules/[a-z]*/[A-Za-z]*Module" | sort -u | head -40

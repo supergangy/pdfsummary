@@ -2,14 +2,15 @@
 //  - 형광펜 → 그 밑의 글자(와 그 글자가 든 문장)
 //  - 글자 바로 밑의 가로 펜 줄 → 밑줄 친 글자
 //  - 글자를 둘러싼 닫힌 고리 → 동그라미 친 글자
-//  - 나머지 펜 획 묶음 → 손글씨 (획 그림 그대로, 글자 인식이 되면 그 글도)
-import { bounds, strokeSvg, type Box } from "./geometry.ts";
+//  - 나머지 펜 획 묶음 → 손글씨 (획 그림 그대로, 글자 인식이 되면 그 글도. 여러 줄이면 줄마다 따로 읽는다)
+//  - 글자가 없는 곳의 짧은 가로줄·점 → 표시 (손글씨로 읽지 않음)
+import { bounds, strokeDraw, type Box } from "./geometry.ts";
 import type { Ink, Notebook, Stroke } from "./model.ts";
 
 /** 글자 하나와 상자 (화면 쪽 좌표). "\n"은 줄바꿈. */
 export type PdfChar = [string, number, number, number, number];
 
-export type QuickKind = "highlight" | "underline" | "circle" | "handwriting" | "memo";
+export type QuickKind = "highlight" | "underline" | "circle" | "handwriting" | "memo" | "mark";
 
 export type QuickItem = {
   page: number; // 0부터
@@ -132,6 +133,42 @@ export function clusterStrokes(strokes: Stroke[], gap = 14): Stroke[][] {
   return groups.map((g) => g.ss);
 }
 
+/** 손글씨 묶음을 줄로 나눈다 (손글씨 인식기는 한 줄씩 읽어야 정확하다).
+ *  세로로 겹치는 획끼리 한 줄, 줄은 위에서부터, 줄 안의 획은 쓴 차례 그대로. */
+export function splitInkLines(strokes: Stroke[]): Stroke[][] {
+  const lines: { y0: number; y1: number; ss: Stroke[] }[] = [];
+  const order = new Map(strokes.map((s, i) => [s, i]));
+  // 큰 획부터 줄을 잡아야 작은 점·삐침이 엉뚱한 줄을 만들지 않는다
+  const bySize = [...strokes].sort((a, b) => {
+    const A = bounds(a), B = bounds(b);
+    return B[3] - B[1] - (A[3] - A[1]);
+  });
+  for (const s of bySize) {
+    const [, y0, , y1] = bounds(s);
+    const h = Math.max(1, y1 - y0);
+    let best: (typeof lines)[number] | null = null;
+    let bestOverlap = 0;
+    for (const l of lines) {
+      const overlap = Math.min(y1, l.y1) - Math.max(y0, l.y0);
+      const ratio = overlap / Math.min(h, Math.max(1, l.y1 - l.y0));
+      if (ratio > bestOverlap) {
+        bestOverlap = ratio;
+        best = l;
+      }
+    }
+    if (best && bestOverlap >= 0.35) {
+      best.ss.push(s);
+      best.y0 = Math.min(best.y0, y0);
+      best.y1 = Math.max(best.y1, y1);
+    } else {
+      lines.push({ y0, y1, ss: [s] });
+    }
+  }
+  return lines
+    .sort((a, b) => a.y0 - b.y0)
+    .map((l) => l.ss.sort((a, b) => order.get(a)! - order.get(b)!));
+}
+
 const boxOf = (ss: Stroke[]): Box => {
   const bs = ss.map(bounds);
   return [Math.min(...bs.map((b) => b[0])), Math.min(...bs.map((b) => b[1])), Math.max(...bs.map((b) => b[2])), Math.max(...bs.map((b) => b[3]))];
@@ -199,6 +236,12 @@ export function analyzePage(page: number, strokes: Stroke[], chars: PdfChar[] | 
         continue;
       }
     }
+    // 글씨가 아닌 짧은 줄·점(밑줄인데 밑에 글자를 못 찾음 등)은 손글씨로 읽지 않는다
+    const tiny = box[2] - box[0] < 8 && box[3] - box[1] < 8;
+    if (tiny || (group.length <= 2 && group.every(isFlat))) {
+      items.push({ page, kind: "mark", color, text: "", box, strokes: group });
+      continue;
+    }
     items.push({ page, kind: "handwriting", color, text: "", box, strokes: group });
   }
 
@@ -257,15 +300,19 @@ export function overviewPrompt(q: QuickSummary, limit = 1600): { instructions: s
 // ── HTML ──────────────────────────────────────────────────────────────
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
-const LABEL: Record<QuickKind, string> = { highlight: "형광펜", underline: "밑줄", circle: "동그라미", handwriting: "손글씨", memo: "메모" };
+const LABEL: Record<QuickKind, string> = { highlight: "형광펜", underline: "밑줄", circle: "동그라미", handwriting: "손글씨", memo: "메모", mark: "표시" };
 
 function inkSvg(it: QuickItem): string {
   const [x0, y0, x1, y1] = it.box;
   const w = Math.max(1, x1 - x0), h = Math.max(1, y1 - y0);
   const paths = it.strokes
-    .map((s) => s.tool === "pen"
-      ? `<path d="${strokeSvg(s)}" fill="${s.color}"/>`
-      : `<path d="${strokeSvg(s)}" fill="none" stroke="${s.color}" stroke-width="${s.width}" stroke-opacity="0.38"/>`)
+    .map((s) => {
+      const d = strokeDraw(s);
+      if (!d) return "";
+      if (d.kind === "fill") return `<path d="${d.d}" fill="${s.color}" fill-opacity="${d.alpha}"/>`;
+      const dash = d.dash ? ` stroke-dasharray="${d.dash.join(" ")}"` : "";
+      return `<path d="${d.d}" fill="none" stroke="${s.color}" stroke-width="${d.width}" stroke-opacity="${d.alpha}" stroke-linecap="${d.cap}"${dash}/>`;
+    })
     .join("");
   const scale = Math.min(1.6, 520 / w);
   return `<svg class="ink" viewBox="${x0 - 4} ${y0 - 4} ${w + 8} ${h + 8}" width="${Math.round((w + 8) * scale)}" height="${Math.round((h + 8) * scale)}">${paths}</svg>`;
@@ -273,7 +320,7 @@ function inkSvg(it: QuickItem): string {
 
 export function quickHtml(q: QuickSummary): string {
   const count = (k: QuickKind) => q.pages.reduce((n, p) => n + p.items.filter((i) => i.kind === k).length, 0);
-  const stats = (["highlight", "underline", "circle", "handwriting", "memo"] as QuickKind[]).filter((k) => count(k)).map((k) => `${LABEL[k]} ${count(k)}`).join(" · ");
+  const stats = (["highlight", "underline", "circle", "handwriting", "memo", "mark"] as QuickKind[]).filter((k) => count(k)).map((k) => `${LABEL[k]} ${count(k)}`).join(" · ");
   const body = q.pages.map(({ page, items }) => {
     const rows = items.map((it) => {
       let main: string;
@@ -285,7 +332,7 @@ export function quickHtml(q: QuickSummary): string {
       } else {
         main = "";
       }
-      const pic = it.kind === "handwriting" || (!it.text && it.kind !== "memo") ? inkSvg(it) : "";
+      const pic = it.kind === "handwriting" || it.kind === "mark" || (!it.text && it.kind !== "memo") ? inkSvg(it) : "";
       return `<li style="border-left-color:${it.color}">${main}${pic}<small>${LABEL[it.kind]}</small></li>`;
     }).join("");
     return `<section><h2>${page + 1}쪽</h2><ul>${rows}</ul></section>`;

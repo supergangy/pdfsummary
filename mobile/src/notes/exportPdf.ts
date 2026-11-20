@@ -3,8 +3,8 @@
 import fontkit from "@pdf-lib/fontkit";
 import { BlendMode, LineCapStyle, PDFDocument, degrees, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 
-import { penOutline } from "./geometry.ts";
-import { HIGHLIGHT_OPACITY, type Ink, type Notebook, type Paper, type Stroke } from "./model.ts";
+import { penOutline, strokeDraw } from "./geometry.ts";
+import { type Ink, type Notebook, type Paper, type Stroke } from "./model.ts";
 
 type Box = { x: number; y: number; width: number; height: number };
 
@@ -36,10 +36,12 @@ function svgUser(points: number[][], crop: Box, rot: number, close: boolean): st
 }
 
 function drawStroke(page: PDFPage, s: Stroke, crop: Box, rot: number) {
-  if (s.tool === "pen") {
+  const draw = strokeDraw(s);
+  if (!draw) return;
+  if (draw.kind === "fill") {
     const outline = penOutline(s);
     if (outline.length < 3) return;
-    page.drawSvgPath(svgUser(outline, crop, rot, true), { x: 0, y: 0, color: hex(s.color), borderWidth: 0 });
+    page.drawSvgPath(svgUser(outline, crop, rot, true), { x: 0, y: 0, color: hex(s.color), opacity: draw.alpha, borderWidth: 0 });
     return;
   }
   const pts: number[][] = [];
@@ -49,10 +51,11 @@ function drawStroke(page: PDFPage, s: Stroke, crop: Box, rot: number) {
     x: 0,
     y: 0,
     borderColor: hex(s.color),
-    borderWidth: s.width,
-    borderOpacity: HIGHLIGHT_OPACITY,
-    borderLineCap: LineCapStyle.Butt,
-    blendMode: BlendMode.Multiply,
+    borderWidth: draw.width,
+    borderOpacity: draw.alpha,
+    borderLineCap: draw.cap === "butt" ? LineCapStyle.Butt : LineCapStyle.Round,
+    ...(draw.dash ? { borderDashArray: draw.dash, borderDashPhase: 0 } : {}),
+    blendMode: draw.multiply ? BlendMode.Multiply : BlendMode.Normal,
   });
 }
 

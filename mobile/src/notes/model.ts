@@ -3,6 +3,11 @@
 
 export type InkTool = "pen" | "highlighter" | "text";
 
+/** 펜 종류 (없으면 만년필 — 예전 노트 그대로) */
+export type PenBrush = "ballpoint" | "fountain" | "calligraphy" | "pencil" | "brush";
+/** 선 모양 (없으면 실선) */
+export type LineDash = "solid" | "dash" | "dot";
+
 export type Stroke = {
   id: string;
   tool: InkTool;
@@ -10,7 +15,18 @@ export type Stroke = {
   width: number; // pt (글상자는 글자 크기)
   pts: number[]; // x, y, 필압(0~1) 이 차례로 반복. 글상자는 [왼쪽, 위, 0, 오른쪽, 아래, 0]
   text?: string; // 글상자의 글
+  brush?: PenBrush; // 펜만
+  dash?: LineDash; // 펜만
+  opacity?: number; // 형광펜만 (0~1, 없으면 HIGHLIGHT_OPACITY)
 };
+
+export const PENS: { id: PenBrush; label: string; hint: string }[] = [
+  { id: "ballpoint", label: "볼펜", hint: "굵기가 고른 선" },
+  { id: "fountain", label: "만년필", hint: "누르는 힘에 따라 굵기가 변함" },
+  { id: "calligraphy", label: "붓펜", hint: "긋는 방향에 따라 굵기가 변하는 납작한 펜촉" },
+  { id: "pencil", label: "연필", hint: "얇고 옅은 선" },
+  { id: "brush", label: "붓", hint: "누르면 굵어지고 끝이 가늘어짐" },
+];
 
 export const TEXT_SIZES = [12, 16, 22];
 
@@ -40,10 +56,14 @@ export type Ink = Record<string, Stroke[]>; // 쪽 id → 획들
 
 export const A4 = { w: 595.28, h: 841.89 };
 
-export const PEN_COLORS = ["#1F2328", "#1E4FD8", "#D7263D", "#0F8A5F", "#7A3EC8", "#E67E22"];
-export const HIGHLIGHT_COLORS = ["#FFE14D", "#FF9EC7", "#8FE38F", "#7FD3FF", "#FFB86B"];
-export const PEN_WIDTHS = [1.2, 2, 3.2];
+export const PEN_COLORS = ["#1F2328", "#1E4FD8", "#D7263D", "#0F8A5F", "#7A3EC8", "#E67E22", "#6B7280", "#0EA5E9", "#EC4899", "#8B5A2B", "#C9A100", "#FFFFFF"];
+export const HIGHLIGHT_COLORS = ["#FFE14D", "#FF9EC7", "#8FE38F", "#7FD3FF", "#FFB86B", "#C9A7FF", "#FF7B7B", "#BDBDBD"];
+export const PEN_WIDTHS = [1.2, 2, 3.2]; // 도구 모음의 빠른 고르기
 export const HIGHLIGHT_WIDTHS = [10, 14, 20];
+/** 설정 창의 굵기 단계 (pt) */
+export const PEN_WIDTH_STEPS = [0.6, 0.9, 1.2, 1.6, 2, 2.6, 3.2, 4, 5, 6.5, 8];
+export const HIGHLIGHT_WIDTH_STEPS = [6, 8, 10, 12, 14, 17, 20, 24, 28, 34];
+export const HIGHLIGHT_OPACITY_STEPS = [0.2, 0.28, 0.38, 0.5, 0.62, 0.75];
 export const HIGHLIGHT_OPACITY = 0.38;
 
 let counter = 0;

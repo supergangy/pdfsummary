@@ -1,44 +1,47 @@
 // 획·속지를 Skia 그림(Picture)으로. 필기 화면과 쪽 모아보기가 함께 쓴다.
 import { BlendMode, PaintStyle, Skia, StrokeCap, StrokeJoin, createPicture, type SkPath } from "@shopify/react-native-skia";
 
-import { strokeSvg } from "./geometry";
-import { HIGHLIGHT_OPACITY, type Page, type Stroke } from "./model";
+import { strokeDraw, type StrokeDraw } from "./geometry";
+import type { Page, Stroke } from "./model";
 
-/** 획 객체마다 경로를 기억한다 (옮기거나 바꾼 획은 새 객체라 다시 만든다) */
-export type PathCache = WeakMap<Stroke, SkPath | null>;
+/** 획 객체마다 그리는 방법과 경로를 기억한다 (옮기거나 바꾼 획은 새 객체라 다시 만든다) */
+export type PathCache = WeakMap<Stroke, { draw: StrokeDraw; path: SkPath } | null>;
 
 export function inkPicture(strokes: Stroke[], hidden: Set<string>, w: number, h: number, cache: PathCache) {
   const get = (s: Stroke) => {
-    if (!cache.has(s)) cache.set(s, Skia.Path.MakeFromSVGString(strokeSvg(s)));
+    if (!cache.has(s)) {
+      const draw = strokeDraw(s);
+      const path = draw?.d ? Skia.Path.MakeFromSVGString(draw.d) : null;
+      cache.set(s, draw && path ? { draw, path } : null);
+    }
     return cache.get(s) ?? null;
   };
   return createPicture((c) => {
-    const hl = Skia.Paint();
-    hl.setStyle(PaintStyle.Stroke);
-    hl.setStrokeCap(StrokeCap.Butt);
-    hl.setStrokeJoin(StrokeJoin.Round);
-    hl.setBlendMode(BlendMode.Multiply);
-    hl.setAntiAlias(true);
-    const pen = Skia.Paint();
-    pen.setStyle(PaintStyle.Fill);
-    pen.setAntiAlias(true);
+    const paint = Skia.Paint();
+    paint.setAntiAlias(true);
+    const paintOne = (s: Stroke) => {
+      const g = get(s);
+      if (!g) return;
+      const { draw, path } = g;
+      paint.setColor(Skia.Color(s.color));
+      paint.setAlphaf(draw.alpha);
+      paint.setPathEffect(null);
+      if (draw.kind === "fill") {
+        paint.setStyle(PaintStyle.Fill);
+        paint.setBlendMode(BlendMode.SrcOver);
+      } else {
+        paint.setStyle(PaintStyle.Stroke);
+        paint.setStrokeWidth(draw.width);
+        paint.setStrokeCap(draw.cap === "butt" ? StrokeCap.Butt : StrokeCap.Round);
+        paint.setStrokeJoin(StrokeJoin.Round);
+        paint.setBlendMode(draw.multiply ? BlendMode.Multiply : BlendMode.SrcOver);
+        if (draw.dash) paint.setPathEffect(Skia.PathEffect.MakeDash(draw.dash, 0));
+      }
+      c.drawPath(path, paint);
+    };
     // 형광펜은 글씨 밑에 깔리게 먼저
-    for (const s of strokes) {
-      if (s.tool !== "highlighter" || hidden.has(s.id)) continue;
-      const p = get(s);
-      if (!p) continue;
-      hl.setColor(Skia.Color(s.color));
-      hl.setAlphaf(HIGHLIGHT_OPACITY);
-      hl.setStrokeWidth(s.width);
-      c.drawPath(p, hl);
-    }
-    for (const s of strokes) {
-      if (s.tool !== "pen" || hidden.has(s.id)) continue;
-      const p = get(s);
-      if (!p) continue;
-      pen.setColor(Skia.Color(s.color));
-      c.drawPath(p, pen);
-    }
+    for (const s of strokes) if (s.tool === "highlighter" && !hidden.has(s.id)) paintOne(s);
+    for (const s of strokes) if (s.tool === "pen" && !hidden.has(s.id)) paintOne(s);
   }, { width: w, height: h });
 }
 

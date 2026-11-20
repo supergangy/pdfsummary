@@ -8,6 +8,8 @@ import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognitionModel
 import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognitionModelIdentifier
 import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognizerOptions
 import com.google.mlkit.vision.digitalink.recognition.Ink
+import com.google.mlkit.vision.digitalink.recognition.RecognitionContext
+import com.google.mlkit.vision.digitalink.recognition.WritingArea
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.functions.Coroutine
 import expo.modules.kotlin.modules.Module
@@ -42,7 +44,7 @@ class InkRecognizerModule : Module() {
       "available"
     }
 
-    // strokes: [[x, y, x, y, …], …]
+    // strokes: [[x, y, x, y, …], …] — 한 줄 분량 (여러 줄은 JS에서 줄마다 나눠 부른다)
     AsyncFunction("recognizeAsync") Coroutine { strokes: List<List<Double>>, _: Double, lang: String ->
       val m = model(lang)
       if (!await(RemoteModelManager.getInstance().isModelDownloaded(m))) {
@@ -50,12 +52,22 @@ class InkRecognizerModule : Module() {
       }
       val ink = Ink.builder()
       var t = 0L
+      var minX = Float.MAX_VALUE
+      var minY = Float.MAX_VALUE
+      var maxX = -Float.MAX_VALUE
+      var maxY = -Float.MAX_VALUE
       for (s in strokes) {
         if (s.size < 2) continue
         val b = Ink.Stroke.builder()
         var i = 0
         while (i + 1 < s.size) {
-          b.addPoint(Ink.Point.create(s[i].toFloat(), s[i + 1].toFloat(), t))
+          val x = s[i].toFloat()
+          val y = s[i + 1].toFloat()
+          minX = minOf(minX, x)
+          maxX = maxOf(maxX, x)
+          minY = minOf(minY, y)
+          maxY = maxOf(maxY, y)
+          b.addPoint(Ink.Point.create(x, y, t))
           t += 10
           i += 2
         }
@@ -64,7 +76,10 @@ class InkRecognizerModule : Module() {
       }
       val recognizer = DigitalInkRecognition.getClient(DigitalInkRecognizerOptions.builder(m).build())
       try {
-        val result = await(recognizer.recognize(ink.build()))
+        // 쓴 자리의 크기를 알려 주면 글자 크기를 가늠해 '-'와 'ㅡ' 같은 것을 더 잘 가린다
+        val area = WritingArea(maxOf(1f, maxX - minX), maxOf(1f, maxY - minY))
+        val context = RecognitionContext.builder().setPreContext("").setWritingArea(area).build()
+        val result = await(recognizer.recognize(ink.build(), context))
         result.candidates.firstOrNull()?.text ?: ""
       } finally {
         recognizer.close()

@@ -9,7 +9,7 @@ import { pageText } from "../../modules/pdf-pages";
 import { ResultView } from "../platform/ResultView";
 import { Bar, Button, Hint, useTheme } from "../ui";
 import type { Ink, Notebook } from "./model";
-import { overviewPrompt, quickHtml, quickSummary, type QuickSummary } from "./quick";
+import { overviewPrompt, quickHtml, quickSummary, type QuickSummary, splitInkLines } from "./quick";
 import { shareFile } from "./shareFile";
 import type { NoteStore } from "./store";
 
@@ -54,7 +54,13 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary }: Props) 
       if (!alive.current) return;
       setProg({ label: `손글씨를 글자로 읽는 중… ${done}/${todo.length}`, ratio: done / todo.length });
       try {
-        it.text = await recognizeInk(it.strokes);
+        // 줄마다 따로 읽어 줄바꿈으로 잇는다 (여러 줄을 한 번에 넘기면 엉뚱한 한 글자로 읽힌다)
+        const lines: string[] = [];
+        for (const ln of splitInkLines(it.strokes)) {
+          const t = await recognizeInk(ln);
+          if (t) lines.push(t);
+        }
+        it.text = lines.join("\n");
       } catch {
         // 못 읽은 손글씨는 그림으로만
       }

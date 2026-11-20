@@ -1,10 +1,10 @@
 // 획 계산: 매끄러운 윤곽(필압), 경계 상자, 지우개 맞히기, 점 줄이기. 화면과 분리해 Node로 시험한다.
 import { getStroke } from "perfect-freehand";
-import type { Stroke } from "./model.ts";
+import { HIGHLIGHT_OPACITY, type Stroke } from "./model.ts";
 
 export type Box = [number, number, number, number]; // x0, y0, x1, y1
 
-/** 펜 획의 윤곽(채워 그릴 다각형). 필압이 있으면 굵기가 변한다. */
+/** 펜 획의 윤곽(채워 그릴 다각형). 펜 종류마다 굵기 변화가 다르다. */
 export function penOutline(s: Stroke, last = true): number[][] {
   const pts: number[][] = [];
   let hasPressure = false;
@@ -13,14 +13,63 @@ export function penOutline(s: Stroke, last = true): number[][] {
     if (p > 0 && p !== 0.5) hasPressure = true;
     pts.push([s.pts[i], s.pts[i + 1], p > 0 ? p : 0.5]);
   }
-  return getStroke(pts, {
-    size: s.width * 1.6,
-    thinning: hasPressure ? 0.55 : 0.2,
-    smoothing: 0.5,
-    streamline: 0.2, // 크면 글씨가 뭉개진다 (한글 획은 짧고 꺾임이 많음)
-    simulatePressure: !hasPressure,
-    last,
-  });
+  if (s.brush === "calligraphy") return nibOutline(pts, s.width, hasPressure);
+  const base = { smoothing: 0.5, streamline: 0.2, last }; // streamline이 크면 글씨가 뭉개진다 (한글 획은 짧고 꺾임이 많음)
+  switch (s.brush) {
+    case "ballpoint":
+      return getStroke(pts, { ...base, size: s.width * 1.4, thinning: hasPressure ? 0.12 : 0, simulatePressure: false });
+    case "pencil":
+      return getStroke(pts, { ...base, size: s.width * 1.1, thinning: hasPressure ? 0.3 : 0.1, simulatePressure: !hasPressure });
+    case "brush":
+      return getStroke(pts, {
+        ...base,
+        size: s.width * 2.4,
+        thinning: hasPressure ? 0.85 : 0.6,
+        smoothing: 0.6,
+        simulatePressure: !hasPressure,
+        start: { taper: s.width * 5 },
+        end: { taper: s.width * 7 },
+      });
+    default: // 만년필 (예전 노트도 이것)
+      return getStroke(pts, { ...base, size: s.width * 1.6, thinning: hasPressure ? 0.55 : 0.2, simulatePressure: !hasPressure });
+  }
+}
+
+/** 붓펜: 45° 기운 납작한 펜촉. 펜촉 방향으로 양쪽에 벌린 두 줄을 이어 윤곽을 만든다
+ *  → 펜촉과 나란히 그으면 가늘고, 가로질러 그으면 굵다. */
+function nibOutline(pts: number[][], width: number, hasPressure: boolean): number[][] {
+  if (!pts.length) return [];
+  const nx = Math.SQRT1_2, ny = -Math.SQRT1_2; // 오른쪽 위를 향한 펜촉
+  const left: number[][] = [], right: number[][] = [];
+  for (const [x, y, p] of pts) {
+    const h = width * 1.1 * (hasPressure ? 0.55 + 0.9 * p : 1);
+    left.push([x + nx * h, y + ny * h]);
+    right.push([x - nx * h, y - ny * h]);
+  }
+  if (pts.length === 1) {
+    const [x, y] = pts[0];
+    return [left[0], [x + 0.6, y + 0.6], right[0], [x - 0.6, y - 0.6]];
+  }
+  return [...left, ...right.reverse()];
+}
+
+/** 획을 어떻게 그릴지 — 화면(Skia)·PDF 내보내기·요약 그림이 모두 이것을 따른다.
+ *  fill: 윤곽을 채움 / line: 가운데 선을 굵기 width로 그음 (형광펜, 파선·점선 펜) */
+export type StrokeDraw =
+  | { kind: "fill"; d: string; alpha: number }
+  | { kind: "line"; d: string; width: number; alpha: number; cap: "butt" | "round"; dash?: [number, number]; multiply: boolean };
+
+export function strokeDraw(s: Stroke): StrokeDraw | null {
+  if (s.tool === "text") return null; // 글상자는 글자로 따로 그린다
+  if (s.tool === "highlighter") {
+    return { kind: "line", d: polylineSvg(s), width: s.width, alpha: s.opacity ?? HIGHLIGHT_OPACITY, cap: "butt", multiply: true };
+  }
+  const alpha = s.brush === "pencil" ? 0.78 : 1;
+  if (s.dash === "dash" || s.dash === "dot") {
+    const w = s.width * 1.2;
+    return { kind: "line", d: polylineSvg(s), width: w, alpha, cap: "round", dash: s.dash === "dash" ? [w * 3, w * 2.6] : [0.01, w * 2.2], multiply: false };
+  }
+  return { kind: "fill", d: outlineToSvg(penOutline(s)), alpha };
 }
 
 const avg = (a: number, b: number) => (a + b) / 2;
@@ -57,8 +106,7 @@ export function polylineSvg(s: Stroke): string {
 }
 
 export function strokeSvg(s: Stroke): string {
-  if (s.tool === "text") return ""; // 글상자는 글자로 따로 그린다
-  return s.tool === "pen" ? outlineToSvg(penOutline(s)) : polylineSvg(s);
+  return strokeDraw(s)?.d ?? "";
 }
 
 const r = (v: number) => Math.round(v * 100) / 100;
@@ -172,4 +220,91 @@ export function clampView(v: View, pageW: number, pageH: number, viewW: number, 
 export function fitWidth(pageW: number, pageH: number, viewW: number, viewH: number, margin = 12): View {
   const scale = Math.min((viewW - margin * 2) / pageW, 4);
   return clampView({ scale, tx: margin, ty: margin }, pageW, pageH, viewW, viewH, scale * 0.5, scale * 6);
+}
+
+
+// ── 영역 지우개: 문지른 자리만 지우고 획을 나눈다 ───────────────────────────
+
+/** 점 사이를 step 간격 이하로 촘촘하게 (긴 직선 형광펜의 가운데를 지울 수 있게) */
+function densify(pts: number[], step: number): number[] {
+  if (pts.length <= 3) return pts.slice();
+  const out = [pts[0], pts[1], pts[2]];
+  for (let i = 3; i < pts.length; i += 3) {
+    const ax = pts[i - 3], ay = pts[i - 2], ap = pts[i - 1], bx = pts[i], by = pts[i + 1], bp = pts[i + 2];
+    const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / step));
+    for (let k = 1; k <= n; k++) {
+      const t = k / n;
+      out.push(ax + (bx - ax) * t, ay + (by - ay) * t, ap + (bp - ap) * t);
+    }
+  }
+  return out;
+}
+
+/** 지우개가 (x0,y0)→(x1,y1)로 지나간 자리(반지름 r)를 획에서 지운다.
+ *  안 닿았으면 null, 닿았으면 남은 조각들(없으면 [] = 통째로 지워짐). 조각은 makeId로 새 id를 받는다. */
+export function eraseFrom(s: Stroke, x0: number, y0: number, x1: number, y1: number, r: number, makeId: () => string): Stroke[] | null {
+  if (s.tool === "text") return hitAlong([s], x0, y0, x1, y1, r).length ? [] : null;
+  const reach = r + s.width / 2;
+  const b = bounds(s);
+  if (Math.max(x0, x1) < b[0] - r || Math.min(x0, x1) > b[2] + r || Math.max(y0, y1) < b[1] - r || Math.min(y0, y1) > b[3] + r) return null;
+  const p = densify(s.pts, Math.max(0.5, r / 2));
+  const keep: boolean[] = [];
+  let any = false;
+  for (let i = 0; i < p.length; i += 3) {
+    const hit = segDist2(p[i], p[i + 1], x0, y0, x1, y1) <= reach * reach;
+    keep.push(!hit);
+    if (hit) any = true;
+  }
+  if (!any) return null;
+  const pieces: Stroke[] = [];
+  let cur: number[] = [];
+  const flush = () => {
+    if (cur.length >= 6) pieces.push({ ...s, id: makeId(), pts: cur.map((v) => Math.round(v * 100) / 100) });
+    cur = [];
+  };
+  keep.forEach((k, j) => {
+    if (k) cur.push(p[j * 3], p[j * 3 + 1], p[j * 3 + 2]);
+    else flush();
+  });
+  flush();
+  return pieces;
+}
+
+// ── 형광펜을 글자 크기에 맞추기 ──────────────────────────────────────────
+
+/** 글자 상자 [글자, x0, y0, x1, y1] */
+export type CharBox = [string, number, number, number, number];
+
+/** 가로로 그은 형광펜을 그 밑 글줄에 맞춘다: 높이는 글자 높이, 좌우는 칠한 글자 끝까지.
+ *  글줄을 못 찾거나(빈 곳·여러 줄) 가로 획이 아니면 null. */
+export function fitHighlight(pts: number[], width: number, chars: CharBox[]): { pts: number[]; width: number } | null {
+  const n = pts.length;
+  if (n < 6) return null;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < n; i += 3) {
+    minX = Math.min(minX, pts[i]);
+    maxX = Math.max(maxX, pts[i]);
+    minY = Math.min(minY, pts[i + 1]);
+    maxY = Math.max(maxY, pts[i + 1]);
+  }
+  if (maxX - minX < 6 || maxY - minY > Math.max(width, (maxX - minX) * 0.3)) return null; // 가로 획만
+  const cy = (minY + maxY) / 2;
+  const half = width / 2;
+  // 획 띠에 걸친 글자들
+  const hit = chars.filter(([c, x0, y0, x1, y1]) => {
+    if (!c.trim()) return false;
+    const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+    return mx >= minX - 2 && mx <= maxX + 2 && my >= cy - half - (y1 - y0) * 0.35 && my <= cy + half + (y1 - y0) * 0.35;
+  });
+  if (!hit.length) return null;
+  // 획 가운데에 가장 가까운 글줄 하나만 (윗줄·아랫줄 글자가 걸려도)
+  const lineOf = (c: CharBox) => (c[2] + c[4]) / 2;
+  const best = hit.reduce((a, c) => (Math.abs(lineOf(c) - cy) < Math.abs(lineOf(a) - cy) ? c : a));
+  const lineH = best[4] - best[2];
+  const line = hit.filter((c) => Math.abs(lineOf(c) - lineOf(best)) <= lineH * 0.5);
+  const y0 = Math.min(...line.map((c) => c[2])), y1 = Math.max(...line.map((c) => c[4]));
+  const x0 = Math.min(...line.map((c) => c[1])), x1 = Math.max(...line.map((c) => c[3]));
+  const y = Math.round(((y0 + y1) / 2) * 100) / 100;
+  const pad = (y1 - y0) * 0.12;
+  return { pts: [Math.round((x0 - 1) * 100) / 100, y, pts[2], Math.round((x1 + 1) * 100) / 100, y, pts[n - 1]], width: Math.round((y1 - y0 + pad * 2) * 100) / 100 };
 }

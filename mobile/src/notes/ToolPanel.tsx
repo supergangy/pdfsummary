@@ -1,0 +1,286 @@
+// 도구 설정 창: 펜 종류·굵기·선 모양·색 / 형광펜 굵기·투명도·직선·글줄 맞추기 / 지우개 / 올가미.
+// 도구 모음에서 이미 고른 도구를 한 번 더 누르면 열린다.
+import { Canvas, Picture } from "@shopify/react-native-skia";
+import { useMemo, useRef } from "react";
+import { Modal, Platform, Pressable, ScrollView, Switch, Text, View } from "react-native";
+
+import { useTheme } from "../ui";
+import {
+  HIGHLIGHT_COLORS,
+  HIGHLIGHT_OPACITY_STEPS,
+  HIGHLIGHT_WIDTH_STEPS,
+  PEN_COLORS,
+  PEN_WIDTH_STEPS,
+  PENS,
+  type LineDash,
+  type Stroke,
+} from "./model";
+import type { Prefs } from "./prefs";
+import { inkPicture, type PathCache } from "./render";
+
+type Props = {
+  open: boolean;
+  prefs: Prefs;
+  setP: (patch: Partial<Prefs>) => void;
+  onClearPage: () => void;
+  onClose: () => void;
+};
+
+const nearest = (steps: number[], v: number) => steps.reduce((a, b, i) => (Math.abs(b - v) < Math.abs(steps[a] - v) ? i : a), 0);
+
+export function ToolPanel({ open, prefs, setP, onClearPage, onClose }: Props) {
+  const t = useTheme();
+  const tool = prefs.tool;
+  const title = tool === "pen" ? "펜" : tool === "highlighter" ? "형광펜" : tool === "eraser" ? "지우개" : tool === "lasso" ? "올가미 (고르기)" : "글상자";
+  return (
+    <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.18)" }} onPress={onClose} accessibilityLabel="도구 설정 닫기">
+        <Pressable
+          onPress={() => {}}
+          accessibilityLabel={`${title} 설정`}
+          style={{ position: "absolute", top: 96, left: 12, width: 360, maxWidth: "94%", maxHeight: "82%", backgroundColor: t.card, borderRadius: 18, borderWidth: 1, borderColor: t.line, shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 14, elevation: 8 }}
+        >
+          <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }} keyboardShouldPersistTaps="handled">
+            <View style={{ flexDirection: "row", alignItems: "center" }}>
+              <Text style={{ color: t.ink, fontWeight: "800", fontSize: 17, flex: 1 }}>{title}</Text>
+              <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="닫기" hitSlop={8}>
+                <Text style={{ color: t.muted, fontSize: 20 }}>✕</Text>
+              </Pressable>
+            </View>
+            {tool === "pen" && <PenOptions prefs={prefs} setP={setP} />}
+            {tool === "highlighter" && <HighlighterOptions prefs={prefs} setP={setP} />}
+            {tool === "eraser" && <EraserOptions prefs={prefs} setP={setP} onClearPage={onClearPage} />}
+            {tool === "lasso" && <LassoOptions prefs={prefs} setP={setP} />}
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+// ── 펜 ──────────────────────────────────────────────────────────────
+
+function PenOptions({ prefs, setP }: { prefs: Prefs; setP: Props["setP"] }) {
+  const t = useTheme();
+  return (
+    <>
+      <Preview prefs={prefs} />
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }} accessibilityRole="radiogroup" accessibilityLabel="펜 종류">
+        {PENS.map((p) => (
+          <Chip key={p.id} label={p.label} on={prefs.penBrush === p.id} onPress={() => setP({ penBrush: p.id })} hint={p.hint} />
+        ))}
+      </View>
+      <StepSlider label="굵기" steps={PEN_WIDTH_STEPS} index={nearest(PEN_WIDTH_STEPS, prefs.penWidth)} onChange={(i) => setP({ penWidth: PEN_WIDTH_STEPS[i] })} />
+      <Text style={{ color: t.muted, fontSize: 13 }}>선 모양</Text>
+      <View style={{ flexDirection: "row", gap: 6 }} accessibilityRole="radiogroup" accessibilityLabel="선 모양">
+        {(["solid", "dash", "dot"] as LineDash[]).map((d) => (
+          <DashChip key={d} dash={d} on={prefs.penDash === d} onPress={() => setP({ penDash: d })} />
+        ))}
+      </View>
+      <Colors colors={PEN_COLORS} value={prefs.penColor} onPick={(c) => setP({ penColor: c })} />
+      <Toggle label="도형 반듯하게 (선·사각형·원·삼각형)" value={prefs.shapes} onChange={(v) => setP({ shapes: v })} />
+    </>
+  );
+}
+
+/** 지금 설정으로 그은 견본 획 */
+function Preview({ prefs }: { prefs: Prefs }) {
+  const t = useTheme();
+  const cache = useRef<PathCache>(new WeakMap());
+  const pic = useMemo(() => {
+    const pts: number[] = [];
+    for (let i = 0; i <= 40; i++) {
+      const x = 14 + i * 7.6;
+      const y = 32 + Math.sin(i / 6) * 14;
+      pts.push(x, y, 0.25 + 0.6 * Math.sin((i / 40) * Math.PI));
+    }
+    const s: Stroke = { id: "preview", tool: "pen", color: prefs.penColor === "#FFFFFF" ? "#999999" : prefs.penColor, width: prefs.penWidth, pts, brush: prefs.penBrush, dash: prefs.penDash };
+    return inkPicture([s], new Set(), 330, 64, cache.current);
+  }, [prefs.penColor, prefs.penWidth, prefs.penBrush, prefs.penDash]);
+  return (
+    <View style={{ height: 64, borderRadius: 10, overflow: "hidden", backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: t.line }} accessibilityLabel="펜 견본">
+      <Canvas style={{ width: 330, height: 64 }}>
+        <Picture picture={pic} />
+      </Canvas>
+    </View>
+  );
+}
+
+// ── 형광펜 ──────────────────────────────────────────────────────────
+
+function HighlighterOptions({ prefs, setP }: { prefs: Prefs; setP: Props["setP"] }) {
+  const t = useTheme();
+  return (
+    <>
+      <View style={{ height: 40, borderRadius: 10, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: t.line, justifyContent: "center", paddingHorizontal: 14 }}>
+        <View style={{ position: "absolute", left: 10, right: 10, height: Math.min(30, prefs.hlWidth), backgroundColor: prefs.hlColor, opacity: prefs.hlOpacity }} />
+        <Text style={{ color: "#202328" }}>형광펜 견본 글자</Text>
+      </View>
+      <StepSlider label="굵기" steps={HIGHLIGHT_WIDTH_STEPS} index={nearest(HIGHLIGHT_WIDTH_STEPS, prefs.hlWidth)} onChange={(i) => setP({ hlWidth: HIGHLIGHT_WIDTH_STEPS[i] })} />
+      <StepSlider
+        label="투명도"
+        steps={HIGHLIGHT_OPACITY_STEPS}
+        index={nearest(HIGHLIGHT_OPACITY_STEPS, prefs.hlOpacity)}
+        format={(v) => `${Math.round(v * 100)}%`}
+        onChange={(i) => setP({ hlOpacity: HIGHLIGHT_OPACITY_STEPS[i] })}
+      />
+      <Toggle label="직선 자동 보정" hint="가로로 그으면 곧은 선으로" value={prefs.straight} onChange={(v) => setP({ straight: v })} />
+      <Toggle label="글자 크기에 맞춰 두께 조절" hint="PDF 쪽에서 칠한 글줄 높이·글자 끝에 맞춰요" value={prefs.hlFit} onChange={(v) => setP({ hlFit: v })} />
+      <Colors colors={HIGHLIGHT_COLORS} value={prefs.hlColor} onPick={(c) => setP({ hlColor: c })} />
+    </>
+  );
+}
+
+// ── 지우개 ──────────────────────────────────────────────────────────
+
+function EraserOptions({ prefs, setP, onClearPage }: { prefs: Prefs; setP: Props["setP"]; onClearPage: () => void }) {
+  const t = useTheme();
+  const sizes = [6, 9, 12, 16, 22, 30, 40];
+  return (
+    <>
+      <View style={{ gap: 4 }} accessibilityRole="radiogroup" accessibilityLabel="지우개 종류">
+        <Radio label="획 지우개" hint="닿은 획을 통째로" on={prefs.eraserMode === "stroke"} onPress={() => setP({ eraserMode: "stroke" })} />
+        <Radio label="영역 지우개" hint="문지른 자리만" on={prefs.eraserMode === "area"} onPress={() => setP({ eraserMode: "area" })} />
+      </View>
+      <StepSlider label="크기" steps={sizes} index={nearest(sizes, prefs.eraserSize)} onChange={(i) => setP({ eraserSize: sizes[i] })} format={(v) => `${v}`} />
+      <Toggle label="형광펜만 지우기" value={prefs.eraserHlOnly} onChange={(v) => setP({ eraserHlOnly: v })} />
+      <Text style={{ color: t.muted, fontSize: 12.5 }}>S펜 옆 단추를 누른 채 쓰면 언제든 이 지우개가 돼요.</Text>
+      <Pressable
+        onPress={onClearPage}
+        accessibilityRole="button"
+        accessibilityLabel="이 쪽 손글씨 모두 지우기"
+        style={({ pressed }) => ({ paddingVertical: 12, alignItems: "center", borderTopWidth: 1, borderColor: t.line, marginTop: 4, opacity: pressed ? 0.6 : 1 })}
+      >
+        <Text style={{ color: t.bad, fontWeight: "700" }}>이 쪽 손글씨 모두 지우기</Text>
+      </Pressable>
+    </>
+  );
+}
+
+// ── 올가미 ──────────────────────────────────────────────────────────
+
+function LassoOptions({ prefs, setP }: { prefs: Prefs; setP: Props["setP"] }) {
+  return (
+    <>
+      <View style={{ gap: 4 }} accessibilityRole="radiogroup" accessibilityLabel="올가미 모양">
+        <Radio label="자유형" on={prefs.lassoMode === "free"} onPress={() => setP({ lassoMode: "free" })} />
+        <Radio label="사각형" on={prefs.lassoMode === "rect"} onPress={() => setP({ lassoMode: "rect" })} />
+      </View>
+      <Toggle label="부분 선택된 개체 포함" hint="조금이라도 걸친 획도 고르기" value={prefs.lassoPartial} onChange={(v) => setP({ lassoPartial: v })} />
+    </>
+  );
+}
+
+// ── 작은 부품 ────────────────────────────────────────────────────────
+
+function Chip({ label, on, onPress, hint }: { label: string; on: boolean; onPress: () => void; hint?: string }) {
+  const t = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="radio"
+      accessibilityLabel={label}
+      accessibilityHint={hint}
+      accessibilityState={{ selected: on }}
+      style={{ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 18, borderWidth: 1, borderColor: on ? t.accent : t.line, backgroundColor: on ? t.soft : t.card }}
+    >
+      <Text style={{ color: on ? t.accent : t.ink, fontWeight: on ? "700" : "500" }}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function DashChip({ dash, on, onPress }: { dash: LineDash; on: boolean; onPress: () => void }) {
+  const t = useTheme();
+  const label = dash === "solid" ? "실선" : dash === "dash" ? "파선" : "점선";
+  const seg = dash === "solid" ? [44] : dash === "dash" ? [12, 12, 12] : [4, 4, 4, 4, 4, 4];
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="radio"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: on }}
+      style={{ flex: 1, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: dash === "solid" ? 0 : 5, borderWidth: 1, borderColor: on ? t.accent : t.line, backgroundColor: on ? t.soft : t.card }}
+    >
+      {seg.map((w, i) => (
+        <View key={i} style={{ width: w, height: 3, borderRadius: 2, backgroundColor: on ? t.accent : t.ink }} />
+      ))}
+    </Pressable>
+  );
+}
+
+function Colors({ colors, value, onPick }: { colors: string[]; value: string; onPick: (c: string) => void }) {
+  const t = useTheme();
+  return (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }} accessibilityRole="radiogroup" accessibilityLabel="색">
+      {colors.map((c) => (
+        <Pressable
+          key={c}
+          onPress={() => onPick(c)}
+          accessibilityRole="radio"
+          accessibilityLabel={`색 ${c}`}
+          accessibilityState={{ selected: c === value }}
+          style={{ width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", borderWidth: c === value ? 2 : 0, borderColor: t.accent }}
+        >
+          <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: c, borderWidth: 1, borderColor: "rgba(0,0,0,0.18)" }} />
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+function Toggle({ label, hint, value, onChange }: { label: string; hint?: string; value: boolean; onChange: (v: boolean) => void }) {
+  const t = useTheme();
+  return (
+    <Pressable onPress={() => onChange(!value)} accessibilityRole="switch" accessibilityLabel={label} accessibilityState={{ checked: value }} style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 4 }}>
+      <View style={{ flex: 1 }}>
+        <Text style={{ color: t.ink }}>{label}</Text>
+        {!!hint && <Text style={{ color: t.muted, fontSize: 12 }}>{hint}</Text>}
+      </View>
+      {/* 웹에서는 Switch 자체도 눌리므로 바깥 Pressable이 받게 */}
+      <View pointerEvents={Platform.OS === "web" ? "none" : "auto"}>
+        <Switch value={value} onValueChange={onChange} />
+      </View>
+    </Pressable>
+  );
+}
+
+function Radio({ label, hint, on, onPress }: { label: string; hint?: string; on: boolean; onPress: () => void }) {
+  const t = useTheme();
+  return (
+    <Pressable onPress={onPress} accessibilityRole="radio" accessibilityLabel={label} accessibilityState={{ selected: on }} style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 6 }}>
+      <View style={{ width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: on ? t.accent : t.muted, alignItems: "center", justifyContent: "center" }}>
+        {on && <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: t.accent }} />}
+      </View>
+      <Text style={{ color: t.ink }}>{label}</Text>
+      {!!hint && <Text style={{ color: t.muted, fontSize: 12 }}>{hint}</Text>}
+    </Pressable>
+  );
+}
+
+/** − ●●●○○ + 단계 고르기 */
+function StepSlider({ label, steps, index, onChange, format }: { label: string; steps: number[]; index: number; onChange: (i: number) => void; format?: (v: number) => string }) {
+  const t = useTheme();
+  const show = format ?? ((v: number) => String(v));
+  return (
+    <View style={{ gap: 4 }}>
+      <Text style={{ color: t.muted, fontSize: 13 }}>
+        {label} <Text style={{ color: t.ink, fontWeight: "700" }}>{show(steps[index])}</Text>
+      </Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }} accessibilityRole="adjustable" accessibilityLabel={label} accessibilityValue={{ text: show(steps[index]) }}>
+        <Pressable onPress={() => onChange(Math.max(0, index - 1))} accessibilityRole="button" accessibilityLabel={`${label} 줄이기`} hitSlop={6} style={{ paddingHorizontal: 8 }}>
+          <Text style={{ color: t.ink, fontSize: 22 }}>−</Text>
+        </Pressable>
+        <View style={{ flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "space-between", height: 28, backgroundColor: t.soft, borderRadius: 14, paddingHorizontal: 8 }}>
+          {steps.map((v, i) => (
+            <Pressable key={v} onPress={() => onChange(i)} accessibilityRole="button" accessibilityLabel={`${label} ${show(v)}`} hitSlop={4} style={{ width: 18, height: 28, alignItems: "center", justifyContent: "center" }}>
+              <View style={{ width: i === index ? 16 : 6, height: i === index ? 16 : 6, borderRadius: 8, backgroundColor: i <= index ? t.accent : t.muted, opacity: i <= index ? 1 : 0.5 }} />
+            </Pressable>
+          ))}
+        </View>
+        <Pressable onPress={() => onChange(Math.min(steps.length - 1, index + 1))} accessibilityRole="button" accessibilityLabel={`${label} 늘리기`} hitSlop={6} style={{ paddingHorizontal: 8 }}>
+          <Text style={{ color: t.ink, fontSize: 22 }}>＋</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}

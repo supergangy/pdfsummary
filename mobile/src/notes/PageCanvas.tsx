@@ -2,6 +2,7 @@
 // - 펜(스타일러스)은 쓰고, 손가락은 '손가락으로 쓰기'가 꺼져 있으면 화면을 옮긴다 (손바닥이 닿아도 안 써짐)
 // - 두 손가락: 확대·축소·이동
 // - 지금 긋는 획은 UI 스레드에서 바로 그리고(지연 최소), 손을 떼면 JS 쪽에 넘겨 저장한다
+// - S펜 옆 단추를 누른 채 쓰면 지우개 (펜이 떠 있을 때부터 단추 상태를 알 수 있다)
 import { Canvas, Circle, DashPathEffect, Group, Image, Path, Picture, Rect, useImage, usePathValue } from "@shopify/react-native-skia";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
@@ -9,7 +10,8 @@ import { GestureDetector, PointerType, usePanGesture, usePinchGesture, useSimult
 import Animated, { useAnimatedStyle, useDerivedValue, useSharedValue, type SharedValue } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 
-import { HIGHLIGHT_OPACITY, type Page, type Stroke } from "./model";
+import { StylusView } from "../../modules/stylus";
+import type { LineDash, Page, Stroke } from "./model";
 import { inkPicture, paperPicture, type PathCache } from "./render";
 
 export type ToolName = "pen" | "highlighter" | "eraser" | "lasso" | "text";
@@ -17,7 +19,6 @@ export type Selection = { ids: Set<string>; box: [number, number, number, number
 export type ZoomCmd = { kind: "in" | "out" | "fit"; n: number };
 
 const MARGIN = 12;
-const ERASER_PX = 12; // 화면에서 지우개 반지름
 
 type Props = {
   page: Page;
@@ -27,6 +28,10 @@ type Props = {
   tool: ToolName;
   color: string;
   width: number;
+  opacity: number; // 형광펜 투명도
+  dash: LineDash; // 펜 선 모양
+  eraserPx: number; // 화면에서 지우개 반지름
+  lassoRect: boolean; // 사각형 올가미
   fingerDraw: boolean;
   zoom: ZoomCmd;
   dark?: boolean;
@@ -109,6 +114,12 @@ export function PageCanvas(props: Props) {
   // ── 입력 ────────────────────────────────────────────────
   const toolSV = useSharedValue(0);
   const fingerSV = useSharedValue(fingerDraw);
+  const eraserPx = useSharedValue(props.eraserPx);
+  const rectSV = useSharedValue(props.lassoRect);
+  useEffect(() => {
+    eraserPx.value = props.eraserPx;
+    rectSV.value = props.lassoRect;
+  }, [props.eraserPx, props.lassoRect, eraserPx, rectSV]);
   useEffect(() => {
     toolSV.value = tool === "pen" ? 0 : tool === "highlighter" ? 1 : tool === "eraser" ? 2 : tool === "lasso" ? 3 : 4;
   }, [tool, toolSV]);
@@ -135,6 +146,10 @@ export function PageCanvas(props: Props) {
   const sy = useSharedValue(0);
   const live = useSharedValue<number[]>([]);
   const eraser = useSharedValue({ x: -1000, y: -1000, r: 0 });
+  const penBtn = useSharedValue(false); // S펜 옆 단추를 누르고 있는지
+  const onPenButton = useCallback((pressed: boolean) => {
+    penBtn.value = pressed;
+  }, [penBtn]);
 
   const one = usePanGesture({
     minDistance: 0,
@@ -166,12 +181,15 @@ export function PageCanvas(props: Props) {
           return;
         }
         mode.value = 6;
+        sx.value = x;
+        sy.value = y;
         live.value = [x, y, 0.5];
         return;
       }
-      if (toolSV.value === 2) {
+      const penErase = e.pointerType === PointerType.STYLUS && penBtn.value;
+      if (toolSV.value === 2 || penErase) {
         mode.value = 3;
-        const r = ERASER_PX / scale.value;
+        const r = eraserPx.value / scale.value;
         eraser.value = { x, y, r };
         scheduleOnRN(emitErase, 0, x, y, r);
         return;
@@ -193,7 +211,7 @@ export function PageCanvas(props: Props) {
       const x = (e.x - tx.value) / scale.value;
       const y = (e.y - ty.value) / scale.value;
       if (mode.value === 3) {
-        const r = ERASER_PX / scale.value;
+        const r = eraserPx.value / scale.value;
         eraser.value = { x, y, r };
         scheduleOnRN(emitErase, 1, x, y, r);
         return;
@@ -204,11 +222,26 @@ export function PageCanvas(props: Props) {
         return;
       }
       if (mode.value === 6) {
+        if (rectSV.value) {
+          // 사각형 올가미: 시작점과 지금 점을 마주 보는 모서리로
+          const a = sx.value, b = sy.value;
+          live.value = [a, b, 0.5, x, b, 0.5, x, y, 0.5, a, y, 0.5, a, b, 0.5];
+          return;
+        }
         live.modify((a) => {
           "worklet";
           a.push(x, y, 0.5);
           return a;
         }, true);
+        return;
+      }
+      if (mode.value === 1 && stylus.value && penBtn.value) {
+        // 쓰다가 S펜 단추를 누름(또는 단추 소식이 조금 늦게 옴) → 이 획은 지우개로
+        mode.value = 3;
+        live.value = [];
+        const r = eraserPx.value / scale.value;
+        eraser.value = { x, y, r };
+        scheduleOnRN(emitErase, 0, x, y, r);
         return;
       }
       if (mode.value === 1) {
@@ -308,8 +341,10 @@ export function PageCanvas(props: Props) {
   const hlLive = tool === "highlighter";
   const lassoLive = tool === "lasso";
   const liveWidth = lassoLive ? 1.2 : hlLive ? width : width * 1.25;
+  const dashLive: [number, number] | null = lassoLive ? [6, 5] : !hlLive && props.dash === "dash" ? [liveWidth * 3, liveWidth * 2.6] : !hlLive && props.dash === "dot" ? [0.01, liveWidth * 2.2] : null;
 
   return (
+    <StylusView style={{ flex: 1 }} onButton={onPenButton}>
     <GestureDetector gesture={gesture}>
       <View style={{ flex: 1, overflow: "hidden" }} onLayout={onLayout} testID="page-canvas">
         <Canvas style={{ flex: 1, backgroundColor: props.dark ? "#2A2C30" : "#E7E4DE" }}>
@@ -334,10 +369,10 @@ export function PageCanvas(props: Props) {
               strokeCap={hlLive ? "butt" : "round"}
               strokeJoin="round"
               color={lassoLive ? "#2F6FDE" : color}
-              opacity={hlLive ? HIGHLIGHT_OPACITY : 1}
+              opacity={hlLive ? props.opacity : 1}
               blendMode={hlLive ? "multiply" : "srcOver"}
             >
-              {lassoLive ? <DashPathEffect intervals={[6, 5]} /> : null}
+              {dashLive ? <DashPathEffect intervals={dashLive} /> : null}
             </Path>
             <EraserRing eraser={eraser} />
           </Group>
@@ -346,6 +381,7 @@ export function PageCanvas(props: Props) {
         <TextLayer strokes={sel?.ids.size ? strokes.filter((s) => sel.ids.has(s.id)) : []} hidden={hidden} page={page} tx={tx} ty={ty} scale={scale} dx={dragX} dy={dragY} />
       </View>
     </GestureDetector>
+    </StylusView>
   );
 }
 

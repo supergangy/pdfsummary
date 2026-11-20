@@ -38,7 +38,7 @@ jobs:
       - name: 빌드 (Debug, arm64)
         working-directory: mobile/android
         run: ./gradlew :app:assembleDebug --no-daemon -PreactNativeArchitectures=arm64-v8a
-      - name: 우리 네이티브 모듈이 들어갔는지 (기기 안 AI, PDF 쪽, 손글씨 인식)
+      - name: 우리 네이티브 모듈이 들어갔는지 (기기 안 AI, PDF 쪽, 손글씨 인식, Google 로그인)
         run: |
           apk=$(ls android/app/build/outputs/apk/debug/*.apk | head -1)
           unzip -l "$apk" | grep -q "classes" && echo "APK: $apk"
@@ -46,6 +46,7 @@ jobs:
           for m in deviceai/DeviceAiModule pdfpages/PdfPagesModule pdfpages/PageText inkrecognizer/InkRecognizerModule; do
             unzip -p "$apk" 'classes*.dex' | grep -a -q "expo/modules/$m" && echo "있음: $m" || (echo "APK에 없음: $m"; exit 1)
           done
+          unzip -p "$apk" 'classes*.dex' | grep -a -q "com/reactnativegooglesignin/RNGoogleSigninModule" && echo "있음: Google 로그인" || (echo "APK에 없음: Google 로그인"; exit 1)
 
   ios:
     runs-on: macos-26
@@ -71,7 +72,12 @@ jobs:
             -sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" /tmp/fm.swift
       - run: npm ci
       - name: 네이티브 프로젝트 만들기 (CocoaPods 포함)
-        run: npx expo prebuild --platform ios
+        # Google 로그인 설정 플러그인(URL scheme)까지 거치도록 시험용 iOS 클라이언트 ID로
+        env:
+          GOOGLE_IOS_CLIENT_ID: 000000000000-ci.apps.googleusercontent.com
+        run: |
+          npx expo prebuild --platform ios
+          grep -l "com.googleusercontent.apps.000000000000-ci" ios/*/Info.plist || (echo "Info.plist에 Google 로그인 URL scheme이 없음"; exit 1)
       - name: 빌드 (시뮬레이터, 서명 없음)
         working-directory: mobile/ios
         run: |
@@ -81,8 +87,8 @@ jobs:
           set -o pipefail
           xcodebuild -workspace "$ws" -scheme "$scheme" -configuration Debug -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build | tail -40
-      - name: 우리 네이티브 모듈이 컴파일됐는지 (기기 안 AI, PDF 쪽, 손글씨 인식)
+      - name: 우리 네이티브 모듈이 컴파일됐는지 (기기 안 AI, PDF 쪽, 손글씨 인식, Google 로그인)
         run: |
-          for m in DeviceAiModule PdfPagesModule InkRecognizerModule; do
+          for m in DeviceAiModule PdfPagesModule InkRecognizerModule RNGoogleSignin; do
             find ~/Library/Developer/Xcode/DerivedData -name "$m*.o" | head -1 | grep . || (echo "컴파일되지 않음: $m"; exit 1)
           done

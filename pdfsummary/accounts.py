@@ -7,6 +7,9 @@
 - 계정은 동기화 코드로 쓰던 공간을 그대로 이어받을 수 있다 (코드 → 계정으로 옮기기).
 - 메일 서버가 설정되어 있으면(mailer.py) 가입할 때 이메일로 6자리 확인 코드를 보내, 받은 사람만 가입할 수 있다
   (오타 난 이메일로 가입해 비밀번호를 못 찾는 일이 없게, 남의 이메일로 가입하지 못하게).
+- Google 계정으로도 로그인할 수 있다 (google_auth.py가 ID 토큰을 확인). 같은 이메일의 계정이 있으면 그 계정에
+  Google을 이어 붙이고, 없으면 비밀번호 없는 계정을 새로 만든다. 이메일 확인을 거치지 않은 계정에 이어 붙일 때는
+  (남이 그 이메일로 먼저 가입해 두었을 수 있으니) 그 계정의 비밀번호와 로그인을 모두 없앤다.
 - 비밀번호를 잊으면: 메일로 6자리 코드를 받아 새 비밀번호를 정한다.
   코드는 15분 동안, 5번 틀리면 끝. 가입된 이메일인지 아닌지는 답에서 드러나지 않는다.
   메일 서버가 없으면 서버 관리자가 바꿔 준다:
@@ -23,6 +26,7 @@ import threading
 import time
 from typing import Callable, Optional
 
+from .google_auth import GoogleAuthError, GoogleVerifier
 from .mailer import Mailer, MailError
 from .sync import SyncStore, space_id
 
@@ -34,6 +38,7 @@ FAIL_WINDOW = 60.0
 FAIL_PER_EMAIL = 5
 FAIL_PER_IP = 30
 SCRYPT = {"n": 2 ** 14, "r": 8, "p": 1}
+NO_PASSWORD = "!"            # Google로만 가입해 비밀번호가 없는 계정
 RESET_TTL = 15 * 60          # 메일 코드(가입 확인·비밀번호 찾기)가 살아 있는 시간
 RESET_TRIES = 5              # 코드를 이만큼 틀리면 끝
 RESET_GAP = 60.0             # 같은 이메일로 코드 메일은 1분에 한 번
@@ -88,9 +93,10 @@ def _check_new_password(pw: str) -> None:
 class AccountStore:
     """동기화 저장소(sync.db) 안에 계정·세션 표를 둔다."""
 
-    def __init__(self, sync: SyncStore, mailer: Optional[Mailer] = None):
+    def __init__(self, sync: SyncStore, mailer: Optional[Mailer] = None, google: Optional[GoogleVerifier] = None):
         self.sync = sync
         self.mailer = mailer or Mailer()
+        self.google = google or GoogleVerifier()
         # 메일은 따로 보낸다 (답이 오는 시간으로 가입 여부가 드러나지 않게). 시험에서는 바로 보내게 바꾼다.
         self.deliver: Callable[[Callable[[], None]], None] = lambda fn: threading.Thread(target=fn, daemon=True).start()
         self.mail_errors: list[str] = []
@@ -111,6 +117,9 @@ class AccountStore:
         cols = [r[1] for r in self.db.execute("PRAGMA table_info(accounts)")]
         if "verified" not in cols:   # 이메일 확인을 거친 계정인지 (예전 계정은 0)
             self.db.execute("ALTER TABLE accounts ADD COLUMN verified INTEGER NOT NULL DEFAULT 0")
+        if "google" not in cols:     # 이어 붙인 Google 계정 (Google의 사용자 번호 sub)
+            self.db.execute("ALTER TABLE accounts ADD COLUMN google TEXT")
+        self.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS accounts_google ON accounts (google) WHERE google IS NOT NULL")
         self.sent: dict[str, list[float]] = {}
         self.fails: dict[str, list[float]] = {}
         self.fail_lock = threading.Lock()
@@ -175,6 +184,17 @@ class AccountStore:
         with self.lock:
             return self.db.execute("SELECT 1 FROM accounts WHERE email = ?", (email,)).fetchone() is not None
 
+    def _space_for(self, link_code: str) -> str:
+        """계정으로 옮길 동기화 코드의 공간 (다른 계정에 이미 붙었으면 안 됨)"""
+        space = space_id(link_code)
+        if not self.sync.has_space(space):
+            raise AccountError("동기화 코드가 맞지 않아요.")
+        with self.lock:
+            taken = self.db.execute("SELECT 1 FROM accounts WHERE space = ?", (space,)).fetchone()
+        if taken:
+            raise AccountError("이 동기화 코드는 이미 다른 계정에 연결되어 있어요. 그 계정으로 로그인해 주세요.", 409)
+        return space
+
     def signup_start(self, email: str, ip: str = "") -> dict:
         """가입 1단계: 이메일 확인 코드를 보낸다. 메일 서버가 없는 서버면 {verify: False} (확인 없이 가입)."""
         email = normalize_email(email)
@@ -201,16 +221,7 @@ class AccountStore:
         _check_new_password(password)
         if self._taken(email):
             raise AccountError("이미 가입된 이메일이에요. 로그인해 주세요.", 409)
-        if link_code:
-            space = space_id(link_code)
-            if not self.sync.has_space(space):
-                raise AccountError("동기화 코드가 맞지 않아요.")
-            with self.lock:
-                taken = self.db.execute("SELECT 1 FROM accounts WHERE space = ?", (space,)).fetchone()
-            if taken:
-                raise AccountError("이 동기화 코드는 이미 다른 계정에 연결되어 있어요. 그 계정으로 로그인해 주세요.", 409)
-        else:
-            space = None
+        space = self._space_for(link_code) if link_code else None
         verified = 0
         if self.mailer.enabled:
             if not re.sub(r"\D", "", code or ""):
@@ -237,11 +248,53 @@ class AccountStore:
         with self.lock:
             row = self.db.execute("SELECT id, pw FROM accounts WHERE email = ?", (email,)).fetchone()
         # 없는 이메일도 같은 시간이 걸리게 (어떤 이메일이 가입됐는지 알아내지 못하게)
-        ok = check_password(password or "", row[1] if row else _DUMMY) and row is not None
+        usable = row is not None and row[1] != NO_PASSWORD
+        ok = check_password(password or "", row[1] if usable else _DUMMY) and usable
         if not ok:
             self._failed([k for k, _ in keys])
             raise AccountError("이메일이나 비밀번호가 맞지 않아요.", 401)
         return {"token": self._new_session(row[0], device), "email": email}
+
+    def google_login(self, id_token: str, device: str = "", link_code: str = "") -> dict:
+        """Google ID 토큰으로 로그인 (없으면 가입). link_code: 새로 만들 때 이 동기화 코드의 노트를 이어받음."""
+        try:
+            g = self.google.verify(id_token)
+        except GoogleAuthError as e:
+            raise AccountError(str(e), 503 if "설정되지" in str(e) or "공개 키" in str(e) else 401) from None
+        email = g["email"]
+        with self.lock:
+            row = self.db.execute("SELECT id FROM accounts WHERE google = ?", (g["sub"],)).fetchone()
+            if not row:
+                row2 = self.db.execute("SELECT id, verified, google FROM accounts WHERE email = ?", (email,)).fetchone()
+            else:
+                row2 = None
+        if row:
+            if link_code:
+                raise AccountError("이 Google 계정은 이미 가입되어 있어요. 동기화를 끄고 Google로 로그인하면 이 기기의 노트가 그 계정으로 합쳐져요.", 409)
+            return {"token": self._new_session(row[0], device), "email": email, "created": False}
+        if row2:
+            aid, verified, linked = row2
+            if linked:   # 같은 이메일에 다른 Google 계정이 이미 붙어 있음
+                raise AccountError("이 이메일의 계정에는 다른 Google 계정이 이어져 있어요.", 409)
+            if link_code:
+                raise AccountError("이 이메일로 가입된 계정이 이미 있어요. 동기화를 끄고 그 계정으로 로그인해 주세요.", 409)
+            with self.lock:
+                if verified:
+                    self.db.execute("UPDATE accounts SET google = ? WHERE id = ?", (g["sub"], aid))
+                else:
+                    # 이메일 확인 없이 만든 계정: 그 이메일의 진짜 주인(Google이 확인)이 가져가고, 예전 비밀번호·로그인은 끝
+                    self.db.execute("UPDATE accounts SET google = ?, verified = 1, pw = ? WHERE id = ?", (g["sub"], NO_PASSWORD, aid))
+                    self.db.execute("DELETE FROM sessions WHERE account = ?", (aid,))
+            return {"token": self._new_session(aid, device), "email": email, "created": False}
+        space = self._space_for(link_code) if link_code else self.sync.create_space_id()
+        aid = secrets.token_hex(12)
+        with self.lock:
+            try:
+                self.db.execute("INSERT INTO accounts (id, email, pw, space, created, verified, google) VALUES (?, ?, ?, ?, ?, 1, ?)",
+                                (aid, email, NO_PASSWORD, space, time.time(), g["sub"]))
+            except Exception:
+                raise AccountError("잠시 뒤에 다시 해 주세요.", 409) from None
+        return {"token": self._new_session(aid, device), "email": email, "created": True}
 
     def logout(self, token: str) -> None:
         with self.lock:
@@ -251,15 +304,17 @@ class AccountStore:
         s = self._need(token)
         with self.lock:
             n = self.db.execute("SELECT COUNT(*) FROM sessions WHERE account = ?", (s["account"],)).fetchone()[0]
-        return {"email": s["email"], "created": s["created"], "devices": n}
+            pw, google = self.db.execute("SELECT pw, google FROM accounts WHERE id = ?", (s["account"],)).fetchone()
+        return {"email": s["email"], "created": s["created"], "devices": n,
+                "has_password": pw != NO_PASSWORD, "google": bool(google)}
 
     def change_password(self, token: str, old: str, new: str) -> None:
-        """비밀번호 바꾸기. 이 기기 말고 다른 기기는 모두 로그아웃된다."""
+        """비밀번호 바꾸기 (Google로만 가입한 계정은 새로 만들기). 이 기기 말고 다른 기기는 모두 로그아웃된다."""
         s = self._need(token)
         _check_new_password(new)
         with self.lock:
             pw = self.db.execute("SELECT pw FROM accounts WHERE id = ?", (s["account"],)).fetchone()[0]
-        if not check_password(old or "", pw):
+        if pw != NO_PASSWORD and not check_password(old or "", pw):
             raise AccountError("지금 비밀번호가 맞지 않아요.", 401)
         with self.lock:
             self.db.execute("UPDATE accounts SET pw = ? WHERE id = ?", (hash_password(new), s["account"]))
@@ -267,11 +322,15 @@ class AccountStore:
             self.db.execute("DELETE FROM codes WHERE purpose = 'reset' AND key = ?", (s["account"],))
 
     def delete(self, token: str, password: str) -> None:
-        """계정과 서버에 있던 노트(동기화 기록·원본 PDF)를 모두 지운다. 기기 안의 노트는 남는다."""
+        """계정과 서버에 있던 노트(동기화 기록·원본 PDF)를 모두 지운다. 기기 안의 노트는 남는다.
+        비밀번호가 없는 계정(Google로만 가입)은 password 자리에 계정 이메일을 넣어 확인한다."""
         s = self._need(token)
         with self.lock:
             pw = self.db.execute("SELECT pw FROM accounts WHERE id = ?", (s["account"],)).fetchone()[0]
-        if not check_password(password or "", pw):
+        if pw == NO_PASSWORD:
+            if normalize_email(password) != s["email"]:
+                raise AccountError("확인을 위해 계정 이메일을 그대로 넣어 주세요.", 401)
+        elif not check_password(password or "", pw):
             raise AccountError("비밀번호가 맞지 않아요.", 401)
         with self.lock:
             self.db.execute("DELETE FROM sessions WHERE account = ?", (s["account"],))
@@ -427,9 +486,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if a.cmd == "list":
             with store.lock:
-                rows = store.db.execute("SELECT email, created, verified FROM accounts ORDER BY created").fetchall()
-            for email, created, verified in rows:
-                print(f"{email}\t{time.strftime('%Y-%m-%d', time.localtime(created))}\t{'이메일 확인됨' if verified else '이메일 확인 안 됨'}")
+                rows = store.db.execute("SELECT email, created, verified, google, pw FROM accounts ORDER BY created").fetchall()
+            for email, created, verified, google, pw in rows:
+                how = "+".join(x for x, on in (("비밀번호", pw != NO_PASSWORD), ("Google", bool(google))) if on)
+                print(f"{email}\t{time.strftime('%Y-%m-%d', time.localtime(created))}\t"
+                      f"{'이메일 확인됨' if verified else '이메일 확인 안 됨'}\t{how}")
             return 0
         new = os.environ.get("PDFSUMMARY_NEW_PASSWORD") or getpass.getpass("새 비밀번호: ")
         store.reset_password(a.email, new)

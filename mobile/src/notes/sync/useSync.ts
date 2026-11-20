@@ -1,10 +1,10 @@
 // 앱 전체의 동기화 켜고 끄기·상태. 계정 로그인 또는 동기화 코드로.
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { Settings } from "../../api";
+import { Client, type Settings } from "../../api";
 import { loadSettings } from "../../platform/storage";
 import type { Fs } from "../store";
-import { AccountApi, type AccountSession } from "./account";
+import { AccountApi, type AccountInfo, type AccountSession } from "./account";
 import { loadSyncConfig, saveSyncConfig } from "./config";
 import { SyncEngine, emptyState, type SyncStatus } from "./engine";
 import type { SyncedStore } from "./syncedStore";
@@ -19,6 +19,8 @@ export type SyncApi = {
   account: SyncAccount | null;
   status: SyncStatus;
   server: Settings | null;
+  /** 서버가 Google 로그인을 켰으면 그 클라이언트 ID (메일 보내기 가능 여부도) */
+  features: { google: { web: string; ios?: string } | null; mail: boolean };
   reload: () => Promise<void>; // 서버 설정을 다시 읽기
   // 코드로
   start: (code?: string) => Promise<void>; // code 없으면 새 공간 만들기
@@ -28,6 +30,8 @@ export type SyncApi = {
   signup: (email: string, password: string, code?: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   linkAccount: (email: string, password: string, code?: string) => Promise<void>; // 지금 쓰는 동기화 코드를 새 계정으로 옮기기
+  googleLogin: (idToken: string) => Promise<void>; // Google로 로그인(없으면 가입). 코드로 쓰는 중이면 그 노트를 새 계정으로
+  me: () => Promise<AccountInfo>;
   logout: () => Promise<void>;
   forgot: (email: string) => Promise<void>; // 비밀번호 찾기 코드 메일
   resetPassword: (email: string, code: string, password: string) => Promise<void>; // 코드로 새 비밀번호 → 로그인
@@ -44,13 +48,26 @@ export function useSync(store: SyncedStore, fs: Fs): SyncApi {
   const [account, setAccount] = useState<SyncAccount | null>(null);
   const [status, setStatus] = useState<SyncStatus>(OFF);
   const [server, setServer] = useState<Settings | null>(null);
+  const [features, setFeatures] = useState<SyncApi["features"]>({ google: null, mail: false });
   const engine = useRef<SyncEngine | null>(null);
   const token = useRef<string>("");
   const expired = useRef(false);
 
-  const needServer = async () => {
+  /** 서버 설정을 읽고, 서버가 켠 기능(Google 로그인·메일)을 물어 둔다 */
+  const readServer = useCallback(async () => {
     const s = await loadSettings();
     setServer(s);
+    if (s.serverUrl && s.accessCode) {
+      new Client(s)
+        .state()
+        .then((st) => setFeatures({ google: st.google?.web ? st.google : null, mail: !!st.mail }))
+        .catch(() => undefined);
+    }
+    return s;
+  }, []);
+
+  const needServer = async () => {
+    const s = await readServer();
     if (!s.serverUrl || !s.accessCode) throw new Error("먼저 설정에서 서버 주소와 접속 코드를 넣어 주세요.");
     return s;
   };
@@ -97,8 +114,7 @@ export function useSync(store: SyncedStore, fs: Fs): SyncApi {
   // 앱을 켤 때: 켜 두었던 동기화를 이어서
   useEffect(() => {
     (async () => {
-      const s = await loadSettings();
-      setServer(s);
+      const s = await readServer();
       const cfg = await loadSyncConfig();
       if (!s.serverUrl || !s.accessCode || !cfg) return;
       if (cfg.token && cfg.email) {
@@ -111,7 +127,7 @@ export function useSync(store: SyncedStore, fs: Fs): SyncApi {
       }
     })().catch(() => undefined);
     return () => engine.current?.stop();
-  }, [attach]);
+  }, [attach, readServer]);
 
   const off = useCallback(async () => {
     engine.current?.stop();
@@ -163,6 +179,13 @@ export function useSync(store: SyncedStore, fs: Fs): SyncApi {
     await afterLogin(s, await new AccountApi(s.serverUrl, s.accessCode).login(email, password));
   }, [afterLogin]);
 
+  const googleLogin = useCallback(async (idToken: string) => {
+    const s = await needServer();
+    const r = await new AccountApi(s.serverUrl, s.accessCode).google(idToken, code ?? undefined);
+    if (code) await signedIn(s, r, true); // 코드로 쓰던 공간을 그대로 이어받음
+    else await afterLogin(s, r);
+  }, [afterLogin, code, signedIn]);
+
   const forgot = useCallback(async (email: string) => {
     const s = await needServer();
     await new AccountApi(s.serverUrl, s.accessCode).forgot(email);
@@ -213,11 +236,14 @@ export function useSync(store: SyncedStore, fs: Fs): SyncApi {
   }, [api]);
 
   const sessions = useCallback(async () => (await api()).sessions(token.current), [api]);
+  const me = useCallback(async () => (await api()).me(token.current), [api]);
   const revoke = useCallback(async (id: string) => {
     await (await api()).revoke(token.current, id);
   }, [api]);
 
-  const reload = useCallback(async () => setServer(await loadSettings()), []);
+  const reload = useCallback(async () => {
+    await readServer();
+  }, [readServer]);
 
   return {
     on: !!code || !!account,
@@ -225,6 +251,7 @@ export function useSync(store: SyncedStore, fs: Fs): SyncApi {
     account,
     status,
     server,
+    features,
     reload,
     start,
     stop: off,
@@ -232,6 +259,8 @@ export function useSync(store: SyncedStore, fs: Fs): SyncApi {
     signup,
     login,
     linkAccount,
+    googleLogin,
+    me,
     logout,
     forgot,
     resetPassword,

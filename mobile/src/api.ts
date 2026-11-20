@@ -13,6 +13,10 @@ export type ServerState = {
   server_key: boolean; // 서버에 운영자 키가 있어 내 키 없이도 AI를 쓸 수 있는지
   max_upload_mb: number;
   keep_minutes: number;
+  sync?: boolean;
+  accounts?: boolean;
+  mail?: boolean; // 가입 확인·비밀번호 찾기 메일을 보낼 수 있는지
+  google?: { web: string; ios?: string } | null; // Google 로그인 클라이언트 ID (없으면 꺼짐)
 };
 
 export type UploadInfo = { id: string; name: string; pages: number; title: string; has_toc: boolean };

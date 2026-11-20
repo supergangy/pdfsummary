@@ -125,15 +125,28 @@ docker run -p 8080:8080 -e PDFSUMMARY_ACCESS_CODE="길고-아무도-모를-접�
 | `PORT` | 받을 포트 (기본 8080, 클라우드가 정해 주면 그 값) |
 | `PDFSUMMARY_SYNC_DIR` | 필기 앱 **실시간 동기화** 기록을 둘 폴더 (기본 `~/.pdfsummary/sync`, Docker는 `/data/sync`). 요약용 파일과 달리 지우지 않으니 **디스크(볼륨)에 두세요** |
 | `PDFSUMMARY_SMTP_HOST` · `_PORT` · `_SECURITY` · `_USER` · `_PASSWORD` · `_FROM` | 필기 앱 **가입 확인·비밀번호 찾기 메일**을 보낼 메일 서버. `_SECURITY`는 `starttls`(기본, 587) · `ssl`(465) · `none`. Gmail이면 `smtp.gmail.com`, 아이디는 Gmail 주소, 비밀번호는 Google 계정의 '앱 비밀번호'. 없으면 가입할 때 이메일을 확인하지 않고, 비밀번호 찾기 메일도 꺼집니다 |
+| `PDFSUMMARY_GOOGLE_WEB_CLIENT_ID` · `_IOS_CLIENT_ID` · `_ANDROID_CLIENT_ID` | 필기 앱 **Google 계정으로 로그인**. Google Cloud의 OAuth 클라이언트 ID (아래 '필기 앱 Google 로그인 준비'). 웹 클라이언트 ID가 없으면 Google 로그인이 꺼집니다 |
 
 - 아이폰·아이패드 앱은 **https** 주소만 붙을 수 있습니다. Render · Fly.io · Google Cloud Run 같은 곳에 Docker 이미지를 올리면 https 주소를 줍니다.
 - 요약은 한 번에 하나씩 만듭니다 (여러 명이 동시에 쓰면 차례로 처리).
 - 서버 상태 확인: `GET /healthz`
 - **실시간 동기화**: 같은 서버로 필기 앱 기기끼리 노트를 맞춥니다. **계정**(이메일·비밀번호) 또는 '동기화 코드'(긴 무작위 코드)로 공간을 나누고, 서버에는 코드·비밀번호(scrypt)·로그인 세션의 해시만 둡니다. 노트 내용은 서버 디스크에 남으므로 믿을 수 있는 곳에 띄우세요.
   - 계정 가입·로그인도 서버 접속 코드가 있어야 할 수 있습니다 (모르는 사람이 가입하지 못함). 비밀번호를 5번 틀리면 1분 동안 막습니다.
+  - **Google 계정으로 로그인**: 앱이 Google에서 받은 ID 토큰을 서버가 Google 공개 키로 직접 확인합니다 (서명·이 앱용인지·만료·이메일 확인 여부). 같은 이메일의 계정이 있으면 거기에 Google을 이어 붙이고, 없으면 새 계정을 만듭니다. 이메일 확인을 거치지 않은 계정에 이어 붙일 때는 (남이 그 이메일로 먼저 가입해 두었을 수 있으니) 그 계정의 비밀번호와 로그인을 모두 없앱니다. 서버가 `www.googleapis.com`에 닿아야 합니다 (공개 키를 받아 둠).
   - 메일 서버를 정해 두면 가입할 때 그 이메일로 6자리 확인 코드를 보내, 받은 사람만 가입할 수 있습니다 (오타 난 이메일·남의 이메일로 가입 방지). `python -m pdfsummary.accounts list`에 계정마다 이메일 확인 여부가 나옵니다.
   - 비밀번호를 잊은 사람: 메일 서버(위 `PDFSUMMARY_SMTP_*`)를 정해 두면 앱의 **비밀번호를 잊었어요**에서 6자리 코드를 메일로 받아 스스로 새 비밀번호를 정합니다 (코드는 15분, 5번 틀리면 끝, 같은 이메일로 1분에 한 번·한 시간에 5번까지, 가입되지 않은 이메일이어도 같은 답). 설정 확인: `python -m pdfsummary.accounts test-mail 받을주소`.
     메일 서버가 없으면 서버에서 `python -m pdfsummary.accounts reset-password 이메일` (그 계정의 모든 기기가 로그아웃됨). 가입한 계정 보기: `python -m pdfsummary.accounts list`. Docker라면 `docker exec -it <컨테이너> python -m pdfsummary.accounts …`.
+
+### 필기 앱 Google 로그인 준비
+
+1. [Google Cloud 콘솔](https://console.cloud.google.com/) → **API 및 서비스 → OAuth 동의 화면**: 앱 이름·지원 이메일을 넣고, 누구나 로그인하게 하려면 게시 상태를 **프로덕션**으로 (테스트 상태면 등록한 테스트 사용자만).
+2. **사용자 인증 정보 → 사용자 인증 정보 만들기 → OAuth 클라이언트 ID**를 종류별로:
+   - **웹 애플리케이션**: '승인된 JavaScript 원본'에 웹 앱 주소 (예: `https://notes.example.com`, 개발 중이면 `http://localhost:8081`). → 서버의 `PDFSUMMARY_GOOGLE_WEB_CLIENT_ID` (안드로이드 앱도 이 ID를 씀)
+   - **iOS**: 번들 ID `com.supergangy.pdfsummary`. → 서버의 `PDFSUMMARY_GOOGLE_IOS_CLIENT_ID`, 그리고 iOS 앱을 빌드할 때 `GOOGLE_IOS_CLIENT_ID`로도 (앱에 돌아오는 주소가 들어감, `mobile/app.config.js`)
+   - **Android**: 패키지 이름 `com.supergangy.pdfsummary`와 앱 서명 인증서의 SHA-1 (`eas credentials`로 확인, Play 스토어로 배포하면 Play 앱 서명 키의 SHA-1도). 만들어 두기만 하면 됩니다.
+3. 서버를 다시 켜면 앱의 ☁️ 동기화에 **Google로 계속하기**가 나타납니다.
+
+클라이언트 ID는 비밀이 아니라 앱에 그대로 알려 줍니다. (클라이언트 '보안 비밀'은 쓰지 않으니 어디에도 넣지 마세요.)
 
 ## 요약본은 이렇게 정리됩니다
 

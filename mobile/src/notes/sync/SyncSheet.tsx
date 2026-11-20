@@ -3,7 +3,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Alert, Modal, Platform, ScrollView, Text, TextInput, View } from "react-native";
 
 import { Button, Hint, Segmented, useTheme } from "../../ui";
-import type { AccountSession } from "./account";
+import type { AccountInfo, AccountSession } from "./account";
+import { GoogleButton, googleAvailable } from "./GoogleButton";
 import type { SyncStatus } from "./engine";
 import type { SyncApi } from "./useSync";
 
@@ -38,6 +39,7 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
   const [newPw, setNewPw] = useState("");
   const [delPw, setDelPw] = useState("");
   const [devices, setDevices] = useState<AccountSession[] | null>(null);
+  const [info, setInfo] = useState<AccountInfo | null>(null); // 비밀번호가 있는 계정인지 등
   const [forgotStep, setForgotStep] = useState<"" | "email" | "code">(""); // 비밀번호 찾기
   const [resetCode, setResetCode] = useState("");
   const [verifyFor, setVerifyFor] = useState<"" | "signup" | "link">(""); // 가입할 때 이메일 확인
@@ -64,10 +66,11 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
   const loadDevices = useCallback(async () => {
     try {
       setDevices(await sync.sessions());
+      setInfo(await sync.me());
     } catch {
       setDevices(null);
     }
-  }, [sync.sessions]);
+  }, [sync.sessions, sync.me]);
 
   useEffect(() => {
     if (visible && signedIn) void loadDevices();
@@ -131,6 +134,20 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
     });
 
   const okLogin = /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(email.trim()) && pw.length >= 8;
+  const google = googleAvailable(sync.features.google) ? sync.features.google : null;
+  /** Google로 계속하기 + '또는' 줄 */
+  const googleBlock = (label?: string) =>
+    google && (
+      <>
+        <GoogleButton
+          ids={google}
+          label={label}
+          onToken={(idToken) => run("Google로 로그인 중…", () => sync.googleLogin(idToken))}
+          onError={(m) => setErr(m)}
+        />
+        <Text style={{ color: t.muted, fontSize: 13 }}>또는 이메일로</Text>
+      </>
+    );
   const h = (text: string) => <Text style={{ color: t.ink, fontWeight: "700", fontSize: 16, marginTop: 14 }}>{text}</Text>;
 
   const statusBlock = (
@@ -225,6 +242,7 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
     body = (
       <View style={{ marginTop: 18, gap: 10 }}>
         <Hint color={t.bad}>{sync.account.email} 계정의 로그인이 끝났어요 (다른 기기에서 로그아웃시켰거나 비밀번호가 바뀜). 다시 로그인하면 그동안 이 기기에서 쓴 것도 이어서 보내요.</Hint>
+        {googleBlock("Google로 다시 로그인")}
         {input("계정 비밀번호", pw, setPw, { secret: true })}
         <Button kind="primary" label="다시 로그인" onPress={() => run("로그인 중…", () => sync.login(sync.account!.email, pw))} disabled={pw.length < 8} busy={busy === "로그인 중…"} style={{ alignSelf: "flex-start" }} />
         <Button kind="link" label="비밀번호를 잊었어요" onPress={() => { setEmail(sync.account!.email); setForgotStep("email"); setErr(""); }} />
@@ -270,19 +288,25 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
           ))
         )}
 
-        {h("비밀번호 바꾸기")}
-        {input("지금 비밀번호", oldPw, setOldPw, { secret: true })}
+        {info?.google && <Hint>🔗 Google 계정이 이어져 있어요. 어느 기기에서든 'Google로 계속하기'로 로그인할 수 있어요.</Hint>}
+
+        {h(info && !info.has_password ? "비밀번호 만들기" : "비밀번호 바꾸기")}
+        {info && !info.has_password ? (
+          <Hint>Google로 가입해 비밀번호가 없어요. 비밀번호를 만들면 이메일·비밀번호로도 로그인할 수 있어요.</Hint>
+        ) : (
+          input("지금 비밀번호", oldPw, setOldPw, { secret: true })
+        )}
         {input("새 비밀번호", newPw, setNewPw, { secret: true, fresh: true, placeholder: "새 비밀번호 (8자 이상)" })}
         <Button
-          label="비밀번호 바꾸기"
-          disabled={oldPw.length < 1 || newPw.length < 8}
+          label={info && !info.has_password ? "비밀번호 만들기" : "비밀번호 바꾸기"}
+          disabled={(!!info?.has_password && oldPw.length < 1) || newPw.length < 8}
           busy={busy === "바꾸는 중…"}
           onPress={() =>
             run("바꾸는 중…", async () => {
               await sync.changePassword(oldPw, newPw);
               setOldPw("");
               setNewPw("");
-              setNote("비밀번호를 바꿨어요. 다른 기기는 모두 로그아웃되었어요.");
+              setNote(info && !info.has_password ? "비밀번호를 만들었어요. 이제 이메일·비밀번호로도 로그인할 수 있어요. 다른 기기는 모두 로그아웃되었어요." : "비밀번호를 바꿨어요. 다른 기기는 모두 로그아웃되었어요.");
               await loadDevices();
             })
           }
@@ -301,7 +325,9 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
 
         {h("계정 삭제")}
         <Hint>계정과 서버에 있는 노트(동기화 기록·원본 PDF)를 모두 지워요. 각 기기 안의 노트는 남아요. 되돌릴 수 없어요.</Hint>
-        {input("계정 삭제 비밀번호 확인", delPw, setDelPw, { secret: true, placeholder: "비밀번호" })}
+        {info && !info.has_password
+          ? input("계정 삭제 이메일 확인", delPw, setDelPw, { email: true, placeholder: `확인을 위해 ${sync.account!.email} 를 그대로 입력` })
+          : input("계정 삭제 비밀번호 확인", delPw, setDelPw, { secret: true, placeholder: "비밀번호" })}
         <Button
           label="계정 삭제"
           disabled={delPw.length < 1}
@@ -322,7 +348,8 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
         <Hint>다른 기기의 '☁️ 동기화 → 코드로 연결'에 이 코드를 넣으세요. 코드를 아는 사람은 노트를 볼 수 있으니 다른 사람에게 알려 주지 마세요.</Hint>
 
         {h("계정으로 옮기기")}
-        <Hint>코드를 옮겨 적는 대신 이메일·비밀번호로 로그인해서 쓸 수 있어요. 지금 노트가 그대로 새 계정으로 가고, 이 코드로 연결된 다른 기기도 계속 맞춰져요.</Hint>
+        <Hint>코드를 옮겨 적는 대신 {google ? "Google 계정이나 " : ""}이메일·비밀번호로 로그인해서 쓸 수 있어요. 지금 노트가 그대로 새 계정으로 가고, 이 코드로 연결된 다른 기기도 계속 맞춰져요.</Hint>
+        {googleBlock("Google 계정으로 옮기기")}
         {input("계정 이메일", email, setEmail, { email: true, placeholder: "이메일" })}
         {input("계정 비밀번호", pw, setPw, { secret: true, placeholder: "비밀번호 (8자 이상)" })}
         <Button label="계정 만들고 옮기기" disabled={!okLogin} busy={busy === "옮기는 중…"} onPress={() => beginSignup("link")} style={{ alignSelf: "flex-start" }} />
@@ -350,6 +377,7 @@ export function SyncSheet({ visible, sync, onClose, onOpenSettings }: { visible:
         {way === "account" ? (
           <>
             <Hint>같은 계정으로 로그인한 기기끼리 노트가 맞춰져요. 이 기기에 있던 노트도 계정으로 올라가요.</Hint>
+            {googleBlock()}
             {input("계정 이메일", email, setEmail, { email: true, placeholder: "이메일" })}
             {input("계정 비밀번호", pw, setPw, { secret: true, placeholder: "비밀번호 (8자 이상)" })}
             <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap" }}>

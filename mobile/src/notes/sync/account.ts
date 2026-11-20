@@ -3,6 +3,8 @@ import { Platform } from "react-native";
 
 import { SyncHttpError, serverBase } from "./transport";
 
+export type AccountInfo = { email: string; created: number; devices: number; has_password: boolean; google: boolean };
+
 export type AccountSession = { id: string; device: string; created: number; used: number; current: boolean };
 
 export function deviceName(): string {
@@ -67,6 +69,10 @@ export class AccountApi {
   login(email: string, password: string) {
     return this.call<{ token: string; email: string }>("login", { email, password, device: deviceName() });
   }
+  /** Google 로그인 (없으면 가입). linkCode: 지금 쓰는 동기화 코드를 새 계정으로 옮기기 */
+  google(idToken: string, linkCode?: string) {
+    return this.call<{ token: string; email: string; created: boolean }>("google", { id_token: idToken, device: deviceName(), ...(linkCode ? { link_code: linkCode } : {}) });
+  }
   /** 비밀번호 찾기 코드 메일 (가입되지 않은 이메일이어도 같은 답) */
   forgot(email: string) {
     return this.call<{ ok: true }>("forgot", { email });
@@ -79,7 +85,7 @@ export class AccountApi {
     return this.call<{ ok: true }>("logout", {}, session);
   }
   me(session: string) {
-    return this.call<{ email: string; created: number; devices: number }>("me", null, session);
+    return this.call<AccountInfo>("me", null, session);
   }
   changePassword(session: string, old: string, next: string) {
     return this.call<{ ok: true }>("password", { old, new: next }, session);

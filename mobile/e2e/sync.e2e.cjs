@@ -4,6 +4,8 @@
 //  계정: A가 코드를 계정으로 옮김 (가입 확인 메일 코드) → 새 기기 C가 이메일·비밀번호로 로그인 (틀린 비밀번호는 거절) → 노트·PDF를 받음
 //  → C의 필기가 코드로 쓰는 B에 → A가 C를 로그아웃시킴 → 그동안 C에서 쓴 필기는 다시 로그인하면 B에.
 //  비밀번호 찾기: 새 기기 D에서 메일로 받은 6자리 코드로 새 비밀번호 → 바로 로그인, 노트를 받음 (메일은 폴더로).
+//  Google 로그인: 새 기기 E에서 'Google로 계속하기' → 같은 이메일의 계정에 이어져 노트를 받음
+//   (Google 대신 시험용 RSA 키로 서명한 ID 토큰과, 그 공개 키를 내주는 작은 서버. 서버는 실제와 같은 방법으로 서명을 확인)
 //   npx expo export --platform web --output-dir dist-web && node e2e/sync.e2e.cjs dist-web
 const { chromium } = require("playwright");
 const { spawn, execFileSync } = require("child_process");
@@ -11,6 +13,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const http = require("http");
+const crypto = require("crypto");
 
 const ROOT = path.join(__dirname, "..", "..");
 const WEB = path.resolve(process.argv[2] || "dist-web");
@@ -77,6 +80,28 @@ async function until(fn, ms, what) {
 
 // 서버가 폴더에 남긴 메일(.eml) 중 n번째 이후의 마지막 것 → 그 안의 6자리 코드
 const MAIL_DIR = path.join(TMP, "mail");
+
+// ── 시험용 Google: RSA 키, 공개 키(JWKS), ID 토큰 ──
+const GOOGLE_WEB = "e2e-web.apps.googleusercontent.com";
+const gkey = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+const jwks = { keys: [{ ...gkey.publicKey.export({ format: "jwk" }), kid: "e2e-key", alg: "RS256", use: "sig" }] };
+function googleIdToken(claims) {
+  const now = Math.floor(Date.now() / 1000);
+  const b = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const h = b({ alg: "RS256", kid: "e2e-key", typ: "JWT" });
+  const p = b({ iss: "https://accounts.google.com", aud: GOOGLE_WEB, iat: now, exp: now + 3600, email_verified: true, ...claims });
+  return `${h}.${p}.${crypto.sign("RSA-SHA256", Buffer.from(`${h}.${p}`), gkey.privateKey).toString("base64url")}`;
+}
+// 웹 앱이 불러오는 Google 로그인 스크립트 대신: 버튼을 누르면 위 토큰을 돌려준다
+const FAKE_GIS = `window.google = { accounts: { id: {
+  initialize(o) { window.__gis = o; },
+  renderButton(el) {
+    const b = document.createElement("button");
+    b.textContent = "Google로 계속하기 (시험)";
+    b.setAttribute("aria-label", "시험 Google 버튼");
+    b.onclick = () => window.__gis.callback({ credential: window.__googleToken });
+    el.appendChild(b);
+  } } } };`;
 async function mailCode(to, n, what) {
   let code = "";
   await until(async () => {
@@ -95,15 +120,24 @@ async function mailCode(to, n, what) {
   const book = path.join(TMP, "book.pdf");
   execFileSync("python3", ["-c", "import sys; sys.path.insert(0, 'examples'); import make_sample as m; m.make_book_pair(sys.argv[1], sys.argv[1] + '.n.pdf')", book], { cwd: ROOT });
   const { srv, port } = await staticServer(WEB);
+  const jw = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "public, max-age=600" });
+    res.end(JSON.stringify(jwks));
+  });
+  await new Promise((r) => jw.listen(0, "127.0.0.1", r));
   const apiPort = 19300 + Math.floor(Math.random() * 500);
   const api = spawn("python3", ["-m", "pdfsummary.app", "--server", "--host", "127.0.0.1", "--port", String(apiPort), "--access-code", CODE], {
-    cwd: ROOT, env: { ...process.env, ANTHROPIC_API_KEY: "", HOME: TMP, PDFSUMMARY_SYNC_DIR: path.join(TMP, "sync"), PDFSUMMARY_MAIL_DIR: MAIL_DIR }, stdio: "ignore",
+    cwd: ROOT, env: { ...process.env, ANTHROPIC_API_KEY: "", HOME: TMP, PDFSUMMARY_SYNC_DIR: path.join(TMP, "sync"), PDFSUMMARY_MAIL_DIR: MAIL_DIR,
+      PDFSUMMARY_GOOGLE_WEB_CLIENT_ID: GOOGLE_WEB, PDFSUMMARY_GOOGLE_JWKS_URL: `http://127.0.0.1:${jw.address().port}/certs` }, stdio: "ignore",
   });
   await waitFor(`http://127.0.0.1:${apiPort}/healthz`);
   const browser = await chromium.launch();
   const errors = [];
-  const open = async () => {
+  const open = async (opts = {}) => {
     const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 } });
+    // 시험 중에는 진짜 Google 스크립트를 부르지 않는다 (E만 시험용 Google)
+    await ctx.route("https://accounts.google.com/**", (r) => r.abort());
+    if (opts.google) await ctx.addInitScript(FAKE_GIS);
     const page = await ctx.newPage();
     page.on("pageerror", (e) => errors.push(e.message));
     page.on("dialog", (d) => d.accept());
@@ -118,7 +152,7 @@ async function mailCode(to, n, what) {
     await page.getByText("‹ 노트 목록").first().click();
     return page;
   };
-  let A, B, C, D;
+  let A, B, C, D, E;
   try {
     A = await open();
     B = await open();
@@ -271,14 +305,34 @@ async function mailCode(to, n, what) {
     await D.getByText("닫기").click();
     await until(async () => (await D.getByLabel("동기화 노트 열기").count()) > 0 && strokesOf(await idb(D)) >= 4, 20000, "비밀번호를 새로 정한 D에 노트가");
     console.log("✓ 비밀번호 찾기: 메일로 받은 코드로 새 비밀번호 → D 로그인, 노트를 받음");
+
+    // Google 로그인 (새 기기 E): 같은 이메일(확인된 계정) → 그 계정에 Google이 이어짐
+    E = await open({ google: true });
+    await E.getByLabel("동기화 켜기").click();
+    await E.getByLabel("시험 Google 버튼").waitFor({ timeout: 10000 });
+    await E.evaluate((t) => (window.__googleToken = t), googleIdToken({ sub: "e2e-google-1", email: "E2E@example.com", aud: "someone-else" }));
+    await E.getByLabel("시험 Google 버튼").click();
+    await E.getByText(/이 앱용 Google 로그인이 아니에요/).waitFor({ timeout: 10000 });
+    await E.evaluate((t) => (window.__googleToken = t), googleIdToken({ sub: "e2e-google-1", email: "E2E@example.com" }));
+    await E.getByLabel("시험 Google 버튼").click();
+    await E.getByLabel("로그인한 계정").waitFor({ timeout: 15000 });
+    if ((await E.getByLabel("로그인한 계정").innerText()).indexOf(EMAIL) < 0) fail("E가 다른 계정으로 로그인됨");
+    await E.getByText(/Google 계정이 이어져 있어요/).waitFor({ timeout: 10000 });
+    await E.getByText("닫기").click();
+    await until(async () => (await E.getByLabel("동기화 노트 열기").count()) > 0 && strokesOf(await idb(E)) >= 4, 20000, "Google로 로그인한 E에 노트가");
+    // 이메일 확인을 거친 계정이라 비밀번호는 그대로 (Google만 더 이어짐)
+    const r = await fetch(`http://127.0.0.1:${apiPort}/api/account/login`, { method: "POST", headers: { Authorization: `Bearer ${CODE}`, "Content-Type": "application/json" }, body: JSON.stringify({ email: EMAIL, password: "e2e-new-password" }) });
+    if (r.status !== 200) fail("Google을 이은 뒤 비밀번호 로그인이 안 됨: " + r.status);
+    console.log("✓ Google 로그인: 다른 앱용 토큰은 거절, 같은 이메일 계정에 Google이 이어져 E가 노트를 받음 (비밀번호도 그대로)");
     if (errors.length) fail("페이지 오류: " + errors.join(" | "));
   } catch (e) {
-    for (const [n, p] of [["A", A], ["B", B], ["C", C], ["D", D]]) if (p) await p.screenshot({ path: path.join(TMP, `failure-${n}.png`) }).catch(() => {});
+    for (const [n, p] of [["A", A], ["B", B], ["C", C], ["D", D], ["E", E]]) if (p) await p.screenshot({ path: path.join(TMP, `failure-${n}.png`) }).catch(() => {});
     console.error("✗ " + e.message, `\n(화면: ${TMP}/failure-A.png, failure-B.png, failure-C.png)`);
     process.exitCode = 1;
   } finally {
     await browser.close();
     srv.close();
+    jw.close();
     api.kill();
   }
 })();

@@ -272,9 +272,10 @@ def account_store():
     with _SYNC_LOCK:
         if _ACCOUNTS is None or _ACCOUNTS.sync is not st:
             from .accounts import AccountStore
+            from .google_auth import GoogleVerifier
             from .mailer import Mailer
 
-            _ACCOUNTS = AccountStore(st, Mailer.from_env())
+            _ACCOUNTS = AccountStore(st, Mailer.from_env(), GoogleVerifier.from_env())
         return _ACCOUNTS
 
 RESULT_FILES = {
@@ -373,7 +374,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"server": True, "version": __version__, "server_key": has_credentials(),
                                    "max_upload_mb": STATE.max_upload // (1024 * 1024),
                                    "keep_minutes": int(STATE.ttl // 60), "sync": True, "accounts": True,
-                                   "mail": account_store().mailer.enabled})
+                                   "mail": account_store().mailer.enabled,
+                                   "google": account_store().google.public_ids()})
             return self._json(key_state())
         if url.path.startswith("/api/sync/"):
             return self._sync_get(url.path, q)
@@ -550,6 +552,8 @@ class Handler(BaseHTTPRequestHandler):
         device = str(body.get("device") or "")[:80]
         get = self.command == "GET"
         try:
+            if path == "/api/account/google" and not get:
+                return self._json(acc.google_login(str(body.get("id_token") or ""), device, str(body.get("link_code") or "")))
             if path == "/api/account/signup/start" and not get:
                 return self._json(acc.signup_start(str(body.get("email") or ""), self.client_address[0]))
             if path == "/api/account/signup" and not get:

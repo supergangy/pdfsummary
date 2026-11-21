@@ -1,0 +1,15 @@
+{
+  // 이 저장소를 열면 VS Code가 설치를 권하는 확장 (HANDOFF.md §2)
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "expo.vscode-expo-tools",
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "mathiasfrohlich.kotlin",
+    "swiftlang.swift-vscode",
+    "ms-playwright.playwright",
+    "github.vscode-github-actions",
+    "anthropic.claude-code"
+  ]
+}

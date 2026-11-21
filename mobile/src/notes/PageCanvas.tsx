@@ -3,11 +3,14 @@
 // - 두 손가락: 확대·축소·이동
 // - 지금 긋는 획은 UI 스레드에서 바로 그리고(지연 최소), 손을 떼면 JS 쪽에 넘겨 저장한다
 // - S펜 옆 단추를 누른 채 쓰면 지우개 (펜이 떠 있을 때부터 단추 상태를 알 수 있다)
-import { Canvas, Circle, DashPathEffect, Group, Image, Path, Picture, Rect, useImage, usePathValue } from "@shopify/react-native-skia";
+// - 손가락으로 밀고 놓으면 조금 더 미끄러진다 (관성)
+// - 필기가 많은 쪽은 화면이 움직이는 동안(끌기·확대·관성) 쪽 전체를 한 장의 사진으로 그리고, 멈추면 선명한 원본으로 돌아온다
+//   (삼성 노트처럼: 획 수백 개를 장면마다 다시 그리지 않게)
+import { Canvas, Circle, DashPathEffect, FilterMode, Group, Image, MipmapMode, Path, Picture, Rect, Skia, useImage, usePathValue, type SkImage, type SkPicture } from "@shopify/react-native-skia";
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { Text, View, type LayoutChangeEvent } from "react-native";
+import { PixelRatio, Platform, Text, View, type LayoutChangeEvent } from "react-native";
 import { GestureDetector, PointerType, usePanGesture, usePinchGesture, useSimultaneousGestures } from "react-native-gesture-handler";
-import Animated, { useAnimatedStyle, useDerivedValue, useSharedValue, type SharedValue } from "react-native-reanimated";
+import Animated, { cancelAnimation, useAnimatedStyle, useDerivedValue, useSharedValue, withDecay, type SharedValue } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 
 import { StylusView } from "../../modules/stylus";
@@ -15,10 +18,18 @@ import type { LineDash, Page, Stroke } from "./model";
 import { inkPicture, paperPicture, type PathCache } from "./render";
 
 export type ToolName = "pen" | "highlighter" | "eraser" | "lasso" | "text";
+/** 움직이는 동안 쓸 쪽 사진에 담을 것 */
+type SnapContent = { ver: number; bg: SkImage | null; paper: SkPicture | null; ink: SkPicture };
 export type Selection = { ids: Set<string>; box: [number, number, number, number] } | null;
 export type ZoomCmd = { kind: "in" | "out" | "fit"; n: number };
 
 const MARGIN = 12;
+/** 필기(글상자 빼고)가 이만큼 넘는 쪽은 움직이는 동안 쪽 사진으로 그린다. 적은 쪽은 원본도 충분히 빨라서 선명한 채로 둔다 */
+export const HEAVY_STROKES = 80;
+/** 쪽 사진의 가로 픽셀 한도 (웹은 사진을 CPU로 만들어 더 작게) */
+const SNAP_MAX = Platform.OS === "web" ? 1200 : 2048;
+/** 사진은 기기에서는 GPU로 만든다 (화면을 그리는 스레드와 같은 문맥이라 바로 쓸 수 있다). 웹은 화면 밖 그림판마다 따로 문맥이 생겨 CPU로 */
+const SNAP_GPU = Platform.OS !== "web";
 
 type Props = {
   page: Page;
@@ -68,8 +79,11 @@ export function PageCanvas(props: Props) {
   const emitMove = useCallback((dx: number, dy: number) => cb.current.onMoveSelection?.(dx, dy), []);
   const emitScale = useCallback((s: number) => cb.current.onViewWidth?.(s * cb.current.page.w), []);
 
-  const fit = useCallback(() => {
-    const W = vw.value, H = vh.value;
+  // 움직이는 동안 쓸 쪽 사진의 pt당 픽셀 (맞춤 보기의 화면 픽셀만큼, 너무 크지 않게)
+  const snapK = useSharedValue(1);
+  const snapVer = useSharedValue(-1); // 사진을 만든 때의 내용 번호 (-1 = 사진 없음·낡음)
+
+  const fit = useCallback((W: number = vw.value, H: number = vh.value) => {
     if (!W || !H) return;
     const s = Math.min((W - MARGIN * 2) / page.w, 6);
     minS.value = Math.min(s, (H - MARGIN * 2) / page.h) * 0.6;
@@ -77,8 +91,10 @@ export function PageCanvas(props: Props) {
     scale.value = s;
     tx.value = MARGIN + Math.max(0, (W - MARGIN * 2 - page.w * s) / 2);
     ty.value = MARGIN;
+    snapK.value = Math.max(0.5, Math.min(SNAP_MAX / page.w, 4096 / page.h, s * PixelRatio.get()));
+    snapVer.value = -1;
     emitScale(s);
-  }, [page.w, page.h, vw, vh, minS, maxS, scale, tx, ty, emitScale]);
+  }, [page.w, page.h, vw, vh, minS, maxS, scale, tx, ty, snapK, snapVer, emitScale]);
 
   useEffect(() => {
     pw.value = page.w;
@@ -88,11 +104,11 @@ export function PageCanvas(props: Props) {
 
   const onLayout = (e: LayoutChangeEvent) => {
     const { width: w, height: h } = e.nativeEvent.layout;
-    const first = !vw.value;
     vw.value = w;
     vh.value = h;
-    if (first || Math.abs(w - vw.value) > 1) fit();
-    else fit();
+    // 방금 쓴 공유 값은 JS 쪽에서 곧바로 읽으면 예전 값(처음엔 0)이 나온다 → 크기를 직접 넘긴다
+    // (그래서 새 노트가 '맞춤' 크기가 아니라 작게 열리곤 했다)
+    fit(w, h);
   };
 
   // 도구 모음의 확대·축소·맞춤 단추
@@ -152,18 +168,102 @@ export function PageCanvas(props: Props) {
     penBtn.value = pressed;
   }, [penBtn]);
 
+  // ── 움직이는 동안: 관성, 쪽 사진 ─────────────────────────
+  const moving = useSharedValue(false); // 끌기·확대·관성으로 화면이 움직이는 중
+  const pinching = useSharedValue(false);
+  const flings = useSharedValue(0); // 아직 미끄러지는 중인 축 수 (가로·세로)
+  const lastMove = useSharedValue({ at: 0, x: 0, y: 0 }); // 손가락으로 옮기다 마지막으로 움직인 때 (멈췄다 떼면 미끄러지지 않게)
+  const heavy = useSharedValue(false); // 필기가 많은 쪽
+  const content = useSharedValue<SnapContent | null>(null); // 사진에 담을 것 (바뀔 때마다 ver가 오른다)
+  const snap = useSharedValue<SkImage | null>(null);
+  const snapPrev = useSharedValue<SkImage | null>(null);
+
+  /** 필기가 많은 쪽이면 쪽 사진(바탕 그림 + 속지 + 필기를 한 장으로)을 만든다. 내용이 그대로면 있던 사진을 쓴다.
+   *  UI 스레드에서 GPU로 그려 몇 ms면 된다. 못 만들면 사진 없이 원본으로 그린다. */
+  const makeSnap = () => {
+    "worklet";
+    const c = content.value;
+    if (!c || !heavy.value || snapVer.value === c.ver) return;
+    try {
+      const k = snapK.value;
+      const surface = SNAP_GPU
+        ? Skia.Surface.MakeOffscreen(Math.max(1, Math.round(pw.value * k)), Math.max(1, Math.round(ph.value * k)))
+        : Skia.Surface.Make(Math.max(1, Math.round(pw.value * k)), Math.max(1, Math.round(ph.value * k)));
+      if (!surface) return;
+      const cv = surface.getCanvas();
+      cv.drawColor(Skia.Color("#FFFFFF"));
+      cv.scale(k, k);
+      if (c.bg) {
+        const src = Skia.XYWHRect(0, 0, c.bg.width(), c.bg.height());
+        cv.drawImageRectOptions(c.bg, src, Skia.XYWHRect(0, 0, pw.value, ph.value), FilterMode.Linear, MipmapMode.None, null);
+      }
+      if (c.paper) cv.drawPicture(c.paper);
+      cv.drawPicture(c.ink);
+      surface.flush();
+      const img = surface.makeImageSnapshot();
+      surface.dispose();
+      // 두 번 전 사진은 이제 어디서도 그리지 않는다 → 바로 놓아준다 (큰 그림이라 GC를 기다리지 않게)
+      const old = snapPrev.value;
+      snapPrev.value = snap.value;
+      snap.value = img;
+      snapVer.value = c.ver;
+      old?.dispose();
+    } catch {
+      // 사진 없이 원본으로
+    }
+  };
+
+  /** 손가락을 놓을 때의 속도로 조금 더 미끄러진다 (쪽 가장자리에서 멈춤) */
+  const startFling = (vx: number, vy: number) => {
+    "worklet";
+    const s = scale.value, w = pw.value * s, h = ph.value * s, W = vw.value, H = vh.value;
+    const canX = w + MARGIN * 2 > W && Math.abs(vx) > 80;
+    const fits = h + MARGIN * 2 <= H; // 쪽이 화면보다 작으면 위아래로만 조금 움직일 수 있다 (clampXY와 같은 범위)
+    const yLo = fits ? MARGIN : H - h - MARGIN;
+    const yHi = fits ? H - h - MARGIN : MARGIN;
+    const canY = yHi > yLo && Math.abs(vy) > 80;
+    flings.value = (canX ? 1 : 0) + (canY ? 1 : 0);
+    if (!flings.value) {
+      moving.value = false;
+      return;
+    }
+    const done = () => {
+      "worklet";
+      flings.value = Math.max(0, flings.value - 1);
+      if (!flings.value && !pinching.value && mode.value !== 2) moving.value = false;
+    };
+    // 아이폰 기본(0.998)보다 조금 덜 미끄럽게, 너무 세게 튀지 않게
+    const v = (n: number) => Math.max(-6000, Math.min(6000, n));
+    if (canX) tx.value = withDecay({ velocity: v(vx), deceleration: 0.997, clamp: [W - w - MARGIN, MARGIN] }, done);
+    if (canY) ty.value = withDecay({ velocity: v(vy), deceleration: 0.997, clamp: [yLo, yHi] }, done);
+  };
+
+  /** 미끄러지던 화면은 다시 닿는 순간 멈춘다 */
+  const stopFling = () => {
+    "worklet";
+    if (!flings.value) return;
+    flings.value = 0;
+    cancelAnimation(tx);
+    cancelAnimation(ty);
+  };
+
   const one = usePanGesture({
     minDistance: 0,
     maxPointers: 1,
     onBegin: (e) => {
       "worklet";
+      stopFling();
       const finger = e.pointerType === PointerType.TOUCH;
       if (finger && !fingerSV.value) {
         mode.value = 2;
         sx.value = tx.value;
         sy.value = ty.value;
+        lastMove.value = { at: Date.now(), x: 0, y: 0 };
+        moving.value = true;
+        makeSnap();
         return;
       }
+      moving.value = pinching.value;
       const x = (e.x - tx.value) / scale.value;
       const y = (e.y - ty.value) / scale.value;
       if (toolSV.value === 4) {
@@ -201,6 +301,9 @@ export function PageCanvas(props: Props) {
           mode.value = 2;
           sx.value = tx.value;
           sy.value = ty.value;
+          lastMove.value = { at: Date.now(), x: 0, y: 0 };
+          moving.value = true;
+          makeSnap();
         } else {
           mode.value = 4;
         }
@@ -219,6 +322,8 @@ export function PageCanvas(props: Props) {
         const [x, y] = clampXY(scale.value, sx.value + e.translationX, sy.value + e.translationY, pw.value, ph.value, vw.value, vh.value);
         tx.value = x;
         ty.value = y;
+        const m = lastMove.value;
+        if (Math.abs(e.translationX - m.x) + Math.abs(e.translationY - m.y) > 1) lastMove.value = { at: Date.now(), x: e.translationX, y: e.translationY };
         return;
       }
       const x = (e.x - tx.value) / scale.value;
@@ -269,6 +374,11 @@ export function PageCanvas(props: Props) {
         }, true);
       }
     },
+    onDeactivate: (e) => {
+      "worklet";
+      // 손가락으로 밀다가 놓으면 그 속도로 조금 더 미끄러진다 (두 손가락 확대로 넘어간 때, 멈췄다가 뗀 때는 아님)
+      if (mode.value === 2 && !e.canceled && !pinching.value && Date.now() - lastMove.value.at < 120) startFling(e.velocityX, e.velocityY);
+    },
     onFinalize: (e) => {
       "worklet";
       if (mode.value === 1) {
@@ -297,6 +407,8 @@ export function PageCanvas(props: Props) {
         const pts = live.value.slice();
         live.value = [];
         scheduleOnRN(emitLasso, pts);
+      } else if (mode.value === 2 && !flings.value && !pinching.value) {
+        moving.value = false; // 미끄러지지 않고 그대로 멈췄다
       }
       mode.value = 0;
     },
@@ -308,6 +420,10 @@ export function PageCanvas(props: Props) {
   const pinch = usePinchGesture({
     onActivate: (e) => {
       "worklet";
+      stopFling();
+      pinching.value = true;
+      moving.value = true;
+      makeSnap();
       // 두 번째 손가락이 바로 닿았으면 방금 시작한 획은 확대하려던 것
       if (mode.value === 1 && Date.now() - started.value < 350) {
         mode.value = 4;
@@ -327,6 +443,10 @@ export function PageCanvas(props: Props) {
     },
     onFinalize: () => {
       "worklet";
+      if (pinching.value) {
+        pinching.value = false;
+        if (!flings.value && mode.value !== 2) moving.value = false;
+      }
       scheduleOnRN(emitScale, scale.value);
     },
   });
@@ -363,6 +483,23 @@ export function PageCanvas(props: Props) {
   const paper = useMemo(() => paperPicture(page), [page]);
   const image = useImage(background ?? undefined);
 
+  // 쪽 사진에 담을 내용: 바뀌면 번호를 올려 낡은 사진을 쓰지 않게 (한 번에 바꿔야 번호와 내용이 어긋나지 않는다)
+  const ver = useRef(0);
+  useEffect(() => {
+    ver.current += 1;
+    content.value = { ver: ver.current, bg: image ?? null, paper: paper ?? null, ink: picture };
+  }, [image, paper, picture, content]);
+  const inkCount = useMemo(() => strokes.reduce((n, s) => n + (s.tool === "text" ? 0 : 1), 0), [strokes]);
+  useEffect(() => {
+    heavy.value = inkCount >= HEAVY_STROKES;
+  }, [inkCount, heavy]);
+  // 움직이는 동안 사진이 맞으면: 원본(바탕 그림·속지·필기)은 빈 영역으로 잘라 아예 그리지 않고 사진 한 장만 그린다
+  const useSnap = useDerivedValue(() => moving.value && heavy.value && snap.value !== null && snapVer.value === content.value?.ver);
+  const sharpClip = useDerivedValue(() =>
+    useSnap.value ? { x: 0, y: 0, width: 0, height: 0 } : { x: -100, y: -100, width: pw.value + 200, height: ph.value + 200 },
+  );
+  const snapShown = useDerivedValue(() => (useSnap.value ? snap.value : null));
+
   const hlLive = tool === "highlighter";
   const lassoLive = tool === "lasso";
   const liveWidth = lassoLive ? 1.2 : hlLive ? width : width * 1.25;
@@ -376,9 +513,12 @@ export function PageCanvas(props: Props) {
           <Group transform={transform}>
             <Rect x={-0.5} y={-0.5} width={page.w + 1} height={page.h + 1} color="rgba(0,0,0,0.18)" />
             <Rect x={0} y={0} width={page.w} height={page.h} color="#FFFFFF" />
-            {image ? <Image image={image} x={0} y={0} width={page.w} height={page.h} fit="fill" /> : null}
-            {paper ? <Picture picture={paper} /> : null}
-            <Picture picture={picture} />
+            <Group clip={sharpClip}>
+              {image ? <Image image={image} x={0} y={0} width={page.w} height={page.h} fit="fill" /> : null}
+              {paper ? <Picture picture={paper} /> : null}
+              <Picture picture={picture} />
+            </Group>
+            <Image image={snapShown} x={0} y={0} width={page.w} height={page.h} fit="fill" />
             {selPicture ? (
               <Group transform={dragT}>
                 <Picture picture={selPicture} />

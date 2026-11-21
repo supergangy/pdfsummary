@@ -21,6 +21,9 @@ import { ToolPanel } from "./ToolPanel";
 import type { SyncedStore } from "./sync/syncedStore";
 import { applyToInk, applyToNotebook } from "./sync/writes";
 
+// 요약을 보고 돌아왔을 때 되돌리기 기록을 이어 쓰려고 잠깐 맡겨 두는 곳 (필기 화면이 다시 열리면 가져간다)
+let keptHistory: { id: string; hist: History } | null = null;
+
 type Props = {
   store: SyncedStore;
   id: string;
@@ -55,7 +58,12 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const [busy, setBusy] = useState("");
   const [loadErr, setLoadErr] = useState("");
 
-  const hist = useRef(new History());
+  const [histStart] = useState(() => {
+    const h = keptHistory?.id === id ? keptHistory.hist : new History();
+    keptHistory = null;
+    return h;
+  });
+  const hist = useRef(histStart);
   const inkRef = useRef(ink);
   inkRef.current = ink;
   const nbRef = useRef(nb);
@@ -545,14 +553,35 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     if (!nb) return;
     setMenu(false);
     await flush();
+    keptHistory = { id, hist: hist.current }; // 요약을 보고 돌아와도 되돌리기가 이어지게
     onSummarize(nbRef.current ?? nb, inkRef.current, piRef.current);
   };
   const quick = async () => {
     if (!nb) return;
     setMenu(false);
     await flush();
+    keptHistory = { id, hist: hist.current };
     onQuick(nbRef.current ?? nb, inkRef.current, piRef.current);
   };
+
+  // 키보드(웹·키보드 달린 태블릿의 웹판): Ctrl+Z 되돌리기, Ctrl+Shift+Z·Ctrl+Y 다시 하기. 글 쓰는 칸 안에서는 그 칸의 되돌리기를 그대로 둔다
+  const keys = useRef({ undo, redo });
+  keys.current = { undo, redo };
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) keys.current.undo();
+      else if (k === "y" || (k === "z" && e.shiftKey)) keys.current.redo();
+      else return;
+      e.preventDefault();
+    };
+    globalThis.addEventListener?.("keydown", onKey);
+    return () => globalThis.removeEventListener?.("keydown", onKey);
+  }, []);
 
   // 안드로이드 '뒤로': 열린 창이나 고른 것이 있으면 그것부터 닫고, 없으면 저장한 뒤 노트 목록으로 (앱 밖으로 나가지 않게)
   const onBack = useRef(() => {});
@@ -601,11 +630,10 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const edge = swatchEdge(t.card); // 색 단추 테두리 (어두운 모드에서도 검정 단추가 보이게)
   const narrow = win.width < 480; // 세로로 든 폰: 윗줄이 좁아 노트 이름 자리가 없다 → 되돌리기 단추를 도구 줄로 내린다
   const undoRedo = (
-    <>
-      <Btn label="↶" onPress={undo} disabled={!hist.current.canUndo} label2="되돌리기" />
-      <Btn label="↷" onPress={redo} disabled={!hist.current.canRedo} label2="다시 하기" />
-      <Sep />
-    </>
+    <View style={{ flexDirection: "row", gap: 4, marginRight: narrow ? 4 : 6 }}>
+      <HistBtn glyph="↶" text="되돌리기" onPress={undo} disabled={!hist.current.canUndo} label="되돌리기" wide={!narrow} />
+      <HistBtn glyph="↷" text="다시" onPress={redo} disabled={!hist.current.canRedo} label="다시 하기" wide={!narrow} />
+    </View>
   );
   /** 도구 설정 창 열기 — 도구 모음 바로 밑, 지금 도구 단추의 왼쪽 끝에 맞춰서 */
   const openPanel = () => {
@@ -889,6 +917,25 @@ function RenameDialog({ value, onDone }: { value: string | null; onDone: (v: str
         </View>
       </View>
     </Modal>
+  );
+}
+
+/** 되돌리기·다시 하기: 되돌릴 것이 없어도 단추 자리는 보이게 (바탕은 그대로, 글자만 흐리게). 넓은 화면에서는 글도 같이 */
+function HistBtn({ glyph, text, onPress, disabled, label, wide }: { glyph: string; text: string; onPress: () => void; disabled: boolean; label: string; wide: boolean }) {
+  const t = useTheme();
+  const dim = disabled ? 0.35 : 1;
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      hitSlop={4}
+      style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: 4, height: 36, paddingHorizontal: wide ? 12 : 10, borderRadius: 10, backgroundColor: t.soft, opacity: pressed ? 0.6 : 1 })}
+    >
+      <Text style={{ color: t.ink, fontSize: 20, lineHeight: 24, opacity: dim }}>{glyph}</Text>
+      {wide && <Text style={{ color: t.ink, fontSize: 14, fontWeight: "600", opacity: dim }}>{text}</Text>}
+    </Pressable>
   );
 }
 

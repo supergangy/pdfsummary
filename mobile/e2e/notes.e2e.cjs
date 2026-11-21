@@ -124,6 +124,12 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await page.getByText(/^✒️ /).click(); // 한 번 더 → 설정 창
     const panel = page.getByLabel("펜 설정", { exact: true });
     await panel.waitFor({ timeout: 5000 });
+    // 설정 창은 도구 모음을 가리지 않고 바로 밑에, 누른 도구 단추의 왼쪽 끝에 맞춰 뜬다
+    const penBox = await page.getByText(/^✒️ /).locator("..").boundingBox(); // 글자를 감싼 단추
+    const panelBox = await panel.boundingBox();
+    if (panelBox.y < penBox.y + penBox.height) fail(`펜 설정 창이 도구 모음을 가림 (창 위 ${panelBox.y}, 단추 아래 ${penBox.y + penBox.height})`);
+    if (panelBox.y > penBox.y + penBox.height + 24) fail(`펜 설정 창이 도구 모음에서 너무 떨어져 뜸 (창 위 ${panelBox.y})`);
+    if (Math.abs(panelBox.x - penBox.x) > 2) fail(`펜 설정 창이 펜 단추 밑에 맞춰 뜨지 않음 (창 ${panelBox.x}, 단추 ${penBox.x})`);
     await panel.getByLabel("붓펜", { exact: true }).click();
     await panel.getByLabel("파선", { exact: true }).click();
     await panel.getByLabel("닫기", { exact: true }).click();
@@ -180,8 +186,11 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     if (cal.some(tall)) fail("펜 단추를 누른 채 문질렀는데 지우지 않고 새로 그어짐");
     if (cal.length !== 2) fail(`펜 단추 지우개가 획을 나누지 않음 (붓펜 획 ${cal.length}개)`);
     console.log("✓ 도구 설정: 붓펜·파선 저장, 영역 지우개로 획 나누기·한 번에 되돌리기, 펜 단추 누르고 문지르면 지우개");
-    await page.getByText(/^✒️ /).click();
+    // 이미 고른 펜을 빠르게 두 번 눌러도 설정 창이 떴다가 바로 닫히지 않는다
+    await page.getByText(/^✒️ /).dblclick();
     const pp = page.getByLabel("펜 설정", { exact: true });
+    await page.waitForTimeout(600);
+    if (!(await pp.isVisible())) fail("펜 단추를 빠르게 두 번 누르면 설정 창이 바로 닫힘");
     await pp.getByLabel("만년필", { exact: true }).click();
     await pp.getByLabel("실선", { exact: true }).click();
     await pp.getByLabel("닫기", { exact: true }).click();

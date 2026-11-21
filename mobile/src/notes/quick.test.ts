@@ -86,6 +86,38 @@ test("multi-line handwriting is split into lines (top to bottom, strokes in writ
   assert.deepEqual(lines, [["q"], ["l1a", "l1b", "l1c"], ["l2a", "l2b"], ["l3a", "dot", "l3b"]]);
 });
 
+// 획 하나를 상자 [x0, y0, x1, y1]로 (줄 나누기는 상자만 본다)
+const boxStroke = (id: string, x0: number, y0: number, x1: number, y1: number): Stroke => ({ id, tool: "pen", color: "#000000", width: 2, pts: [x0, y0, 0.5, x1, y1, 0.5] });
+
+test("Hangul final consonants stay on their line ('안녕' was read as '아녀' + 'U')", async () => {
+  const { splitInkLines } = await import("./quick.ts");
+  // 쓴 차례: ㅇ ㅏ ㄴ(받침) / ㄴ ㅕ ㅇ(받침). 받침 둘은 윗부분보다 아래에 있어 세로로 거의 안 겹친다
+  const annyeong = [
+    boxStroke("an-o", 0, 8, 12, 20), boxStroke("an-a", 14, 4, 20, 24), boxStroke("an-n", 2, 25, 22, 36),
+    boxStroke("nyeong-n", 28, 6, 38, 16), boxStroke("nyeong-yeo", 40, 0, 46, 26), boxStroke("nyeong-o", 30, 22, 44, 38),
+  ];
+  assert.deepEqual(splitInkLines(annyeong).map((l) => l.map((s) => s.id)), [["an-o", "an-a", "an-n", "nyeong-n", "nyeong-yeo", "nyeong-o"]]);
+
+  // 글자 하나('안') + 멀리 떨어진 다음 줄: 받침은 붙고 다음 줄은 그대로 따로
+  const an = [boxStroke("o", 0, 8, 12, 20), boxStroke("a", 14, 4, 20, 24), boxStroke("n", 2, 27, 22, 36), boxStroke("next1", 0, 70, 12, 90), boxStroke("next2", 16, 70, 28, 90)];
+  assert.deepEqual(splitInkLines(an).map((l) => l.map((s) => s.id)), [["o", "a", "n"], ["next1", "next2"]]);
+
+  // 마지막 글자에만 받침('가방'): 윗줄 끝 글자 밑의 받침은 같은 줄
+  const gabang = [boxStroke("g", 0, 2, 10, 14), boxStroke("a1", 12, 0, 18, 20), boxStroke("b", 24, 2, 34, 14), boxStroke("a2", 36, 0, 42, 20), boxStroke("ng", 26, 23, 40, 32)];
+  assert.deepEqual(splitInkLines(gabang).map((l) => l.length), [5]);
+});
+
+test("two real lines written close together stay two lines", async () => {
+  const { splitInkLines } = await import("./quick.ts");
+  // 윗줄을 다 쓰고 아랫줄을 썼다. 줄 사이가 좁아도 아랫줄이 길면 받침이 아니다
+  const top = [0, 1, 2, 3, 4].map((i) => boxStroke(`t${i}`, i * 18, 0, i * 18 + 12, 14));
+  const bottom = [0, 1, 2, 3, 4].map((i) => boxStroke(`b${i}`, i * 18, 19, i * 18 + 12, 33));
+  assert.deepEqual(splitInkLines([...top, ...bottom]).map((l) => l.length), [5, 5]);
+  // 짧은 아랫줄이 왼쪽 끝에서 시작해도 (새 줄) 그대로 따로
+  const short = [boxStroke("s0", 0, 19, 12, 33)];
+  assert.deepEqual(splitInkLines([...top, ...short]).map((l) => l.length), [5, 1]);
+});
+
 test("a short flat line or a dot with no text under it is a mark, not handwriting", () => {
   const dash: Stroke = { id: "d", tool: "pen", color: "#000000", width: 2, pts: [10, 50, 0.5, 40, 51, 0.5] };
   const dot: Stroke = { id: "o", tool: "pen", color: "#000000", width: 2, pts: [200, 200, 0.5, 202, 201, 0.5] };

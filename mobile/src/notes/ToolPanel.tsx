@@ -1,8 +1,8 @@
 // 도구 설정 창: 펜 종류·굵기·선 모양·색 / 형광펜 굵기·투명도·직선·글줄 맞추기 / 지우개 / 올가미.
 // 도구 모음에서 이미 고른 도구를 한 번 더 누르면 열린다.
 import { Canvas, Picture } from "@shopify/react-native-skia";
-import { useMemo, useRef } from "react";
-import { Modal, Platform, Pressable, ScrollView, Switch, Text, View } from "react-native";
+import { useEffect, useMemo, useRef } from "react";
+import { Modal, Platform, Pressable, ScrollView, Switch, Text, useWindowDimensions, View } from "react-native";
 
 import { useTheme } from "../ui";
 import {
@@ -24,21 +24,36 @@ type Props = {
   setP: (patch: Partial<Prefs>) => void;
   onClearPage: () => void;
   onClose: () => void;
+  /** 창을 띄울 자리 (화면 기준): 도구 모음 바로 밑, 누른 도구 단추의 왼쪽 끝 */
+  at?: { top: number; left: number } | null;
 };
 
 const nearest = (steps: number[], v: number) => steps.reduce((a, b, i) => (Math.abs(b - v) < Math.abs(steps[a] - v) ? i : a), 0);
 
-export function ToolPanel({ open, prefs, setP, onClearPage, onClose }: Props) {
+export function ToolPanel({ open, prefs, setP, onClearPage, onClose, at }: Props) {
   const t = useTheme();
+  const win = useWindowDimensions();
   const tool = prefs.tool;
   const title = tool === "pen" ? "펜" : tool === "highlighter" ? "형광펜" : tool === "eraser" ? "지우개" : tool === "lasso" ? "올가미 (고르기)" : "글상자";
+  // 도구 모음 바로 밑에, 화면 밖으로 나가지 않게
+  const width = Math.min(360, win.width * 0.94);
+  const top = at?.top ?? 96;
+  const left = Math.max(8, Math.min(at?.left ?? 12, win.width - width - 8));
+  // 도구 단추를 빠르게 두 번 누르면 두 번째 누름이 '창 바깥'으로 쳐져 뜨자마자 닫혔다 → 막 열렸을 때의 바깥 누름은 넘긴다
+  const openedAt = useRef(0);
+  useEffect(() => {
+    if (open) openedAt.current = Date.now();
+  }, [open]);
+  const closeOutside = () => {
+    if (Date.now() - openedAt.current > 400) onClose();
+  };
   return (
     <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.18)" }} onPress={onClose} accessibilityLabel="도구 설정 닫기">
+      <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.18)" }} onPress={closeOutside} accessibilityLabel="도구 설정 닫기">
         <Pressable
           onPress={() => {}}
           accessibilityLabel={`${title} 설정`}
-          style={{ position: "absolute", top: 96, left: 12, width: 360, maxWidth: "94%", maxHeight: "82%", backgroundColor: t.card, borderRadius: 18, borderWidth: 1, borderColor: t.line, shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 14, elevation: 8 }}
+          style={{ position: "absolute", top, left, width, maxHeight: Math.max(200, win.height - top - 16), backgroundColor: t.card, borderRadius: 18, borderWidth: 1, borderColor: t.line, shadowColor: "#000", shadowOpacity: 0.2, shadowRadius: 14, elevation: 8 }}
         >
           <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }} keyboardShouldPersistTaps="handled">
             <View style={{ flexDirection: "row", alignItems: "center" }}>

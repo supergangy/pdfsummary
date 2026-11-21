@@ -130,13 +130,36 @@ export function clusterStrokes(strokes: Stroke[], gap = 14): Stroke[][] {
       }
     }
   }
-  return groups.map((g) => g.ss);
+  // 덩어리 안의 획은 쓴 차례 그대로 (줄 나누기가 쓴 차례를 본다)
+  const order = new Map(strokes.map((s, i) => [s, i]));
+  return groups.map((g) => g.ss.sort((a, b) => order.get(a)! - order.get(b)!));
+}
+
+type InkLine = { y0: number; y1: number; ss: Stroke[] };
+
+/** 위아래로 붙은 두 줄(a가 위)이 사실은 한 줄인가 — 한글 받침이 아랫줄로 떨어져 나간 경우.
+ *  '안녕'을 쓰면 받침 ㄴ·ㅇ이 윗부분(아·녀)과 세로로 거의 안 겹쳐 따로 줄이 되고, '아녀' + 'U'로 읽혔다. */
+function sameLine(a: InkLine, b: InkLine, order: Map<Stroke, number>): boolean {
+  const hA = a.y1 - a.y0, hB = b.y1 - b.y0, hMax = Math.max(hA, hB, 1);
+  const gap = b.y0 - a.y1; // 겹치면 음수
+  // 쓴 차례가 두 줄을 오간다 (윗부분 → 받침 → 다음 글자 윗부분 …): 줄을 다 쓰고 다음 줄로 간 게 아니다
+  const tagged = [...a.ss.map((s) => [order.get(s)!, 0]), ...b.ss.map((s) => [order.get(s)!, 1])].sort((p, q) => p[0] - q[0]);
+  let turns = 0;
+  for (let i = 1; i < tagged.length; i++) if (tagged[i][1] !== tagged[i - 1][1]) turns++;
+  if (turns >= 2) return gap <= hMax * 0.35;
+  // 마지막 글자에만 받침이 있을 때('안', '가방'): 윗줄을 다 쓴 뒤, 바로 밑에 글자 하나 폭으로 붙어 있다
+  if (turns !== 1 || tagged[0][1] !== 0 || gap > hMax * 0.25) return false;
+  const [ax0, , ax1] = boxOf(a.ss), [bx0, , bx1] = boxOf(b.ss);
+  const pad = hMax * 0.3, oneChar = (b.y1 - a.y0) * 1.6;
+  if (bx0 < ax0 - pad || bx1 > ax1 + pad || bx1 - bx0 > oneChar) return false;
+  // 새 줄은 왼쪽 끝에서 시작한다. 받침은 윗줄 끝 글자 밑에 있다 (윗줄이 글자 하나뿐이면 구별이 안 되므로 받침으로 본다)
+  return bx0 - ax0 >= (ax1 - ax0) * 0.5 || ax1 - ax0 <= oneChar;
 }
 
 /** 손글씨 묶음을 줄로 나눈다 (손글씨 인식기는 한 줄씩 읽어야 정확하다).
  *  세로로 겹치는 획끼리 한 줄, 줄은 위에서부터, 줄 안의 획은 쓴 차례 그대로. */
 export function splitInkLines(strokes: Stroke[]): Stroke[][] {
-  const lines: { y0: number; y1: number; ss: Stroke[] }[] = [];
+  const lines: InkLine[] = [];
   const order = new Map(strokes.map((s, i) => [s, i]));
   // 큰 획부터 줄을 잡아야 작은 점·삐침이 엉뚱한 줄을 만들지 않는다
   const bySize = [...strokes].sort((a, b) => {
@@ -164,15 +187,20 @@ export function splitInkLines(strokes: Stroke[]): Stroke[][] {
       lines.push({ y0, y1, ss: [s] });
     }
   }
-  return lines
-    .sort((a, b) => a.y0 - b.y0)
-    .map((l) => l.ss.sort((a, b) => order.get(a)! - order.get(b)!));
+  lines.sort((a, b) => a.y0 - b.y0);
+  // 받침만 따로 줄이 된 것은 윗줄에 다시 붙인다
+  for (let i = 0; i + 1 < lines.length; ) {
+    const a = lines[i], b = lines[i + 1];
+    if (sameLine(a, b, order)) lines.splice(i, 2, { y0: Math.min(a.y0, b.y0), y1: Math.max(a.y1, b.y1), ss: [...a.ss, ...b.ss] });
+    else i++;
+  }
+  return lines.map((l) => l.ss.sort((a, b) => order.get(a)! - order.get(b)!));
 }
 
-const boxOf = (ss: Stroke[]): Box => {
+function boxOf(ss: Stroke[]): Box {
   const bs = ss.map(bounds);
   return [Math.min(...bs.map((b) => b[0])), Math.min(...bs.map((b) => b[1])), Math.max(...bs.map((b) => b[2])), Math.max(...bs.map((b) => b[3]))];
-};
+}
 
 /** 쪽 하나 분석. chars가 null이면(빈 속지·글자 없는 PDF) 형광펜·밑줄도 그림으로만 남는다. */
 export function analyzePage(page: number, strokes: Stroke[], chars: PdfChar[] | null): QuickItem[] {

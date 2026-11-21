@@ -1,6 +1,6 @@
 // 필기 화면: 도구 모음 + 쪽 그리기 + 자동 저장
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Modal, PixelRatio, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from "react";
+import { ActivityIndicator, Alert, Modal, PixelRatio, Platform, Pressable, ScrollView, Text, TextInput, View, type HostInstance } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { pageText } from "../../modules/pdf-pages";
@@ -41,6 +41,9 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
   const [bg, setBg] = useState<Record<number, { uri: string; w: number }>>({});
   const [menu, setMenu] = useState(false);
   const [panel, setPanel] = useState(false); // 도구 설정 창
+  const [panelAt, setPanelAt] = useState<{ top: number; left: number } | null>(null); // 설정 창 자리 (도구 모음 바로 밑)
+  const barRef = useRef<HostInstance>(null); // 도구 모음
+  const toolRefs = useRef<Partial<Record<ToolName, HostInstance | null>>>({}); // 도구 단추들
   const [grid, setGrid] = useState(false);
   const [selection, setSelection] = useState<Selection>(null);
   const [textEdit, setTextEdit] = useState<{ x: number; y: number; stroke?: Stroke } | null>(null);
@@ -533,8 +536,25 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
   const widths = tool === "highlighter" ? HIGHLIGHT_WIDTHS : PEN_WIDTHS;
   const color = tool === "highlighter" ? prefs.hlColor : prefs.penColor;
   const width = tool === "highlighter" ? prefs.hlWidth : prefs.penWidth;
+  /** 도구 설정 창 열기 — 도구 모음 바로 밑, 지금 도구 단추의 왼쪽 끝에 맞춰서 */
+  const openPanel = () => {
+    const bar = barRef.current;
+    const btn = toolRefs.current[tool];
+    if (!bar) return setPanel(true);
+    bar.measureInWindow((_x, y, _w, h) => {
+      const show = (left: number) => {
+        setPanelAt({ top: y + h + 4, left });
+        setPanel(true);
+      };
+      if (btn) btn.measureInWindow((x) => show(x));
+      else show(12);
+    });
+  };
+  const toolRef = (name: ToolName) => (v: HostInstance | null) => {
+    toolRefs.current[name] = v;
+  };
   /** 도구 고르기 — 이미 고른 도구를 한 번 더 누르면 설정 창 */
-  const pick = (next: ToolName) => (tool === next ? setPanel(true) : setP({ tool: next }));
+  const pick = (next: ToolName) => (tool === next ? openPanel() : setP({ tool: next }));
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.card }} edges={["top", "left", "right"]}>
@@ -558,12 +578,12 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
         </Pressable>
       </View>
       {/* 아랫줄: 도구 (좁으면 옆으로 밀어서) */}
-      <View style={{ borderBottomWidth: 1, borderColor: t.line, backgroundColor: t.card }}>
+      <View ref={barRef} collapsable={false} style={{ borderBottomWidth: 1, borderColor: t.line, backgroundColor: t.card }}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: "center", paddingHorizontal: 8, paddingVertical: 5, gap: 4 }} keyboardShouldPersistTaps="handled">
-          <ToolBtn label={`✒️ ${PENS.find((x) => x.id === prefs.penBrush)?.label ?? "펜"}`} on={tool === "pen"} onPress={() => pick("pen")} hint="한 번 더 누르면 펜 설정" />
-          <ToolBtn label="🖍 형광펜" on={tool === "highlighter"} onPress={() => pick("highlighter")} hint="한 번 더 누르면 형광펜 설정" />
-          <ToolBtn label={prefs.eraserMode === "area" ? "⌫ 영역 지우개" : "⌫ 지우개"} on={tool === "eraser"} onPress={() => pick("eraser")} hint="한 번 더 누르면 지우개 설정" />
-          <ToolBtn label={prefs.lassoMode === "rect" ? "⬚ 올가미" : "➰ 올가미"} on={tool === "lasso"} onPress={() => pick("lasso")} hint="둘러싸서 고르고 옮기기, 한 번 더 누르면 설정" />
+          <ToolBtn ref={toolRef("pen")} label={`✒️ ${PENS.find((x) => x.id === prefs.penBrush)?.label ?? "펜"}`} on={tool === "pen"} onPress={() => pick("pen")} hint="한 번 더 누르면 펜 설정" />
+          <ToolBtn ref={toolRef("highlighter")} label="🖍 형광펜" on={tool === "highlighter"} onPress={() => pick("highlighter")} hint="한 번 더 누르면 형광펜 설정" />
+          <ToolBtn ref={toolRef("eraser")} label={prefs.eraserMode === "area" ? "⌫ 영역 지우개" : "⌫ 지우개"} on={tool === "eraser"} onPress={() => pick("eraser")} hint="한 번 더 누르면 지우개 설정" />
+          <ToolBtn ref={toolRef("lasso")} label={prefs.lassoMode === "rect" ? "⬚ 올가미" : "➰ 올가미"} on={tool === "lasso"} onPress={() => pick("lasso")} hint="둘러싸서 고르고 옮기기, 한 번 더 누르면 설정" />
           <ToolBtn label="T 글상자" on={tool === "text"} onPress={() => setP({ tool: "text" })} hint="쪽을 누르면 글을 써 넣어요" />
           {tool === "text" && (
             <>
@@ -583,7 +603,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
               <Text style={{ color: t.muted, marginLeft: 6 }}>쪽을 누르면 글상자, 글상자를 누르면 고치기</Text>
             </>
           )}
-          {tool !== "text" && <Btn label="⚙︎" onPress={() => setPanel(true)} label2="도구 설정" />}
+          {tool !== "text" && <Btn label="⚙︎" onPress={openPanel} label2="도구 설정" />}
           {tool !== "eraser" && tool !== "lasso" && tool !== "text" && (
             <>
               <Sep />
@@ -698,7 +718,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
         </Pressable>
       </Modal>
 
-      <ToolPanel open={panel} prefs={prefs} setP={setP} onClearPage={clearPage} onClose={() => setPanel(false)} />
+      <ToolPanel open={panel} at={panelAt} prefs={prefs} setP={setP} onClearPage={clearPage} onClose={() => setPanel(false)} />
       <RenameDialog value={renaming} onDone={rename} />
       <TextDialog
         open={!!textEdit}
@@ -815,10 +835,11 @@ function Btn({ label, onPress, disabled, label2 }: { label: string; onPress: () 
   );
 }
 
-function ToolBtn({ label, on, onPress, hint }: { label: string; on: boolean; onPress: () => void; hint?: string }) {
+function ToolBtn({ label, on, onPress, hint, ref }: { label: string; on: boolean; onPress: () => void; hint?: string; ref?: Ref<HostInstance> }) {
   const t = useTheme();
   return (
     <Pressable
+      ref={ref}
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={hint ? `${label} (${hint})` : label}

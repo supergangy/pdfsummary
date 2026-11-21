@@ -68,8 +68,45 @@ test("sentence boundaries", () => {
   const s = sentenceAround(chars, 8, 9); // '둘째'
   assert.equal(s.before, "");
   assert.equal(s.mark, "둘째");
-  assert.equal(s.after, "문장이다.");
+  assert.equal(s.after, " 문장이다."); // 경계의 띄어쓰기는 원문 그대로
   assert.match(quickHtml({ title: "<t>", pages: [] }), /&lt;t&gt;/);
+});
+
+// 여러 줄 글 → 글자 상자 (줄 끝마다 "\n")
+function para(text: string): PdfChar[] {
+  return text.split("\n").flatMap((ln, li) => [...line(ln, 40, 100 + li * 16), ["\n", 40 + [...ln].length * 10, 100 + li * 16, 40 + [...ln].length * 10, 112 + li * 16] as PdfChar]);
+}
+// quickHtml에서 화면에 보이는 글만: <mark>…</mark> → […]
+const shown = (html: string) => [...html.matchAll(/<li[^>]*><p>(.*?)<\/p>/g)].map((m) => m[1].replace(/<mark[^>]*>/g, "[").replace(/<\/mark>/g, "]"));
+
+test("a mark that starts or ends inside a word keeps the word together ('사용자 [가 …자] 원' on the tablet)", () => {
+  const chars = para("1. 사용자가 언제 어디서나 필요한 자원(하드웨어)에\n접근한다.");
+  const a = chars.findIndex((c) => c[0] === "가"), b = chars.findIndex((c) => c[0] === "원") - 1;
+  // '가 언제 어디서나 필요한 자' 만 칠한다 ('사용자' 뒤에서 시작, '자원' 가운데서 끝)
+  const hl = S("h", "highlighter", [chars[a][1] + 1, 106, 0.5, chars[b][3] - 1, 106, 0.5], 12, "#FFE14D");
+  const items = analyzePage(0, [hl], chars);
+  assert.deepEqual(items[0].sentence, { before: "1. 사용자", mark: "가 언제 어디서나 필요한 자", after: "원(하드웨어)에 접근한다." });
+  assert.deepEqual(shown(quickHtml({ title: "t", pages: [{ page: 0, items }] })), ["1. 사용자[가 언제 어디서나 필요한 자]원(하드웨어)에 접근한다."]);
+  // 낱말을 통째로 칠하면 앞뒤 띄어쓰기가 원문대로 하나씩 남는다
+  const whole = S("w", "highlighter", [chars[a + 2][1] + 1, 106, 0.5, chars[a + 3][3] - 1, 106, 0.5], 12, "#FFE14D");
+  assert.deepEqual(shown(quickHtml({ title: "t", pages: [{ page: 0, items: analyzePage(0, [whole], chars) }] })), ["1. 사용자가 [언제] 어디서나 필요한 자원(하드웨어)에 접근한다."]);
+});
+
+test("question and choice numbers at the start of a line bound the sentence ('1.' was dropped, the next '2.' was glued on)", () => {
+  const exam = para("3. 유연한 환경을 뜻하는 기술은?\n① 빅데이터\n② 가상현실\n③ 사물인터넷\n4. 둘째 문제이다");
+  const at = (word: string) => {
+    const k = exam.map((c) => c[0]).join("").indexOf(word);
+    return sentenceAround(exam, k, k + [...word].length - 1);
+  };
+  // 보기에는 마침표가 없다: 보기 하나만, 다음 보기·다음 문제 번호는 딸려 오지 않는다
+  assert.deepEqual(at("가상현실"), { before: "② ", mark: "가상현실", after: "" });
+  assert.deepEqual(at("사물인터넷"), { before: "③ ", mark: "사물인터넷", after: "" });
+  // 문제 번호 "3."은 문장에 남고, "4."의 마침표는 문장 끝이 아니다
+  assert.deepEqual(at("유연한"), { before: "3. ", mark: "유연한", after: " 환경을 뜻하는 기술은?" });
+  assert.deepEqual(at("둘째"), { before: "4. ", mark: "둘째", after: " 문제이다" });
+  // 문장 가운데의 숫자·마침표는 예전처럼 문장 끝
+  const mid = para("값은 3. 그리고 다음은 넷이다.");
+  assert.deepEqual(sentenceAround(mid, 6, 8), { before: "", mark: "그리고", after: " 다음은 넷이다." });
 });
 
 test("multi-line handwriting is split into lines (top to bottom, strokes in writing order)", async () => {
@@ -84,6 +121,19 @@ test("multi-line handwriting is split into lines (top to bottom, strokes in writ
   ];
   const lines = splitInkLines(strokes).map((l) => l.map((s) => s.id));
   assert.deepEqual(lines, [["q"], ["l1a", "l1b", "l1c"], ["l2a", "l2b"], ["l3a", "dot", "l3b"]]);
+});
+
+test("underlines on neighbouring lines each pick their own line (they used to become one '표시' or only the middle line)", () => {
+  // 줄 간격 16pt: 밑줄끼리 가까워 한 덩어리로 묶인다
+  const chars = [...line("광합성은 엽록체에서 일어난다", 50, 100), ["\n", 200, 100, 200, 112] as PdfChar, ...line("명반응은 틸라코이드 막에서", 50, 116), ["\n", 190, 116, 190, 128] as PdfChar, ...line("암반응은 스트로마에서 진행", 50, 132)];
+  const under = (id: string, x0: number, x1: number, y: number) => S(id, "pen", [x0, y, 0.5, (x0 + x1) / 2, y + 0.8, 0.5, x1, y, 0.5]);
+  const two = analyzePage(0, [under("u1", 51, 89, 113.5), under("u2", 101, 169, 129.5)], chars);
+  assert.deepEqual(two.map((i) => [i.kind, i.text]), [["underline", "광합성은"], ["underline", "틸라코이드 막"]]);
+  const three = analyzePage(0, [under("u1", 51, 89, 113.5), under("u2", 101, 169, 129.5), under("u3", 51, 89, 145.5)], chars);
+  assert.deepEqual(three.map((i) => [i.kind, i.text]), [["underline", "광합성은"], ["underline", "틸라코이드 막"], ["underline", "암반응은"]]);
+  // 글자가 없는 곳에 그은 줄은 같은 덩어리여도 밑줄 글자에 섞이지 않고 '표시'로 남는다
+  const loose = analyzePage(0, [under("u1", 51, 89, 113.5), under("x", 51, 89, 160)], chars);
+  assert.deepEqual(loose.map((i) => i.kind).sort(), ["mark", "underline"]);
 });
 
 // 획 하나를 상자 [x0, y0, x1, y1]로 (줄 나누기는 상자만 본다)

@@ -142,6 +142,7 @@ export function PageCanvas(props: Props) {
   const mode = useSharedValue(0); // 0 없음, 1 쓰기, 2 손가락으로 옮기기, 3 지우기, 4 취소됨, 5 고른 것 끌기, 6 올가미 그리기
   const started = useSharedValue(0);
   const stylus = useSharedValue(false);
+  const touch = useSharedValue(false); // 지금 획을 손가락으로 쓰고 있는지
   const sx = useSharedValue(0);
   const sy = useSharedValue(0);
   const live = useSharedValue<number[]>([]);
@@ -194,9 +195,21 @@ export function PageCanvas(props: Props) {
         scheduleOnRN(emitErase, 0, x, y, r);
         return;
       }
+      if (x < 0 || x > pw.value || y < 0 || y > ph.value) {
+        // 쪽 바깥(회색 여백)에서는 쓰지 않는다: 손가락이면 화면을 옮기고, 펜이면 아무것도 안 한다
+        if (finger) {
+          mode.value = 2;
+          sx.value = tx.value;
+          sy.value = ty.value;
+        } else {
+          mode.value = 4;
+        }
+        return;
+      }
       mode.value = 1;
       started.value = Date.now();
       stylus.value = e.pointerType === PointerType.STYLUS;
+      touch.value = finger;
       const p = e.stylusData && e.stylusData.pressure > 0 ? e.stylusData.pressure : 0.5;
       live.value = [x, y, p];
     },
@@ -246,9 +259,12 @@ export function PageCanvas(props: Props) {
       }
       if (mode.value === 1) {
         const p = e.stylusData && e.stylusData.pressure > 0 ? e.stylusData.pressure : 0.5;
+        // 쓰다가 쪽 밖으로 나가면 쪽 가장자리에서 멈춘다
+        const cx = Math.max(0, Math.min(pw.value, x));
+        const cy = Math.max(0, Math.min(ph.value, y));
         live.modify((a) => {
           "worklet";
-          a.push(x, y, p);
+          a.push(cx, cy, p);
           return a;
         }, true);
       }
@@ -257,7 +273,16 @@ export function PageCanvas(props: Props) {
       "worklet";
       if (mode.value === 1) {
         const pts = live.value.slice();
-        if (e.canceled && pts.length <= 6) live.value = [];
+        // 손가락으로 쓰다가 둘째 손가락이 닿으면 이 획은 취소된다. 금방(0.35초 안) 취소됐거나 거의 안 움직였으면
+        // (화면에서 16px 미만) 확대하려던 것이므로 버린다. 펜으로 쓴 획은 예전 그대로 살린다.
+        let far = 0; // 첫 점에서 가장 멀리 간 거리의 제곱 (쪽 좌표)
+        for (let i = 3; i < pts.length; i += 3) {
+          const dx = pts[i] - pts[0], dy = pts[i + 1] - pts[1];
+          if (dx * dx + dy * dy > far) far = dx * dx + dy * dy;
+        }
+        const near = 16 / scale.value;
+        const pinching = touch.value && (Date.now() - started.value < 350 || far < near * near);
+        if (e.canceled && (pts.length <= 6 || pinching)) live.value = [];
         else scheduleOnRN(emitStroke, pts, stylus.value);
       } else if (mode.value === 3) {
         eraser.value = { x: -1000, y: -1000, r: 0 };
@@ -404,6 +429,7 @@ function TextLayer({ strokes, hidden, page, tx, ty, scale, dx, dy }: {
       {texts.map((s) => (
         <Text
           key={s.id}
+          allowFontScaling={false} // 기기의 '글자 크기' 설정에 따라 커지면 저장된 글상자(글에 맞춘 폭)보다 넓어진다
           style={{ position: "absolute", left: s.pts[0], top: s.pts[1], width: s.pts[3] - s.pts[0], fontSize: s.width, lineHeight: s.width * 1.4, color: s.color }}
         >
           {s.text}

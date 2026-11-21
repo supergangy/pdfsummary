@@ -46,6 +46,15 @@ class PdfPagesModule : Module() {
       }
     }
 
+    // 쪽의 글만, 상자 없이 (안드로이드 15 이상). 글자 인식 결과의 글자를 바로잡는 데 쓴다. 못 하면 null
+    AsyncFunction("plainTextAsync") { uri: String, index: Int ->
+      if (Build.VERSION.SDK_INT < 35) return@AsyncFunction null
+      open(uri) { r ->
+        if (index < 0 || index >= r.pageCount) return@open ""
+        r.openPage(index).use { p -> PageText.plain(p) }
+      }
+    }
+
     // 글자 인식(OCR)으로 쪽 글자와 글자 상자: 쪽을 크게 그려 ML Kit(한국어)으로 읽는다. textAsync와 같은 모양.
     AsyncFunction("ocrAsync") Coroutine { uri: String, index: Int, widthPx: Int ->
       val (bmp, pageW) = open(uri) { r ->

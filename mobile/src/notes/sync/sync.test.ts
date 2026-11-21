@@ -6,6 +6,7 @@ import { memoryFs } from "../store.ts";
 import { SyncEngine, emptyState, type RemoteOp, type Transport } from "./engine.ts";
 import { sha256 } from "./sha256.ts";
 import { SyncedStore, type StoreEvent } from "./syncedStore.ts";
+import { SyncHttpError, checkSpace, createSpace, httpTransport } from "./transport.ts";
 import { assignOrder } from "./writes.ts";
 
 class FakeServer {
@@ -270,4 +271,60 @@ test("joining with a stale copy: the server's newer content wins, device-only no
   const ink = (a[nb.id] as { ink: Record<string, Stroke[]> }).ink[pid];
   assert.equal(ink.find((s) => s.id === "x")!.color, "#FF0000");
   assert.ok(a[mine.id], "B에만 있던 노트가 A에도");
+});
+
+// ── 서버와 이야기하기(transport): 못 닿을 때·대답이 없을 때 ──
+
+const down = (async () => {
+  throw new TypeError("Failed to fetch");
+}) as typeof fetch;
+
+/** 연결은 받지만 대답을 안 하는 서버: 멈추라는 신호가 와야 끝난다 */
+const silent = ((_url: RequestInfo | URL, init?: RequestInit) =>
+  new Promise<Response>((_, reject) => {
+    init?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("This operation was aborted"), { name: "AbortError" })));
+  })) as typeof fetch;
+
+const plainKorean = (e: Error) => e instanceof SyncHttpError && e.status === 0 && /서버에 닿지 않아요/.test(e.message);
+
+test("unreachable server: starting or joining sync gives a Korean message, not the raw fetch error", async () => {
+  await assert.rejects(createSpace("http://127.0.0.1:9", "code", down), plainKorean);
+  await assert.rejects(checkSpace("http://127.0.0.1:9", "code", "ABCDE-ABCDE", down), plainKorean);
+  const tr = httpTransport("http://127.0.0.1:9", "code", { code: "ABCDE" }, down);
+  await assert.rejects(tr.push("dev", []), plainKorean);
+  await assert.rejects(tr.pull(0, 25), plainKorean);
+  await assert.rejects(tr.hasBlob("00"), plainKorean);
+  await assert.rejects(tr.putBlob("00", new Uint8Array(1)), plainKorean);
+  await assert.rejects(tr.getBlob("00"), plainKorean);
+});
+
+test("server errors keep their own message and status", async () => {
+  const denied = (async () => new Response("{}", { status: 403 })) as typeof fetch;
+  await assert.rejects(createSpace("http://s", "code", denied), (e: Error) => e instanceof SyncHttpError && e.status === 403 && /접속 코드/.test(e.message));
+  assert.equal(await checkSpace("http://s", "code", "ABCDE", denied), false);
+  const said = (async () => new Response(JSON.stringify({ error: "로그인이 끝났어요." }), { status: 401 })) as typeof fetch;
+  await assert.rejects(httpTransport("http://s", "code", { session: "x" }, said).pull(0, 0), (e: Error) => e instanceof SyncHttpError && e.status === 401 && e.message === "로그인이 끝났어요.");
+});
+
+test("silent server: short sync requests give up after a while; the long-poll pull has no time limit", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const noAnswer = (e: Error) => e instanceof SyncHttpError && /대답하지 않아요/.test(e.message);
+  const made = createSpace("http://s", "code", silent);
+  const checked = checkSpace("http://s", "code", "ABCDE", silent);
+  const tr = httpTransport("http://s", "code", { code: "ABCDE" }, silent);
+  const pushed = tr.push("dev", []);
+  const stop = new AbortController();
+  const pulled = tr.pull(0, 25, stop.signal);
+  let pullEnded = false;
+  pulled.catch(() => (pullEnded = true));
+  t.mock.timers.tick(12000);
+  await assert.rejects(made, noAnswer);
+  await assert.rejects(checked, noAnswer);
+  t.mock.timers.tick(10 * 60 * 1000);
+  await assert.rejects(pushed, noAnswer);
+  await Promise.resolve();
+  assert.equal(pullEnded, false, "오래 기다리는 pull은 시간으로 끊지 않는다");
+  // 동기화를 끄면(일부러 멈춤) AbortError가 그대로 나온다
+  stop.abort();
+  await assert.rejects(pulled, (e: Error) => e.name === "AbortError" && !(e instanceof SyncHttpError));
 });

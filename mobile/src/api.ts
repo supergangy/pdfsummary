@@ -1,5 +1,6 @@
 // 필기 요약 서버와 이야기하는 부분 (화면과 분리해서 Node로도 시험할 수 있게).
 import type { DeviceTask } from "./deviceRun.ts";
+import { LONG_MS, NO_ANSWER, SHORT_MS, withTimeLimit } from "./notes/net-errors.ts";
 
 export type Settings = {
   serverUrl: string; // 예: https://pdfsummary.example.com
@@ -114,20 +115,34 @@ export class Client {
     this.fetchImpl = fetchImpl ?? ((input, init) => fetch(input, init));
   }
 
-  private async req<T>(path: string, init: RequestInit & { withKey?: boolean } = {}): Promise<T> {
-    if (!this.s.serverUrl.trim()) throw new ApiError("설정에서 서버 주소를 넣어 주세요.");
-    let r: Response;
+  /** 서버에 한 번 묻고 대답 글까지 읽는다. limitMs 안에 대답이 없으면 끊고(끝없이 돌지 않게), 못 닿으면 쉬운 말로 알린다. */
+  private async ask(url: string, init: RequestInit, limitMs: number): Promise<[Response, string]> {
     try {
-      r = await this.fetchImpl(normalizeUrl(this.s.serverUrl) + path, {
-        ...init,
-        headers: { "Content-Type": "application/json", ...authHeaders(this.s, init.withKey), ...(init.headers || {}) },
+      return await withTimeLimit(limitMs, () => new ApiError(NO_ANSWER), async ({ signal }) => {
+        const r = await this.fetchImpl(url, { ...init, signal });
+        return [r, await r.text()] as [Response, string];
       });
-    } catch {
+    } catch (e) {
+      if (e instanceof ApiError) throw e;
       throw new ApiError("서버에 연결할 수 없어요. 인터넷과 서버 주소를 확인해 주세요.");
     }
-    const text = await r.text();
+  }
+
+  // limitMs를 안 주면 짧은 요청으로 본다 (서버가 일을 오래 하는 요청만 LONG_MS)
+  private async req<T>(path: string, init: RequestInit & { withKey?: boolean; limitMs?: number } = {}): Promise<T> {
+    if (!this.s.serverUrl.trim()) throw new ApiError("설정에서 서버 주소를 넣어 주세요.");
+    const [r, text] = await this.ask(
+      normalizeUrl(this.s.serverUrl) + path,
+      { ...init, headers: { "Content-Type": "application/json", ...authHeaders(this.s, init.withKey), ...(init.headers || {}) } },
+      init.limitMs ?? SHORT_MS,
+    );
     if (!r.ok) throw new ApiError(explain(r.status, text), r.status);
-    return JSON.parse(text) as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      // 다른 웹사이트 주소를 넣으면 JSON이 아닌 글이 온다
+      throw new ApiError("필기 요약 서버가 아닌 것 같아요. 서버 주소가 맞는지 확인해 주세요.");
+    }
   }
 
   state() {
@@ -137,6 +152,7 @@ export class Client {
   colors(file: string, original?: string | null, pages?: string, onlyInk?: boolean) {
     return this.req<{ colors: ColorInfo[] }>("/api/colors", {
       method: "POST",
+      limitMs: LONG_MS,
       body: JSON.stringify({ file, original: original || null, pages: pages || "", ...(onlyInk ? { only_ink: true } : {}) }),
     }).then((r) => r.colors);
   }
@@ -155,7 +171,7 @@ export class Client {
 
   /** 필기 앱의 노트(원본 업로드 id + 획) → 표시가 들어간 PDF를 서버가 만들어 새 업로드로 돌려준다. */
   notes(file: string | null, note: unknown) {
-    return this.req<UploadInfo>("/api/notes", { method: "POST", body: JSON.stringify({ file, note }) });
+    return this.req<UploadInfo>("/api/notes", { method: "POST", limitMs: LONG_MS, body: JSON.stringify({ file, note }) });
   }
 
   /** 기기 안 AI에게 맡길 일감 (context: "device"로 만든 작업만). */
@@ -167,13 +183,13 @@ export class Client {
   deviceAnswers(job: string, answers: Record<string, string>) {
     return this.req<{ ok: boolean; overviews: number; notes: number }>(`/api/job/${job}/device-answers`, {
       method: "POST",
+      limitMs: LONG_MS,
       body: JSON.stringify({ answers }),
     });
   }
 
   async resultText(job: string, file: ResultFile = "요약.html"): Promise<string> {
-    const r = await this.fetchImpl(resultUrl(this.s, job, file), { headers: authHeaders(this.s) });
-    const text = await r.text();
+    const [r, text] = await this.ask(resultUrl(this.s, job, file), { headers: authHeaders(this.s) }, LONG_MS);
     if (!r.ok) throw new ApiError(explain(r.status, text), r.status);
     return text;
   }

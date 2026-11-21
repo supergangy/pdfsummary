@@ -306,6 +306,37 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
       fail(`형광펜이 글줄에 맞춰지지 않음: y ${hl && hl.pts[1]} (글줄 가운데 ${cy.toFixed(1)}), 굵기 ${hl && hl.width} (글자 높이 ${lineH.toFixed(1)})`);
     }
     console.log(`✓ 형광펜 글자 크기에 맞춤: 글줄 가운데 ${hl.pts[1]} (기대 ${cy.toFixed(1)}), 굵기 ${hl.width} (글자 높이 ${lineH.toFixed(1)})`);
+
+    // ── 쪽을 끼우고 넘긴 뒤: 다른 쪽의 필기 되돌리기, 요약에서 보던 쪽으로 돌아오기 ──
+    const pageNo = async () => (await page.getByLabel("쪽 모아보기").innerText()).replace(/\s+/g, " ").trim();
+    await page.getByLabel("더 보기").click();
+    await page.getByText("＋ 뒤에 빈 쪽 (같은 속지)").click();
+    await page.waitForTimeout(900); // 메뉴가 닫힌 바로 뒤에 끝난 획은 버려진다 (빠르게 두 번 누른 둘째 누름 막기)
+    if (!/^2 \/ \d+$/.test(await pageNo())) fail("빈 쪽을 끼운 뒤 그 쪽으로 가지 않음: " + (await pageNo()));
+    await page.getByText(/^✒️ /).click();
+    await page.mouse.move(b2.x + 200, b2.y + 200);
+    await page.mouse.down();
+    await page.mouse.move(b2.x + 400, b2.y + 220, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(800);
+    const onNew = (await allStrokes(page)).filter((st) => st.tool === "pen").length;
+    await page.getByLabel("이전 쪽").click();
+    await page.waitForTimeout(400);
+    await page.getByLabel("되돌리기").click(); // 방금 쓴 획은 2쪽에 있다
+    await page.getByText(/되돌린 필기가 2쪽에 있어서/).waitFor({ timeout: 5000 });
+    if (!/^2 \//.test(await pageNo())) fail("다른 쪽의 필기를 되돌렸는데 그 쪽을 보여 주지 않음: " + (await pageNo()));
+    await page.waitForTimeout(800);
+    if ((await allStrokes(page)).filter((st) => st.tool === "pen").length !== onNew - 1) fail("다른 쪽의 필기가 되돌려지지 않음");
+    await page.getByLabel("요약 만들기").click();
+    await page.getByText("✨ 서버로 자세히").waitFor({ timeout: 20000 });
+    await page.getByText("‹ 노트로").click();
+    await canvas.waitFor({ timeout: 20000 });
+    await page.waitForTimeout(1200);
+    if (!/^2 \//.test(await pageNo())) fail("요약을 보고 돌아오니 보던 쪽이 아님: " + (await pageNo()));
+    await page.getByLabel("이전 쪽").click();
+    await page.waitForTimeout(600);
+    console.log("✓ 빈 쪽 끼우기 → 다른 쪽의 필기를 되돌리면 그 쪽으로, 요약에서 보던 쪽으로 돌아오기");
+
     await page.getByLabel("요약 만들기").click();
     // 먼저 기기에서 바로 만든 요약 (서버 없이): PDF 글자층에서 칠한 글자를 읽는다
     await page.getByText("✨ 서버로 자세히").waitFor({ timeout: 20000 });

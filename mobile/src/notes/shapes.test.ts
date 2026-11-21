@@ -26,6 +26,23 @@ test("lasso selects strokes mostly inside", () => {
   assert.deepEqual([...lassoSelect([a, b, c], lasso)], ["a"]);
 });
 
+test("lasso partial: circling only the middle of a 2-point highlighter or a text box selects it", () => {
+  // 곧게 편 형광펜은 양 끝 2점만 저장된다
+  const hl: Stroke = { id: "hl", tool: "highlighter", color: "#FFE14D", width: 14, pts: [50, 100, 0.5, 400, 100, 0.5] };
+  const box: Stroke = { id: "tx", tool: "text", color: "#000000", width: 16, pts: [100, 200, 0, 300, 245, 0], text: "첫 줄\n둘째 줄" };
+  const rect = (x0: number, y0: number, x1: number, y1: number) => [x0, y0, 0.5, x1, y0, 0.5, x1, y1, 0.5, x0, y1, 0.5];
+  const midLine = rect(180, 80, 260, 120); // 형광펜 가운데만 (양 끝은 밖)
+  const midText = rect(150, 210, 250, 235); // 글상자 안쪽 가운데만 (모서리는 밖)
+  assert.deepEqual([...lassoSelect([hl, box], midLine, true)], ["hl"]);
+  assert.deepEqual([...lassoSelect([hl, box], midText, true)], ["tx"]);
+  // 부분 선택이 꺼져 있으면 가운데만으로는 안 골라지고, 다 둘러싸야 골라진다
+  assert.equal(lassoSelect([hl, box], midLine, false).size, 0);
+  assert.equal(lassoSelect([hl, box], midText, false).size, 0);
+  assert.deepEqual([...lassoSelect([hl, box], rect(30, 60, 420, 260), false)].sort(), ["hl", "tx"]);
+  // 닿지 않은 것은 부분 선택에서도 안 골라진다
+  assert.equal(lassoSelect([hl, box], rect(320, 150, 400, 300), true).size, 0);
+});
+
 test("move with undo/redo (replace op)", () => {
   const h = new History();
   const a = S("a", [10, 10, 0.5]);

@@ -105,7 +105,9 @@ export async function buildPdf(nb: Notebook, ink: Ink, source: Uint8Array | null
   let font: PDFFont | null = null;
   if (hasText && fontBytes) {
     out.registerFontkit(fontkit);
-    font = await out.embedFont(fontBytes, { subset: true }); // 쓴 글자만 넣어 파일을 작게
+    // 글꼴을 통째로 넣는다. '쓴 글자만 넣기'(subset)는 나눔고딕에서 글자 모양을 망가뜨려
+    // 글상자 글이 대부분 안 보였다. 대신 글상자가 있는 PDF는 0.7MB쯤 커진다.
+    font = await out.embedFont(fontBytes, { subset: false });
   }
   out.setTitle(nb.title);
   out.setProducer("필기 요약");

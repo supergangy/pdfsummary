@@ -60,6 +60,12 @@ export function SettingsSheet({
             <Text style={{ color: t.ink, fontSize: 22, fontWeight: "700", flex: 1 }}>설정</Text>
             <Button kind="link" label="닫기" onPress={onClose} />
           </View>
+          {/* 서버를 아직 안 정한 사람에게: 이 창이 왜 떴는지, 서버 없이도 되는 일이 있다는 것을 먼저 알린다 */}
+          {(!initial.serverUrl.trim() || !initial.accessCode.trim()) && (
+            <Hint style={{ marginBottom: 16 }}>
+              서버는 자세한 요약과 기기끼리 동기화에만 필요해요. 서버가 없으면 '닫기'를 누르세요. 필기와 노트 화면의 '요약' 단추(바로 요약)는 서버 없이도 쓸 수 있어요.
+            </Hint>
+          )}
           {field("서버 주소", "serverUrl", { placeholder: "https://…", hint: "PDF를 분석하는 서버예요. 직접 띄우는 방법은 README의 '앱용 서버'를 보세요." })}
           {field("접속 코드", "accessCode", { placeholder: "서버에 정한 접속 코드", secret: true })}
           {field("Claude API 키 (선택)", "apiKey", {

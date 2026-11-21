@@ -1,6 +1,7 @@
 package expo.modules.pdfpages
 
 import android.graphics.pdf.PdfRenderer
+import android.util.Log
 import androidx.annotation.RequiresApi
 import org.json.JSONArray
 
@@ -27,6 +28,15 @@ internal object PageText {
       }
     }
     return out.toString()
+  }
+
+  /** 쪽의 글만 (상자 없이). 실제 기기의 PdfRenderer는 글만 주고 줄 상자는 비워 줘서 위 json()이 빈 값이 된다 →
+   *  자리는 글자 인식(OcrText)에서 얻고, 글자는 이 글로 바로잡는다 (src/notes/textLayer.ts). */
+  fun plain(page: PdfRenderer.Page): String {
+    val contents = page.textContents
+    // 글자 내용은 기록하지 않는다 (교재 글). 개수만: 어느 길로 읽는지 실기기에서 확인하려고
+    Log.d("PdfPages", "text layer: contents=${contents.size} boxes=${contents.sumOf { it.bounds.size }} chars=${contents.sumOf { it.text.length }}")
+    return contents.joinToString("\n") { it.text }
   }
 
   private fun r2(v: Float): Double = Math.round(v * 100.0) / 100.0

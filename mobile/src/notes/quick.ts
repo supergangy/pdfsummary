@@ -74,14 +74,37 @@ function runs(idx: number[], chars: PdfChar[]): [number, number][] {
 const join = (chars: PdfChar[], a: number, b: number) =>
   chars.slice(a, b + 1).map((c) => (c[0] === "\n" ? " " : c[0])).join("").replace(/\s+/g, " ").trim();
 
-/** [a, b] 글자가 든 문장 (마침표·물음표·느낌표·빈 줄에서 끊음, 너무 길면 자름) */
+/** join과 같되 앞뒤 공백을 자르지 않는다 (표시한 곳 경계에 원래 띄어쓰기가 있었는지 남기려고) */
+const flat = (chars: PdfChar[], a: number, b: number) =>
+  chars.slice(a, b + 1).map((c) => (c[0] === "\n" ? " " : c[0])).join("").replace(/\s+/g, " ");
+
+/** k가 줄의 첫 글자이고 거기서 문제·보기 번호("1." "12)" "(3)" "①")가 시작하면 그 번호의 글자 수, 아니면 0.
+ *  '가.' '다.' 같은 한글 번호는 넣지 않는다 (줄이 "다. "로 시작하는 일이 흔해서 잘못 끊긴다). */
+export function itemMarker(chars: PdfChar[], k: number): number {
+  if (k < 0 || k >= chars.length || (k > 0 && chars[k - 1][0] !== "\n")) return 0;
+  const head = chars.slice(k, k + 6).map((c) => (c[0] === "\n" ? " " : c[0])).join("");
+  const m = /^(\d{1,3}[.)]|\(\d{1,2}\)|[①-⑳])(?=\s)/.exec(head);
+  return m ? m[0].length : 0;
+}
+
+/** [a, b] 글자가 든 문장 (마침표·물음표·느낌표·줄 첫머리 번호에서 끊음, 너무 길면 자름).
+ *  before 끝과 after 처음의 띄어쓰기는 원문 그대로 둔다 — 낱말 가운데부터 칠해도 "사용자[가 …자]원"처럼 붙어 나오게. */
 export function sentenceAround(chars: PdfChar[], a: number, b: number) {
-  const end = (k: number) => /[.!?。]/.test(chars[k]?.[0] ?? "") && (k + 1 >= chars.length || isSpace(chars[k + 1][0]));
+  // 줄 첫머리 번호의 마침표("1.")는 문장 끝이 아니다
+  const inMarker = (k: number) => {
+    let s = k;
+    while (s > 0 && chars[s - 1][0] !== "\n" && k - s < 4) s--;
+    const n = itemMarker(chars, s);
+    return n > 0 && k < s + n;
+  };
+  const end = (k: number) => /[.!?。]/.test(chars[k]?.[0] ?? "") && (k + 1 >= chars.length || isSpace(chars[k + 1][0])) && !inMarker(k);
+  // 다음 줄이 새 문제·보기 번호로 시작하면 그 앞에서 끊는다 (보기에는 마침표가 없어 다음 문제 번호까지 딸려 왔다)
+  const nextItem = (k: number) => chars[k + 1]?.[0] === "\n" && itemMarker(chars, k + 2) > 0;
   let s = a;
-  while (s > 0 && !end(s - 1) && a - s < 200) s--;
+  while (s > 0 && !end(s - 1) && !itemMarker(chars, s) && a - s < 200) s--;
   let e = b;
-  while (e < chars.length - 1 && !end(e) && e - b < 200) e++;
-  return { before: join(chars, s, a - 1), mark: join(chars, a, b), after: join(chars, b + 1, e) };
+  while (e < chars.length - 1 && !end(e) && !nextItem(e) && e - b < 200) e++;
+  return { before: flat(chars, s, a - 1).trimStart(), mark: join(chars, a, b), after: flat(chars, b + 1, e).trimEnd() };
 }
 
 function centers(chars: PdfChar[]) {
@@ -242,15 +265,24 @@ export function analyzePage(page: number, strokes: Stroke[], chars: PdfChar[] | 
     const box = boxOf(group);
     const color = group[0].color;
     if (hasText && group.every(isFlat)) {
+      // 밑줄마다 따로 그 위의 글자를 찾는다. 이웃한 줄에 그은 밑줄은 가까워서 한 덩어리로 묶이는데,
+      // 덩어리 가운데 높이 하나로 찾으면 두 줄 사이를 보게 되어 글자를 못 찾거나 가운데 줄만 찾았다
       const idx: number[] = [];
-      const y = (box[1] + box[3]) / 2;
-      cs.forEach((c, i) => {
-        if (isSpace(c.c)) return;
-        const h = c.y1 - c.y0;
-        if (c.cx >= box[0] && c.cx <= box[2] && y >= c.y1 - h * 0.25 && y <= c.y1 + Math.max(6, h * 0.6)) idx.push(i);
-      });
+      const loose: Stroke[] = []; // 위에 글자가 없는 줄
+      for (const s of group) {
+        const b = bounds(s);
+        const y = (b[1] + b[3]) / 2;
+        const before = idx.length;
+        cs.forEach((c, i) => {
+          if (isSpace(c.c)) return;
+          const h = c.y1 - c.y0;
+          if (c.cx >= b[0] && c.cx <= b[2] && y >= c.y1 - h * 0.25 && y <= c.y1 + Math.max(6, h * 0.6)) idx.push(i);
+        });
+        if (idx.length === before) loose.push(s);
+      }
       if (idx.length) {
         for (const [a, b] of runs(idx, chars!)) items.push({ page, kind: "underline", color, text: join(chars!, a, b), sentence: sentenceAround(chars!, a, b), box, strokes: [] });
+        if (loose.length) items.push({ page, kind: "mark", color, text: "", box: boxOf(loose), strokes: loose });
         continue;
       }
     }
@@ -310,7 +342,7 @@ export function overviewPrompt(q: QuickSummary, limit = 1600): { instructions: s
   let used = 0;
   for (const { page, items } of q.pages) {
     for (const it of items) {
-      const t = it.sentence ? `${it.sentence.before} [${it.sentence.mark}] ${it.sentence.after}`.trim() : it.text;
+      const t = it.sentence ? `${it.sentence.before}[${it.sentence.mark}]${it.sentence.after}`.trim() : it.text;
       if (!t) continue;
       const line = `- ${page + 1}쪽 ${LABEL[it.kind]}: ${t.slice(0, 160)}`;
       if (used + line.length > limit) break;
@@ -354,7 +386,7 @@ export function quickHtml(q: QuickSummary): string {
       let main: string;
       if (it.sentence && it.text) {
         const m = `<mark style="background:${it.kind === "highlight" ? it.color + "66" : "transparent"};${it.kind !== "highlight" ? `text-decoration:underline 2px ${it.color};` : ""}">${esc(it.sentence.mark)}</mark>`;
-        main = `<p>${esc(it.sentence.before)} ${m} ${esc(it.sentence.after)}</p>`;
+        main = `<p>${esc(it.sentence.before)}${m}${esc(it.sentence.after)}</p>`; // 띄어쓰기는 before·after에 원문대로 들어 있다
       } else if (it.text) {
         main = `<p>${it.kind === "memo" ? "📝 " : ""}${esc(it.text).replace(/\n/g, "<br>")}</p>`;
       } else {
@@ -374,7 +406,7 @@ main{max-width:820px;margin:0 auto;padding:28px 18px 60px}h1{margin:0 0 4px;font
 .meta{color:var(--muted);font-size:14px;margin-bottom:18px}.ov{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin-bottom:18px}
 h2{font-size:15px;color:var(--muted);border-bottom:1px solid var(--line);padding-bottom:4px;margin:26px 0 10px}
 ul{list-style:none;margin:0;padding:0}li{background:var(--card);border:1px solid var(--line);border-left:4px solid;border-radius:8px;padding:10px 14px;margin:8px 0}
-li p{margin:0}mark{color:inherit;font-weight:700;border-radius:3px;padding:0 2px}small{display:block;color:var(--muted);font-size:12px;margin-top:4px}
+li p{margin:0}mark{color:inherit;font-weight:700;border-radius:3px;padding:0}small{display:block;color:var(--muted);font-size:12px;margin-top:4px}
 svg.ink{display:block;max-width:100%;height:auto;margin-top:4px;background:#fff;border-radius:6px}
 </style></head><body><main><h1>${esc(q.title)}</h1><div class="meta">기기에서 만든 요약 · ${stats || "표시 없음"}</div>
 ${q.overview ? `<div class="ov"><b>개요</b> ${esc(q.overview)}</div>` : ""}${body || "<p>필기한 부분이 없어요.</p>"}</main></body></html>`;

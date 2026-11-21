@@ -2,6 +2,7 @@
 import { pdfInfo } from "../../modules/pdf-pages";
 import type { Picked } from "../platform/types";
 import { newId, type Notebook } from "./model";
+import { pdfOpenMessage } from "./net-errors";
 import type { NoteStore } from "./store";
 
 export async function importPdf(store: NoteStore, p: Picked): Promise<Notebook> {
@@ -26,6 +27,7 @@ export async function importPdf(store: NoteStore, p: Picked): Promise<Notebook> 
   } catch (e) {
     await store.remove(id);
     const msg = (e as Error).message || "";
-    throw new Error(/암호|password|encrypt/i.test(msg) ? "암호가 걸린 PDF는 가져올 수 없어요." : `PDF를 열 수 없어요. ${msg}`);
+    console.warn("PDF 가져오기 실패:", msg); // 원래 글(영어일 수 있음)은 기록에만 남긴다
+    throw new Error(pdfOpenMessage(msg));
   }
 }

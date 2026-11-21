@@ -8,6 +8,7 @@ import { inkAvailable, inkStatus, prepareInk, recognizeInk } from "../../modules
 import { pageText } from "../../modules/pdf-pages";
 import { ResultView } from "../platform/ResultView";
 import { Bar, Button, Hint, useTheme } from "../ui";
+import { tooSoon } from "./app-nav";
 import type { Ink, Notebook } from "./model";
 import { overviewPrompt, quickHtml, quickSummary, type QuickSummary, splitInkLines } from "./quick";
 import { shareFile } from "./shareFile";
@@ -24,6 +25,11 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary }: Props) 
   const [ai, setAi] = useState<DeviceAi.DeviceAiStatus | null>(null);
   const [note, setNote] = useState("");
   const alive = useRef(true);
+  // 노트의 '요약' 단추를 빠르게 두 번 누르면 두 번째 누름이 같은 자리에 뜨는 '서버로 자세히'를 눌렀다 → 막 떴을 때의 누름은 넘긴다
+  const openedAt = useRef(Date.now());
+  const serverSummary = () => {
+    if (!tooSoon(openedAt.current, Date.now())) onServerSummary();
+  };
 
   useEffect(() => {
     alive.current = true;
@@ -113,7 +119,7 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary }: Props) 
           <Button label="✍️ 손글씨 인식 켜기 (약 20MB)" onPress={getInkModel} disabled={!!prog} style={{ paddingVertical: 7 }} />
         )}
         <Button label="공유 (HTML)" onPress={() => void shareFile(html, `${nb.title} 요약.html`, "text/html")} disabled={!q} style={{ paddingVertical: 7 }} />
-        <Button label="✨ 서버로 자세히" onPress={onServerSummary} style={{ paddingVertical: 7 }} />
+        <Button label="✨ 서버로 자세히" onPress={serverSummary} style={{ paddingVertical: 7 }} />
       </View>
       {prog && (
         <View style={{ padding: 14 }}>

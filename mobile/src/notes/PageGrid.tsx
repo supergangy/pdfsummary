@@ -6,6 +6,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { useTheme } from "../ui";
 import type { Ink, Notebook, Page } from "./model";
+import { GRID_LABEL_H, GRID_PAD, GRID_ROW_GAP, gridRow, gridRows } from "./objects-grid";
 import { pageImage } from "./pageImage";
 import { inkPicture, paperPicture, type PathCache } from "./render";
 
@@ -30,6 +31,21 @@ export function PageGrid({ visible, nb, ink, pdfUri, current, onPick, onClose }:
     () => nb.pages.map((p, i) => ({ p, i })).filter(({ p }) => !onlyInk || (ink[p.id]?.length ?? 0) > 0),
     [nb.pages, ink, onlyInk],
   );
+  // 줄마다 높이와 자리를 미리 셈해 둔다 → 목록이 지금 보던 쪽의 줄로 바로 갈 수 있다
+  const rows = useMemo(() => gridRows(pages.map((x) => x.p), cols, cellW), [pages, cols, cellW]);
+  // 열 때마다(그리고 칸 수가 바뀔 때마다) 한 번, 지금 보던 쪽이 있는 줄로 옮긴다.
+  // (initialScrollIndex는 쓰지 않는다: 줄 번호가 어긋나거나 굴릴 수 없는 짧은 목록이면 위쪽 줄이 끝내 안 그려진다)
+  const jumped = useRef<number | null>(null);
+  useEffect(() => {
+    if (!visible) jumped.current = null;
+  }, [visible]);
+  const jumpToCurrent = (_w: number, h: number) => {
+    if (h <= 0 || jumped.current === cols) return;
+    jumped.current = cols;
+    const at = pages.findIndex((x) => x.i === current);
+    const row = at < 0 ? undefined : rows[gridRow(at, cols)];
+    if (row && row.offset > GRID_PAD) list.current?.scrollToOffset({ offset: row.offset - GRID_PAD, animated: false });
+  };
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
@@ -54,17 +70,17 @@ export function PageGrid({ visible, nb, ink, pdfUri, current, onPick, onClose }:
           data={pages}
           numColumns={cols}
           keyExtractor={(x) => x.p.id}
-          contentContainerStyle={{ padding: 12, gap: 14 }}
+          contentContainerStyle={{ padding: GRID_PAD, gap: GRID_ROW_GAP }}
           columnWrapperStyle={cols > 1 ? { gap: 12 } : undefined}
-          initialNumToRender={cols * 4}
+          initialNumToRender={4} // 여러 칸 목록은 '줄' 단위로 센다 (4줄)
           windowSize={5}
-          initialScrollIndex={onlyInk ? undefined : Math.max(0, Math.floor(current / cols) * cols) || undefined}
-          getItemLayout={undefined}
+          getItemLayout={(_data, index) => ({ length: rows[index]?.length ?? 0, offset: rows[index]?.offset ?? 0, index })}
+          onContentSizeChange={jumpToCurrent}
           ListEmptyComponent={<Text style={{ color: t.muted, padding: 20 }}>필기한 쪽이 없어요.</Text>}
           renderItem={({ item }) => (
             <Pressable onPress={() => onPick(item.i)} accessibilityRole="button" accessibilityLabel={`${item.i + 1}쪽으로`} style={{ width: cellW }}>
               <Thumb nbId={nb.id} page={item.p} ink={ink} pdfUri={pdfUri} width={cellW} active={item.i === current} />
-              <Text style={{ color: item.i === current ? t.accent : t.muted, textAlign: "center", marginTop: 4, fontWeight: item.i === current ? "700" : "400" }}>
+              <Text numberOfLines={1} style={{ color: item.i === current ? t.accent : t.muted, textAlign: "center", marginTop: 4, height: GRID_LABEL_H - 4, fontWeight: item.i === current ? "700" : "400" }}>
                 {item.i + 1}
                 {(ink[item.p.id]?.length ?? 0) > 0 ? " ✎" : ""}
               </Text>

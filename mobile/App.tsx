@@ -2,7 +2,7 @@ import * as DocumentPicker from "expo-document-picker";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, Platform, Pressable, ScrollView, Switch, Text, TextInput, useColorScheme, View,
+  ActivityIndicator, Alert, BackHandler, Platform, Pressable, ScrollView, Switch, Text, TextInput, useColorScheme, View,
 } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
@@ -13,6 +13,7 @@ import {
 } from "./src/api";
 import * as DeviceAi from "./modules/device-ai";
 import { runDeviceTasks } from "./src/deviceRun";
+import { backTarget } from "./src/notes/app-nav";
 import { Editor } from "./src/notes/Editor";
 import { buildPdf } from "./src/notes/exportPdf";
 import { koreanFont } from "./src/notes/fontBytes";
@@ -94,7 +95,7 @@ type NoteInput = { nb: Notebook; ink: Ink; pdf: () => Promise<Picked | null> };
 
 type Screen =
   | { name: "library" }
-  | { name: "editor"; id: string }
+  | { name: "editor"; id: string; page?: number } // page: 요약을 보고 돌아올 때 다시 열 쪽
   | { name: "summary"; note?: NoteInput; backTo?: Screen; settings?: boolean }
   | { name: "quick"; nb: Notebook; ink: Ink; backTo: Screen };
 
@@ -105,6 +106,23 @@ function Root() {
   const [screen, setScreen] = useState<Screen>({ name: "library" });
   const [refresh, setRefresh] = useState(0);
   const [shareErr, setShareErr] = useState("");
+  // 목록에서 고른 폴더 (null = 전체). 노트를 열었다 돌아와도 그대로 있게 여기에 둔다
+  const [folder, setFolder] = useState<string | null>(null);
+
+  // 안드로이드 '뒤로': 요약 화면에서는 왔던 노트(없으면 목록)로 간다.
+  // 목록에서는 앱이 닫히고, 필기 화면은 Editor가 저장한 뒤 스스로 닫는다 (둘 다 여기서는 false)
+  const screenRef = useRef(screen);
+  screenRef.current = screen;
+  useEffect(() => {
+    if (Platform.OS !== "android") return; // 웹은 BackHandler가 없다는 오류 글을 남긴다
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      const to = backTarget<Screen>(screenRef.current, { name: "library" });
+      if (!to) return false;
+      setScreen(to);
+      return true;
+    });
+    return () => sub.remove();
+  }, []);
 
   // 다른 앱(굿노트·삼성노트·파일)에서 공유받은 PDF → 노트로 가져와 바로 연다
   const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntent({ resetOnBackground: true });
@@ -139,6 +157,7 @@ function Root() {
       <Editor
         store={store}
         id={id}
+        startPage={screen.page}
         onClose={() => {
           setRefresh((x) => x + 1);
           setScreen({ name: "library" });
@@ -148,8 +167,8 @@ function Root() {
           const hasText = Object.values(ink).some((ss) => ss.some((s) => s.tool === "text"));
           await sharePdf(await buildPdf(nb, ink, src, hasText ? await koreanFont() : null), nb.title);
         }}
-        onSummarize={(nb, ink) => setScreen({ name: "summary", note: { nb, ink, pdf: pdfOf(nb) }, backTo: { name: "editor", id } })}
-        onQuick={(nb, ink) => setScreen({ name: "quick", nb, ink, backTo: { name: "editor", id } })}
+        onSummarize={(nb, ink, page) => setScreen({ name: "summary", note: { nb, ink, pdf: pdfOf(nb) }, backTo: { name: "editor", id, page } })}
+        onQuick={(nb, ink, page) => setScreen({ name: "quick", nb, ink, backTo: { name: "editor", id, page } })}
       />
     );
   }
@@ -180,6 +199,8 @@ function Root() {
       <Library
         store={store}
         refresh={refresh}
+        folder={folder}
+        onFolder={setFolder}
         onOpen={(id) => setScreen({ name: "editor", id })}
         onSummaryTool={() => setScreen({ name: "summary" })}
         onSettings={() => setScreen({ name: "summary", settings: true })}
@@ -254,9 +275,9 @@ function Main({ note, onBack, startWithSettings }: { note?: NoteInput; onBack: (
         } catch {
           // 연결은 나중에 다시
         }
-      } else {
-        setShowSettings(true);
       }
+      // 서버를 아직 안 정했어도 설정 창을 바로 띄우지 않는다: 왜 떴는지 몰라 놀란다.
+      // 대신 아래 '먼저 서버를 연결해 주세요' 카드가 까닭과 할 일을 알려 준다
     });
   }, []);
 
@@ -467,7 +488,11 @@ function Main({ note, onBack, startWithSettings }: { note?: NoteInput; onBack: (
 
         {loaded && !ready && (
           <Card title="먼저 서버를 연결해 주세요">
-            <Hint>PDF 분석은 서버에서 해요. 설정에서 서버 주소와 접속 코드를 넣어 주세요.</Hint>
+            <Hint>
+              {note
+                ? "자세한 요약은 서버가 있어야 만들 수 있어요. 서버가 있으면 설정에서 서버 주소와 접속 코드를 넣어 주세요. 서버가 없으면 위의 '‹ 노트로 돌아가기'를 누른 뒤 노트 화면의 '요약' 단추를 쓰세요 (서버 없이 기기에서 바로 만들어요)."
+                : "PDF 분석은 서버에서 해요. 설정에서 서버 주소와 접속 코드를 넣어 주세요."}
+            </Hint>
             <Button kind="primary" label="설정 열기" onPress={() => setShowSettings(true)} style={{ marginTop: 12 }} />
           </Card>
         )}

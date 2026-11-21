@@ -165,8 +165,24 @@ export function textBoxHeight(text: string, size: number, w: number): number {
   return Math.max(1, lines) * size * 1.4;
 }
 
+/** 글 한 줄의 폭 어림. 넉넉하게 잡는다 (상자가 글보다 좁으면 화면에서 줄이 바뀌어 버린다) */
+function textLineWidth(line: string, size: number): number {
+  let width = 0;
+  for (const c of line) width += c.charCodeAt(0) >= 0x1100 ? size * 1.1 : /[A-Z@%&mw]/.test(c) ? size * 0.95 : size * 0.65;
+  return width;
+}
+
+/**
+ * 글상자 만들기. 상자 폭은 글에 맞춘다 (가장 긴 줄 + 조금의 여유, 많아야 320).
+ * 예전에는 짧은 글도 폭 320이라, 보이지 않는 넓은 상자 때문에 옆의 필기를 지우다 글상자까지 지워졌다.
+ * 쪽 오른쪽 끝을 넘으면 왼쪽으로 당겨 쪽 안에 넣는다.
+ */
 export function makeTextBox(id: string, x: number, y: number, text: string, size: number, color: string, pageW: number): Stroke {
-  const w = Math.max(80, Math.min(320, pageW - x - 18));
+  const room = Math.max(80, Math.min(320, pageW - x - 18));
+  let need = size * 2;
+  for (const line of text.split("\n")) need = Math.max(need, textLineWidth(line, size) + size * 0.6);
+  const w = Math.min(room, Math.ceil(need));
+  const left = Math.max(0, Math.min(x, pageW - 18 - w));
   const h = textBoxHeight(text, size, w);
-  return { id, tool: "text", color, width: size, pts: [x, y, 0, x + w, y + h, 0], text };
+  return { id, tool: "text", color, width: size, pts: [left, y, 0, left + w, y + h, 0], text };
 }

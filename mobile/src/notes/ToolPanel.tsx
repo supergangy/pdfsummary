@@ -1,10 +1,11 @@
 // 도구 설정 창: 펜 종류·굵기·선 모양·색 / 형광펜 굵기·투명도·직선·글줄 맞추기 / 지우개 / 올가미.
 // 도구 모음에서 이미 고른 도구를 한 번 더 누르면 열린다.
-import { Canvas, Picture } from "@shopify/react-native-skia";
+import { Canvas, Group, Picture } from "@shopify/react-native-skia";
 import { useEffect, useMemo, useRef } from "react";
 import { Modal, Platform, Pressable, ScrollView, Switch, Text, useWindowDimensions, View } from "react-native";
 
 import { useTheme } from "../ui";
+import { previewPts, previewScale, swatchEdge } from "./editor-logic";
 import {
   HIGHLIGHT_COLORS,
   HIGHLIGHT_OPACITY_STEPS,
@@ -26,11 +27,13 @@ type Props = {
   onClose: () => void;
   /** 창을 띄울 자리 (화면 기준): 도구 모음 바로 밑, 누른 도구 단추의 왼쪽 끝 */
   at?: { top: number; left: number } | null;
+  /** 쪽이 지금 화면에 보이는 배율 (1pt가 화면 몇 칸인지). 펜 견본을 실제로 그어지는 굵기로 보여 주려고 */
+  viewScale?: number;
 };
 
 const nearest = (steps: number[], v: number) => steps.reduce((a, b, i) => (Math.abs(b - v) < Math.abs(steps[a] - v) ? i : a), 0);
 
-export function ToolPanel({ open, prefs, setP, onClearPage, onClose, at }: Props) {
+export function ToolPanel({ open, prefs, setP, onClearPage, onClose, at, viewScale }: Props) {
   const t = useTheme();
   const win = useWindowDimensions();
   const tool = prefs.tool;
@@ -62,7 +65,7 @@ export function ToolPanel({ open, prefs, setP, onClearPage, onClose, at }: Props
                 <Text style={{ color: t.muted, fontSize: 20 }}>✕</Text>
               </Pressable>
             </View>
-            {tool === "pen" && <PenOptions prefs={prefs} setP={setP} />}
+            {tool === "pen" && <PenOptions prefs={prefs} setP={setP} viewScale={viewScale} />}
             {tool === "highlighter" && <HighlighterOptions prefs={prefs} setP={setP} />}
             {tool === "eraser" && <EraserOptions prefs={prefs} setP={setP} onClearPage={onClearPage} />}
             {tool === "lasso" && <LassoOptions prefs={prefs} setP={setP} />}
@@ -75,11 +78,11 @@ export function ToolPanel({ open, prefs, setP, onClearPage, onClose, at }: Props
 
 // ── 펜 ──────────────────────────────────────────────────────────────
 
-function PenOptions({ prefs, setP }: { prefs: Prefs; setP: Props["setP"] }) {
+function PenOptions({ prefs, setP, viewScale }: { prefs: Prefs; setP: Props["setP"]; viewScale?: number }) {
   const t = useTheme();
   return (
     <>
-      <Preview prefs={prefs} />
+      <Preview prefs={prefs} viewScale={viewScale} />
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }} accessibilityRole="radiogroup" accessibilityLabel="펜 종류">
         {PENS.map((p) => (
           <Chip key={p.id} label={p.label} on={prefs.penBrush === p.id} onPress={() => setP({ penBrush: p.id })} hint={p.hint} />
@@ -93,29 +96,26 @@ function PenOptions({ prefs, setP }: { prefs: Prefs; setP: Props["setP"] }) {
         ))}
       </View>
       <Colors colors={PEN_COLORS} value={prefs.penColor} onPick={(c) => setP({ penColor: c })} />
-      <Toggle label="도형 반듯하게 (선·사각형·원·삼각형)" value={prefs.shapes} onChange={(v) => setP({ shapes: v })} />
+      <Toggle label="도형 펴기" hint="선·사각형·원·삼각형을 반듯하게" value={prefs.shapes} onChange={(v) => setP({ shapes: v })} />
     </>
   );
 }
 
-/** 지금 설정으로 그은 견본 획 */
-function Preview({ prefs }: { prefs: Prefs }) {
+/** 지금 설정으로 그은 견본 획 — 쪽이 화면에 보이는 배율로 키워서, 실제로 그어지는 굵기와 같게 */
+function Preview({ prefs, viewScale }: { prefs: Prefs; viewScale?: number }) {
   const t = useTheme();
   const cache = useRef<PathCache>(new WeakMap());
+  const scale = previewScale(viewScale);
   const pic = useMemo(() => {
-    const pts: number[] = [];
-    for (let i = 0; i <= 40; i++) {
-      const x = 14 + i * 7.6;
-      const y = 32 + Math.sin(i / 6) * 14;
-      pts.push(x, y, 0.25 + 0.6 * Math.sin((i / 40) * Math.PI));
-    }
-    const s: Stroke = { id: "preview", tool: "pen", color: prefs.penColor === "#FFFFFF" ? "#999999" : prefs.penColor, width: prefs.penWidth, pts, brush: prefs.penBrush, dash: prefs.penDash };
+    const s: Stroke = { id: "preview", tool: "pen", color: prefs.penColor === "#FFFFFF" ? "#999999" : prefs.penColor, width: prefs.penWidth, pts: previewPts(scale), brush: prefs.penBrush, dash: prefs.penDash };
     return inkPicture([s], new Set(), 330, 64, cache.current);
-  }, [prefs.penColor, prefs.penWidth, prefs.penBrush, prefs.penDash]);
+  }, [prefs.penColor, prefs.penWidth, prefs.penBrush, prefs.penDash, scale]);
   return (
     <View style={{ height: 64, borderRadius: 10, overflow: "hidden", backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: t.line }} accessibilityLabel="펜 견본">
       <Canvas style={{ width: 330, height: 64 }}>
-        <Picture picture={pic} />
+        <Group transform={[{ scale }]}>
+          <Picture picture={pic} />
+        </Group>
       </Canvas>
     </View>
   );
@@ -139,7 +139,7 @@ function HighlighterOptions({ prefs, setP }: { prefs: Prefs; setP: Props["setP"]
         format={(v) => `${Math.round(v * 100)}%`}
         onChange={(i) => setP({ hlOpacity: HIGHLIGHT_OPACITY_STEPS[i] })}
       />
-      <Toggle label="직선 자동 보정" hint="가로로 그으면 곧은 선으로" value={prefs.straight} onChange={(v) => setP({ straight: v })} />
+      <Toggle label="직선" hint="가로로 그으면 곧은 선으로" value={prefs.straight} onChange={(v) => setP({ straight: v })} />
       <Toggle label="글자 크기에 맞춰 두께 조절" hint="PDF 쪽에서 칠한 글줄 높이·글자 끝에 맞춰요" value={prefs.hlFit} onChange={(v) => setP({ hlFit: v })} />
       <Colors colors={HIGHLIGHT_COLORS} value={prefs.hlColor} onPick={(c) => setP({ hlColor: c })} />
     </>
@@ -225,6 +225,7 @@ function DashChip({ dash, on, onPress }: { dash: LineDash; on: boolean; onPress:
 
 function Colors({ colors, value, onPick }: { colors: string[]; value: string; onPick: (c: string) => void }) {
   const t = useTheme();
+  const edge = swatchEdge(t.card, "rgba(0,0,0,0.18)"); // 어두운 모드에서도 검정 단추가 보이게
   return (
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }} accessibilityRole="radiogroup" accessibilityLabel="색">
       {colors.map((c) => (
@@ -236,7 +237,7 @@ function Colors({ colors, value, onPick }: { colors: string[]; value: string; on
           accessibilityState={{ selected: c === value }}
           style={{ width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center", borderWidth: c === value ? 2 : 0, borderColor: t.accent }}
         >
-          <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: c, borderWidth: 1, borderColor: "rgba(0,0,0,0.18)" }} />
+          <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: c, borderWidth: 1, borderColor: edge }} />
         </Pressable>
       ))}
     </View>

@@ -5,7 +5,8 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PDFDocument, degrees } from "pdf-lib";
+import fontkit from "@pdf-lib/fontkit";
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream, decodePDFRawStream, degrees } from "pdf-lib";
 import { buildPdf, toUser } from "./exportPdf.ts";
 import { blankNotebook, pdfNotebook, type Stroke } from "./model.ts";
 
@@ -95,6 +96,45 @@ for b in p.get_text("words"): print(round(b[0]), round(b[1]), b[4])`, f], { enco
   assert.match(out, /ABC/);
   const first = out.split("\n").find((l) => l.includes("효소는"))!.split(" ").map(Number);
   assert.ok(Math.abs(first[0] - 100) < 3 && first[1] >= 99 && first[1] < 120, out);
-  // 글꼴은 쓴 글자만 들어가 작다
-  assert.ok(pdf.length < 200_000, `PDF ${pdf.length}바이트`);
+  // 글꼴을 통째로 넣으므로 0.7MB쯤 (쓴 글자만 넣으면 글자 모양이 빠져서 그렇게 하지 않는다)
+  assert.ok(pdf.length < 1_500_000, `PDF ${pdf.length}바이트`);
+});
+
+// 파이썬 없이 확인: 내보낸 PDF 안의 글꼴에서 쓴 글자의 모양이 원래 글꼴과 똑같은지.
+// ('쓴 글자만 넣기'를 켜면 글자 정보는 남는데 눈에 보이는 모양이 빠져서, 글이 대부분 안 보였다)
+test("text boxes keep every glyph shape in the exported PDF", async () => {
+  const { readFileSync } = await import("node:fs");
+  const fontBytes = new Uint8Array(readFileSync(new URL("../../assets/fonts/NanumGothic-Regular.ttf", import.meta.url)));
+  const nb = blankNotebook("글상자", "plain", 1);
+  const p = nb.pages[0];
+  const texts = ["둘째 쪽 글상자만", "내일 시험 범위는 3단원", "Enzyme note 123"];
+  const boxes: Stroke[] = texts.map((text, i) => ({ id: "t" + i, tool: "text", color: "#1F2328", width: 16, pts: [60, 100 + i * 60, 0, 380, 122 + i * 60, 0], text }));
+  const pdf = await buildPdf(nb, { [p.id]: boxes }, null, fontBytes);
+
+  // PDF 안의 글꼴 파일과 쪽 내용(그리기 명령)을 꺼낸다
+  const doc = await PDFDocument.load(pdf);
+  let embedded: Uint8Array | null = null;
+  let content = "";
+  for (const [, obj] of doc.context.enumerateIndirectObjects()) {
+    if (obj instanceof PDFDict && obj.has(PDFName.of("FontFile2"))) {
+      embedded = decodePDFRawStream(doc.context.lookup(obj.get(PDFName.of("FontFile2")), PDFRawStream)).decode();
+    }
+  }
+  const body = doc.getPage(0).node.Contents();
+  const streams = body instanceof PDFArray ? body.asArray().map((r) => doc.context.lookup(r, PDFRawStream)) : [body as PDFRawStream];
+  for (const s of streams) content += Buffer.from(decodePDFRawStream(s).decode()).toString("latin1");
+  assert.ok(embedded, "PDF 안에 글꼴 파일이 있어야 함");
+
+  const orig = fontkit.create(Buffer.from(fontBytes) as never);
+  const got = fontkit.create(Buffer.from(embedded) as never);
+  for (const text of texts) {
+    const glyphs = orig.layout(text).glyphs;
+    // 쪽에는 글자가 '글꼴 안의 글자 번호'로 적힌다 → 그 번호의 모양이 넣은 글꼴에 그대로 있어야 한다
+    const code = glyphs.map((g) => g.id.toString(16).toUpperCase().padStart(4, "0")).join("");
+    assert.ok(content.includes(`<${code}>`), `'${text}'의 글자 번호가 쪽에 그대로 적혀 있어야 함`);
+    for (const g of glyphs) {
+      assert.equal(got.getGlyph(g.id).path.toSVG(), g.path.toSVG(), `'${text}'의 글자 모양(번호 ${g.id})`);
+    }
+    assert.ok([...text].some((c, i) => c !== " " && glyphs[i].path.commands.length > 0), "빈 모양이 아님");
+  }
 });

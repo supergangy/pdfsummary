@@ -1,12 +1,13 @@
 // 노트 목록: PDF 가져오기, 새 노트(속지 고르기), 열기·이름 바꾸기·지우기
 import * as DocumentPicker from "expo-document-picker";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Image, Modal, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { available as pdfAvailable } from "../../modules/pdf-pages";
 import type { Picked } from "../platform/types";
 import { Button, Hint, useTheme } from "../ui";
+import { keepFolder } from "./app-nav";
 import { importPdf } from "./importPdf";
 import { PACK_EXT, packNotebook, unpackNotebook } from "./pack";
 import { readPicked } from "./readPicked";
@@ -25,6 +26,8 @@ type Props = {
   onSummaryTool: () => void; // PDF만 넣어 요약하는 화면 (예전 방식)
   onSettings: () => void;
   refresh: number;
+  folder: string | null; // 지금 보는 폴더 (null = 전체). 노트를 열었다 돌아와도 남게 App이 들고 있다
+  onFolder: (f: string | null) => void;
 };
 
 const PAPERS: { value: Paper; label: string }[] = [
@@ -34,7 +37,7 @@ const PAPERS: { value: Paper; label: string }[] = [
   { value: "plain", label: "무지" },
 ];
 
-export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syncStatus, onSync }: Props) {
+export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syncStatus, onSync, folder, onFolder: setFolder }: Props) {
   const t = useTheme();
   const { width } = useWindowDimensions();
   const [list, setList] = useState<Notebook[] | null>(null);
@@ -43,14 +46,22 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
   const [newOpen, setNewOpen] = useState(false);
   const [actions, setActions] = useState<Notebook | null>(null);
   const [folders, setFolders] = useState<string[]>([]);
-  const [folder, setFolder] = useState<string | null>(null); // 지금 보는 폴더 (null = 전체)
   const [folderDialog, setFolderDialog] = useState(false);
   const [moving, setMoving] = useState<Notebook | null>(null);
+  const folderRef = useRef(folder);
+  folderRef.current = folder;
+  const reloadNo = useRef(0);
 
   const reload = useCallback(() => {
+    const no = ++reloadNo.current;
     store.list().then(setList).catch((e) => setErr((e as Error).message));
-    store.folders().then(setFolders).catch(() => {});
-  }, [store]);
+    store.folders().then((fs) => {
+      setFolders(fs);
+      // 보던 폴더가 그사이 지워졌으면(다른 기기에서 지운 경우 등) '전체'로.
+      // 가장 최근에 읽은 목록으로만 판단한다 (방금 만든 폴더가 아직 없는 옛 목록 때문에 선택이 풀리지 않게)
+      if (no === reloadNo.current && keepFolder(folderRef.current, fs) !== folderRef.current) setFolder(null);
+    }).catch(() => {});
+  }, [store, setFolder]);
   useEffect(reload, [reload, refresh]);
   // 다른 기기에서 노트가 바뀌면 목록도 바로
   useEffect(() => {

@@ -1,5 +1,6 @@
 package expo.modules.pdfpages
 
+import android.util.Log
 import com.google.mlkit.vision.text.Text
 import org.json.JSONArray
 
@@ -8,6 +9,8 @@ import org.json.JSONArray
 internal object OcrText {
   fun json(text: Text, scale: Double): String {
     val out = JSONArray()
+    // 글자 내용은 기록하지 않는다 (교재 글). 개수만
+    Log.d("PdfPages", "ocr: blocks=${text.textBlocks.size} lines=${text.textBlocks.sumOf { it.lines.size }}")
     for (block in text.textBlocks) {
       for (line in block.lines) {
         val els = line.elements.filter { it.boundingBox != null }.sortedBy { it.boundingBox!!.left }

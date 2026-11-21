@@ -34,6 +34,51 @@ test("pen types draw differently; dashed/dotted pens and highlighters are drawn 
   assert.ok(width(across) > width(along) - 1);
 });
 
+test("brush dots and short strokes are visible (outline has area)", () => {
+  // 윤곽 다각형의 넓이 (0에 가까우면 화면·PDF에 아무것도 안 보인다)
+  const area = (o: number[][]) => {
+    let a = 0;
+    for (let i = 0; i < o.length; i++) {
+      const p = o[i], q = o[(i + 1) % o.length];
+      a += p[0] * q[1] - q[0] * p[1];
+    }
+    return Math.abs(a) / 2;
+  };
+  // 길이 len인 가로 획 (len 0 = 점). pressure 0 = 필압 없는 손가락·마우스
+  const brush = (width: number, len: number, pressure: number): Stroke => {
+    const pts: number[] = [];
+    const k = Math.max(1, Math.round(len / 1.5));
+    if (!len) pts.push(100, 100, pressure);
+    else for (let i = 0; i <= k; i++) pts.push(100 + (len * i) / k, 100, pressure);
+    return { id: "b", tool: "pen", color: "#000000", width, pts, brush: "brush" };
+  };
+  for (const width of [2, 3.2]) {
+    for (const len of [0, 2, 4]) {
+      for (const pressure of [0, 0.3, 0.7]) {
+        const a = area(penOutline(brush(width, len, pressure)));
+        assert.ok(a > 1, `붓 굵기 ${width}, 길이 ${len}pt, 필압 ${pressure}: 넓이 ${a.toFixed(2)}`);
+      }
+    }
+  }
+  // 굵기·길이를 촘촘히 바꿔도 안 보이는 구간이 없다 (가는 붓의 5~7pt 획 포함)
+  for (const width of [0.6, 1.2, 2, 3.2, 5, 8]) {
+    for (let len = 0; len <= 40; len += 0.5) {
+      const a = area(penOutline(brush(width, len, 0.5)));
+      assert.ok(a > width * width * 0.5, `붓 굵기 ${width}, 길이 ${len}pt: 넓이 ${a.toFixed(2)}`);
+    }
+  }
+  // 화면·PDF·요약이 함께 쓰는 strokeDraw도 같은 윤곽을 낸다
+  const dot = strokeDraw(brush(2, 0, 0.5))!;
+  assert.ok(dot.kind === "fill" && dot.d.length > 20);
+  // 긴 획은 예전처럼 양 끝이 가늘다 (끝 쪽 윤곽이 가운데보다 훨씬 좁다)
+  const long = penOutline(brush(2, 80, 0.5));
+  const span = (x0: number, x1: number) => {
+    const ys = long.filter((p) => p[0] >= x0 && p[0] <= x1).map((p) => p[1]);
+    return ys.length ? Math.max(...ys) - Math.min(...ys) : 0;
+  };
+  assert.ok(span(100, 103) < span(130, 150) * 0.6, "긴 붓 획의 시작은 가늘다");
+});
+
 test("area eraser cuts a stroke where it rubs and keeps both sides", () => {
   const s = line("s", 0, 100);
   const pieces = eraseFrom(s, 50, 40, 50, 60, 4, id)!;

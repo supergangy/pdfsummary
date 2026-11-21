@@ -20,16 +20,23 @@ export function penOutline(s: Stroke, last = true): number[][] {
       return getStroke(pts, { ...base, size: s.width * 1.4, thinning: hasPressure ? 0.12 : 0, simulatePressure: false });
     case "pencil":
       return getStroke(pts, { ...base, size: s.width * 1.1, thinning: hasPressure ? 0.3 : 0.1, simulatePressure: !hasPressure });
-    case "brush":
+    case "brush": {
+      // 끝을 가늘게 빼는 길이(taper)는 획 길이에 맞춘다. taper가 조금이라도 있으면 둥근 끝이 안 그려져서
+      // 점·아주 짧은 획(ㅏ의 곁줄, 마침표)은 윤곽 넓이가 0이 된다 → 그런 획은 taper 없이 둥근 점·짧은 막대로.
+      let len = 0;
+      for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+      // 짧은 획 = 붓 크기(굵기×2.4)의 1.5배보다 짧은 것. 가는 붓(굵기 2 이하)은 8pt까지도 taper가 있으면 안 보여서 같이 넣는다
+      const short = len < Math.max(s.width * 3.6, 8);
       return getStroke(pts, {
         ...base,
         size: s.width * 2.4,
         thinning: hasPressure ? 0.85 : 0.6,
         smoothing: 0.6,
         simulatePressure: !hasPressure,
-        start: { taper: s.width * 5 },
-        end: { taper: s.width * 7 },
+        start: { taper: short ? 0 : Math.min(s.width * 5, len * 0.25) },
+        end: { taper: short ? 0 : Math.min(s.width * 7, len * 0.35) },
       });
+    }
     default: // 만년필 (예전 노트도 이것)
       return getStroke(pts, { ...base, size: s.width * 1.6, thinning: hasPressure ? 0.55 : 0.2, simulatePressure: !hasPressure });
   }

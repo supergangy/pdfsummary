@@ -1,7 +1,7 @@
 // 노트 데이터·획 계산·되돌리기 시험 (기기 없이 Node로)
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { blankNotebook, insertPage, movePage, parseNotebook, parseStrokes, pdfNotebook, removePage, type Stroke } from "./model.ts";
+import { blankNotebook, insertPage, makeTextBox, movePage, parseNotebook, parseStrokes, pdfNotebook, removePage, type Stroke } from "./model.ts";
 import { bounds, clampView, fitWidth, hitAlong, hits, penOutline, polylineSvg, straighten, strokeSvg, thin, toPage } from "./geometry.ts";
 import { History, removal } from "./history.ts";
 
@@ -34,6 +34,34 @@ test("parse tolerates broken saved data", () => {
   assert.equal(nb?.pages[0].pdf, 2);
   const ss = parseStrokes([S("a", [1, 2, 0.5]), { id: "b", tool: "pen", color: "#000", width: 1, pts: [1, 2] }, null]);
   assert.deepEqual(ss.map((s) => s.id), ["a"]);
+});
+
+test("text box fits its text and stays inside the page", () => {
+  const W = 595.28;
+  // 짧은 글: 상자가 글만큼만 (예전에는 폭 320 → 옆의 필기를 지우다 같이 지워졌다)
+  const memo = makeTextBox("m", 60, 100, "메모", 16, "#000000", W);
+  const mw = memo.pts[3] - memo.pts[0];
+  assert.equal(memo.pts[0], 60);
+  assert.ok(mw >= 32 && mw <= 60, `'메모' 상자 폭 ${mw}`);
+  assert.ok(Math.abs(memo.pts[4] - memo.pts[1] - 16 * 1.4) < 1e-9, "한 줄 높이");
+  assert.ok(!hits(memo, 200, 110, 6), "글에서 떨어진 곳을 지워도 글상자는 안 닿음");
+  assert.ok(hits(memo, 75, 110, 6));
+  // 여러 줄: 가장 긴 줄에 맞춤
+  const two = makeTextBox("t", 60, 100, "가\n가나다라마바사", 16, "#000000", W);
+  assert.ok(two.pts[3] - two.pts[0] >= 7 * 16 && two.pts[3] - two.pts[0] < 320);
+  assert.ok(Math.abs(two.pts[4] - two.pts[1] - 2 * 16 * 1.4) < 1e-9, "두 줄 높이");
+  // 긴 글: 많아야 320, 줄이 바뀜
+  const long = makeTextBox("l", 60, 100, "가".repeat(60), 16, "#000000", W);
+  assert.equal(long.pts[3] - long.pts[0], 320);
+  assert.ok(long.pts[4] - long.pts[1] > 16 * 1.4 * 2);
+  // 쪽 오른쪽 끝에서: 왼쪽으로 당겨 쪽 안에 (예전에는 x 570~650으로 쪽 밖)
+  const edge = makeTextBox("e", 570, 100, "오른쪽 끝에 쓴 조금 긴 메모입니다", 16, "#000000", W);
+  assert.ok(edge.pts[0] >= 0 && edge.pts[3] <= W - 18 + 1e-9, `x ${edge.pts[0]}~${edge.pts[3]}`);
+  assert.ok(edge.pts[3] - edge.pts[0] >= 80);
+  const edgeShort = makeTextBox("s", 590, 100, "메모", 16, "#000000", W);
+  assert.ok(edgeShort.pts[3] <= W - 18 + 1e-9 && edgeShort.pts[3] - edgeShort.pts[0] < 80);
+  // 저장 모양은 그대로 (글상자 = 두 모서리 6개 값)
+  assert.equal(parseStrokes([memo, edge]).length, 2);
 });
 
 test("pen outline and svg paths", () => {

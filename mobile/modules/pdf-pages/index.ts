@@ -1,6 +1,8 @@
 // PDF 쪽 크기 읽기·쪽 그림 만들기 (기기: 네이티브 모듈)
 import { requireOptionalNativeModule } from "expo";
 
+import { repairWithTextLayer } from "../../src/notes/textLayer";
+
 export type PageSize = { w: number; h: number };
 
 /** 글자 하나와 그 상자 (화면에 보이는 쪽 좌표, pt) */
@@ -10,6 +12,7 @@ type Native = {
   infoAsync(uri: string): Promise<string>;
   textAsync(uri: string, index: number): Promise<string | null>;
   ocrAsync?(uri: string, index: number, widthPx: number): Promise<string>;
+  plainTextAsync?(uri: string, index: number): Promise<string | null>; // 안드로이드: 쪽의 글만 (상자 없이)
   renderAsync(uri: string, index: number, widthPx: number, outPath: string): Promise<string>;
 };
 
@@ -31,7 +34,8 @@ export async function renderPage(uri: string, index: number, widthPx: number, ou
 const hasText = (cs: PdfChar[] | null) => !!cs && cs.some((c) => c[0].trim());
 const cache = new Map<string, Promise<PdfChar[] | null>>();
 
-/** 쪽의 글자들. PDF 글자 층을 먼저 쓰고, 없으면(스캔본·안드로이드 14 이하) 글자 인식(OCR)으로 읽는다.
+/** 쪽의 글자들. PDF 글자 층을 먼저 쓰고, 없으면(스캔본·안드로이드) 글자 인식(OCR)으로 읽는다.
+ *  안드로이드는 글자 있는 PDF도 글자 상자를 못 얻어 글자 인식으로 자리를 잡는다 → 글자는 PDF 글자 층 것으로 바로잡는다 (①→0 같은 오독).
  *  둘 다 안 되면 null. 같은 쪽은 한 번만 읽는다 (글자 인식은 쪽마다 1초쯤 걸림). */
 export function pageText(uri: string, index: number): Promise<PdfChar[] | null> {
   if (!N) return Promise.resolve(null);
@@ -49,7 +53,14 @@ export function pageText(uri: string, index: number): Promise<PdfChar[] | null> 
       if (hasText(cs) || !N.ocrAsync) return cs;
       try {
         const o = JSON.parse(await N.ocrAsync(uri, index, 2200)) as PdfChar[];
-        return hasText(o) ? o : cs;
+        if (!hasText(o)) return cs;
+        let layer = "";
+        try {
+          layer = (await N.plainTextAsync?.(uri, index)) ?? "";
+        } catch {
+          layer = "";
+        }
+        return layer.trim() ? repairWithTextLayer(o, layer) : o;
       } catch {
         return cs;
       }

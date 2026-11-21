@@ -1,10 +1,11 @@
 // 필기 화면: 도구 모음 + 쪽 그리기 + 자동 저장
 import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from "react";
-import { ActivityIndicator, Alert, Modal, PixelRatio, Platform, Pressable, ScrollView, Text, TextInput, View, type HostInstance } from "react-native";
+import { ActivityIndicator, Alert, AppState, BackHandler, Modal, PixelRatio, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type HostInstance } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { pageText } from "../../modules/pdf-pages";
 import { useTheme } from "../ui";
+import { clampPage, isHighlighterTap, justAfter, otherPage, pageBg, swatchEdge, type BgCache } from "./editor-logic";
 import { bounds, eraseFrom, fitHighlight, hitAlong, straighten, thin, type CharBox } from "./geometry";
 import { History, removal, type Op } from "./history";
 import {
@@ -25,21 +26,24 @@ type Props = {
   id: string;
   onClose: () => void;
   onExport: (nb: Notebook, ink: Ink) => Promise<void>;
-  onSummarize: (nb: Notebook, ink: Ink) => void; // 서버로 자세히
-  onQuick: (nb: Notebook, ink: Ink) => void; // 기기에서 바로
+  onSummarize: (nb: Notebook, ink: Ink, page: number) => void; // 서버로 자세히 (page: 보던 쪽 번호, 돌아올 때 쓴다)
+  onQuick: (nb: Notebook, ink: Ink, page: number) => void; // 기기에서 바로
+  startPage?: number; // 처음 열 쪽 번호 (0부터). 요약을 보고 돌아올 때 보던 쪽
 };
 
-export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: Props) {
+export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, startPage }: Props) {
   const t = useTheme();
+  const win = useWindowDimensions();
   const [nb, setNb] = useState<Notebook | null>(null);
   const [ink, setInk] = useState<Ink>({});
   const [pdfUri, setPdfUri] = useState<string | null>(null);
-  const [pi, setPi] = useState(0);
+  const [pi, setPi] = useState(startPage ?? 0);
   const [prefs, setPrefs] = useState<Prefs | null>(null);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [zoom, setZoom] = useState<ZoomCmd>({ kind: "fit", n: 0 });
-  const [bg, setBg] = useState<Record<number, { uri: string; w: number }>>({});
+  const [bg, setBg] = useState<BgCache>({}); // 쪽 id → 바탕 그림
   const [menu, setMenu] = useState(false);
+  const menuClosedAt = useRef(0); // ⋯ 메뉴가 닫힌 때
   const [panel, setPanel] = useState(false); // 도구 설정 창
   const [panelAt, setPanelAt] = useState<{ top: number; left: number } | null>(null); // 설정 창 자리 (도구 모음 바로 밑)
   const barRef = useRef<HostInstance>(null); // 도구 모음
@@ -73,6 +77,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
       const [k, u, p] = await Promise.all([store.loadInk(n), n.hasPdf ? store.pdfUri(n.id) : Promise.resolve(null), loadPrefs()]);
       if (!alive) return;
       setNb(n);
+      setPi((i) => clampPage(i, n.pages.length)); // 그 사이 쪽이 줄었으면 마지막 쪽
       setInk(k);
       setPdfUri(u);
       setPrefs(p);
@@ -138,10 +143,20 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
     if (pageId) dirty.current.add(pageId);
     else metaDirty.current = true;
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => void flush(), 700);
+    // 획이 끝나면 곧 저장 (오래 미루면 그 사이 앱·창이 닫혔을 때 마지막 획이 사라진다).
+    // 너무 바로 하면 이어 쓰는 획마다 쪽 전체를 다시 적게 되므로 조금은 기다린다. 앱이 뒤로 갈 때는 아래에서 바로 저장한다
+    timer.current = setTimeout(() => void flush(), 350);
   }, [flush]);
 
   useEffect(() => () => void flush(), [flush]);
+
+  // 앱이 뒤로 가면(홈 단추·다른 앱으로) 기다리지 않고 바로 저장
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (s) => {
+      if (s === "background" || s === "inactive") void flush();
+    });
+    return () => sub.remove();
+  }, [flush]);
 
   const close = async () => {
     await flush();
@@ -155,10 +170,12 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
     const n = nbRef.current;
     const pg = n?.pages[index];
     if (!n || !pdfUri || !pg || pg.pdf === undefined) return;
-    const have = bg[index]?.w ?? 0;
+    // 쪽 번호가 아니라 쪽 id로 기억한다 (쪽을 끼우거나 지워도 그림이 다른 쪽으로 밀리지 않게)
+    const key = pg.id;
+    const have = bg[key]?.w ?? 0;
     if (have >= px * 0.9) return;
     pageImage(n.id, pdfUri, pg.pdf, px)
-      .then((uri) => setBg((b) => ((b[index]?.w ?? 0) >= px ? b : { ...b, [index]: { uri, w: px } })))
+      .then((uri) => setBg((b) => ((b[key]?.w ?? 0) >= px ? b : { ...b, [key]: { uri, w: px } })))
       .catch(() => setToast("이 쪽의 PDF를 그리지 못했어요."));
   }, [pdfUri, bg]);
 
@@ -171,7 +188,9 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pi, page?.id, pdfUri]);
 
+  const viewPx = useRef(0); // 쪽이 화면에서 차지하는 폭 (펜 견본을 같은 배율로 보여 주려고)
   const onViewWidth = useCallback((pagePx: number) => {
+    viewPx.current = pagePx;
     const px = Math.min(4096, Math.ceil(pagePx * PixelRatio.get() / 256) * 256);
     wantPx.current = px;
     loadBg(pi, px);
@@ -191,10 +210,22 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
     setTimeout(() => setToast((x) => (x === s ? "" : x)), 2600);
   };
 
+  // ⋯ 메뉴가 닫힌 때를 적어 둔다 (메뉴 항목을 빠르게 두 번 누르면 둘째 누름이 밑의 종이에 닿는다)
+  useEffect(() => {
+    if (!menu) return; // 열렸다가 닫힐 때만 (노트를 막 열었을 때는 아님)
+    return () => {
+      menuClosedAt.current = Date.now();
+    };
+  }, [menu]);
+  /** 저장하지 않을 획: 화면에 남은 '방금 그은 선'만 지운다 (PageCanvas는 strokes가 바뀔 때 지운다) */
+  const dropLive = (pageId: string) => setInk((k) => ({ ...k, [pageId]: [...(k[pageId] ?? [])] }));
+
   const onStroke = useCallback((pts: number[], stylus: boolean) => {
     const n = nbRef.current;
     const p = prefs;
     if (!n || !p || !page) return;
+    // 메뉴가 닫힌 바로 뒤에 끝난 획(둘째 누름이 찍은 점)과, 형광펜으로 톡 누르기만 한 안 보이는 획은 남기지 않는다
+    if (justAfter(Date.now(), menuClosedAt.current) || (p.tool === "highlighter" && isHighlighterTap(pts))) return dropLive(page.id);
     if (stylus && p.fingerDraw && !p.stylusSeen) {
       // 펜을 처음 쓰면: 손가락은 화면 옮기기로 (손바닥이 닿아도 써지지 않게)
       setP({ fingerDraw: false, stylusSeen: true });
@@ -392,10 +423,12 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
   useEffect(() => {
     if (prefs?.tool !== "lasso") setSelection(null);
   }, [prefs?.tool, pi]);
+  // 다른 쪽으로 넘어가면 올가미를 든 채여도 고른 것을 푼다 (빈 선택 상자가 다른 쪽에 남지 않게)
+  useEffect(() => setSelection(null), [page?.id]);
 
   // ── 글상자 ──────────────────────────────────────────────
   const onTextTap = useCallback((x: number, y: number) => {
-    if (!page) return;
+    if (!page || justAfter(Date.now(), menuClosedAt.current)) return; // 메뉴를 두 번 누른 둘째 누름은 넘긴다
     const hit = [...(inkRef.current[page.id] ?? [])].reverse().find((s) => s.tool === "text" && hitAlong([s], x, y, x, y, 2).length);
     setTextEdit(hit ? { x: hit.pts[0], y: hit.pts[1], stroke: hit } : { x, y });
   }, [page]);
@@ -421,11 +454,19 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
     bump((v) => v + 1);
   };
 
+  // 되돌리기 기록은 노트 전체에 하나다. 바뀐 필기가 다른 쪽에 있으면 그 쪽으로 넘겨서 보여 준다 (안 보이는 쪽이 말없이 바뀌지 않게)
+  const showChanged = (pageId: string | undefined, what: string) => {
+    const i = otherPage(nbRef.current?.pages ?? [], page?.id, pageId);
+    if (i < 0) return;
+    setPi(i);
+    say(`${what} 필기가 ${i + 1}쪽에 있어서 그 쪽으로 넘겼어요.`);
+  };
   const undo = () => {
     setSelection(null);
     const r = hist.current.undo(inkRef.current);
     setInk(r.ink);
     if (r.page) touch(r.page);
+    showChanged(r.page, "되돌린");
     bump((x) => x + 1);
   };
   const redo = () => {
@@ -433,6 +474,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
     const r = hist.current.redo(inkRef.current);
     setInk(r.ink);
     if (r.page) touch(r.page);
+    showChanged(r.page, "다시 한");
     bump((x) => x + 1);
   };
 
@@ -503,14 +545,34 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
     if (!nb) return;
     setMenu(false);
     await flush();
-    onSummarize(nbRef.current ?? nb, inkRef.current);
+    onSummarize(nbRef.current ?? nb, inkRef.current, piRef.current);
   };
   const quick = async () => {
     if (!nb) return;
     setMenu(false);
     await flush();
-    onQuick(nbRef.current ?? nb, inkRef.current);
+    onQuick(nbRef.current ?? nb, inkRef.current, piRef.current);
   };
+
+  // 안드로이드 '뒤로': 열린 창이나 고른 것이 있으면 그것부터 닫고, 없으면 저장한 뒤 노트 목록으로 (앱 밖으로 나가지 않게)
+  const onBack = useRef(() => {});
+  onBack.current = () => {
+    if (menu) setMenu(false);
+    else if (panel) setPanel(false);
+    else if (grid) setGrid(false);
+    else if (textEdit) setTextEdit(null);
+    else if (renaming !== null) setRenaming(null);
+    else if (selection) setSelection(null);
+    else void close();
+  };
+  useEffect(() => {
+    if (Platform.OS !== "android") return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      onBack.current();
+      return true;
+    });
+    return () => sub.remove();
+  }, []);
 
   piRef.current = pi;
   const strokes = useMemo(() => (page ? ink[page.id] ?? [] : []), [ink, page]);
@@ -536,6 +598,15 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
   const widths = tool === "highlighter" ? HIGHLIGHT_WIDTHS : PEN_WIDTHS;
   const color = tool === "highlighter" ? prefs.hlColor : prefs.penColor;
   const width = tool === "highlighter" ? prefs.hlWidth : prefs.penWidth;
+  const edge = swatchEdge(t.card); // 색 단추 테두리 (어두운 모드에서도 검정 단추가 보이게)
+  const narrow = win.width < 480; // 세로로 든 폰: 윗줄이 좁아 노트 이름 자리가 없다 → 되돌리기 단추를 도구 줄로 내린다
+  const undoRedo = (
+    <>
+      <Btn label="↶" onPress={undo} disabled={!hist.current.canUndo} label2="되돌리기" />
+      <Btn label="↷" onPress={redo} disabled={!hist.current.canRedo} label2="다시 하기" />
+      <Sep />
+    </>
+  );
   /** 도구 설정 창 열기 — 도구 모음 바로 밑, 지금 도구 단추의 왼쪽 끝에 맞춰서 */
   const openPanel = () => {
     const bar = barRef.current;
@@ -564,9 +635,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
         <Pressable onPress={() => setRenaming(nb.title)} accessibilityRole="button" accessibilityLabel="노트 이름 바꾸기" style={{ flex: 1, paddingHorizontal: 6 }}>
           <Text numberOfLines={1} style={{ color: t.ink, fontWeight: "700", fontSize: 16 }}>{nb.title}</Text>
         </Pressable>
-        <Btn label="↶" onPress={undo} disabled={!hist.current.canUndo} label2="되돌리기" />
-        <Btn label="↷" onPress={redo} disabled={!hist.current.canRedo} label2="다시 하기" />
-        <Sep />
+        {!narrow && undoRedo}
         <Btn label="◀" onPress={() => go(pi - 1)} disabled={pi === 0} label2="이전 쪽" />
         <Pressable onPress={() => setGrid(true)} accessibilityRole="button" accessibilityLabel="쪽 모아보기" style={{ paddingHorizontal: 6, paddingVertical: 6, borderRadius: 8, backgroundColor: t.soft }}>
           <Text style={{ color: t.ink, minWidth: 52, textAlign: "center" }}>{pi + 1} / {nb.pages.length}</Text>
@@ -580,6 +649,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
       {/* 아랫줄: 도구 (좁으면 옆으로 밀어서) */}
       <View ref={barRef} collapsable={false} style={{ borderBottomWidth: 1, borderColor: t.line, backgroundColor: t.card }}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: "center", paddingHorizontal: 8, paddingVertical: 5, gap: 4 }} keyboardShouldPersistTaps="handled">
+          {narrow && undoRedo}
           <ToolBtn ref={toolRef("pen")} label={`✒️ ${PENS.find((x) => x.id === prefs.penBrush)?.label ?? "펜"}`} on={tool === "pen"} onPress={() => pick("pen")} hint="한 번 더 누르면 펜 설정" />
           <ToolBtn ref={toolRef("highlighter")} label="🖍 형광펜" on={tool === "highlighter"} onPress={() => pick("highlighter")} hint="한 번 더 누르면 형광펜 설정" />
           <ToolBtn ref={toolRef("eraser")} label={prefs.eraserMode === "area" ? "⌫ 영역 지우개" : "⌫ 지우개"} on={tool === "eraser"} onPress={() => pick("eraser")} hint="한 번 더 누르면 지우개 설정" />
@@ -597,7 +667,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
                   accessibilityState={{ selected: c === prefs.penColor }}
                   style={{ width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", borderWidth: c === prefs.penColor ? 2 : 0, borderColor: t.accent }}
                 >
-                  <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: c }} />
+                  <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: c, borderWidth: 1, borderColor: edge }} />
                 </Pressable>
               ))}
               <Text style={{ color: t.muted, marginLeft: 6 }}>쪽을 누르면 글상자, 글상자를 누르면 고치기</Text>
@@ -616,7 +686,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
                   accessibilityState={{ selected: c === color }}
                   style={{ width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", borderWidth: c === color ? 2 : 0, borderColor: t.accent }}
                 >
-                  <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: c, borderWidth: 1, borderColor: "rgba(0,0,0,0.15)" }} />
+                  <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: c, borderWidth: 1, borderColor: edge }} />
                 </Pressable>
               ))}
               <Sep />
@@ -656,7 +726,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
 
       <PageCanvas
         page={page}
-        background={bg[pi]?.uri ?? null}
+        background={pageBg(bg, page)}
         strokes={strokes}
         hidden={hidden}
         tool={tool}
@@ -681,7 +751,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
         <View style={{ position: "absolute", bottom: 24, alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: t.card, borderRadius: 24, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: t.line, shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 8, elevation: 4 }}>
           <Text style={{ color: t.muted, marginRight: 4 }}>{selection.ids.size}개 고름 · 끌어서 옮기기</Text>
           {PEN_COLORS.slice(0, 5).map((c) => (
-            <Pressable key={c} onPress={() => replaceSelected((s) => ({ ...s, color: c }))} accessibilityRole="button" accessibilityLabel={`고른 것 색 ${c}`} style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: c, borderWidth: 1, borderColor: "rgba(0,0,0,0.15)" }} />
+            <Pressable key={c} onPress={() => replaceSelected((s) => ({ ...s, color: c }))} accessibilityRole="button" accessibilityLabel={`고른 것 색 ${c}`} style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: c, borderWidth: 1, borderColor: edge }} />
           ))}
           <Btn label="🗑" onPress={deleteSelected} label2="고른 것 지우기" />
           <Btn label="✕" onPress={() => setSelection(null)} label2="고르기 끝내기" />
@@ -704,21 +774,24 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick }: P
 
       <Modal visible={menu} transparent animationType="fade" onRequestClose={() => setMenu(false)}>
         <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)", alignItems: "flex-end" }} onPress={() => setMenu(false)}>
-          <Pressable style={{ marginTop: 60, marginRight: 12, backgroundColor: t.card, borderRadius: 12, paddingVertical: 6, minWidth: 240, borderWidth: 1, borderColor: t.line }} onPress={() => {}}>
-            <MenuItem label="⚡ 바로 요약 (기기에서, 서버 없이)" onPress={quick} />
-            <MenuItem label="✨ 서버로 자세히 요약 (요약집·AI)" onPress={summarize} />
-            <MenuItem label="▦ 쪽 모아보기" onPress={() => { setMenu(false); setGrid(true); }} />
-            <MenuItem label="📄 PDF로 내보내기 (필기 포함)" onPress={exportPdf} />
-            <MenuItem label="＋ 뒤에 빈 쪽 (같은 속지)" onPress={() => addPage()} />
-            <MenuItem label="＋ 뒤에 줄 쪽" onPress={() => addPage("lined")} />
-            <MenuItem label="＋ 뒤에 모눈 쪽" onPress={() => addPage("grid")} />
-            <MenuItem label="✎ 노트 이름 바꾸기" onPress={() => { setMenu(false); setRenaming(nb.title); }} />
-            <MenuItem label="🗑 이 쪽 지우기" onPress={deletePage} disabled={nb.pages.length <= 1} danger />
+          {/* 화면이 낮으면(가로로 든 폰·나눠 쓰기) 메뉴 안에서 밀어서 끝까지 볼 수 있게 */}
+          <Pressable style={{ marginTop: 60, marginRight: 12, maxHeight: Math.max(120, win.height - 72), backgroundColor: t.card, borderRadius: 12, paddingVertical: 6, minWidth: 240, borderWidth: 1, borderColor: t.line }} onPress={() => {}}>
+            <ScrollView keyboardShouldPersistTaps="handled">
+              <MenuItem label="⚡ 바로 요약 (기기에서, 서버 없이)" onPress={quick} />
+              <MenuItem label="✨ 서버로 자세히 요약 (요약집·AI)" onPress={summarize} />
+              <MenuItem label="▦ 쪽 모아보기" onPress={() => { setMenu(false); setGrid(true); }} />
+              <MenuItem label="📄 PDF로 내보내기 (필기 포함)" onPress={exportPdf} />
+              <MenuItem label="＋ 뒤에 빈 쪽 (같은 속지)" onPress={() => addPage()} />
+              <MenuItem label="＋ 뒤에 줄 쪽" onPress={() => addPage("lined")} />
+              <MenuItem label="＋ 뒤에 모눈 쪽" onPress={() => addPage("grid")} />
+              <MenuItem label="✎ 노트 이름 바꾸기" onPress={() => { setMenu(false); setRenaming(nb.title); }} />
+              <MenuItem label="🗑 이 쪽 지우기" onPress={deletePage} disabled={nb.pages.length <= 1} danger />
+            </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>
 
-      <ToolPanel open={panel} at={panelAt} prefs={prefs} setP={setP} onClearPage={clearPage} onClose={() => setPanel(false)} />
+      <ToolPanel open={panel} at={panelAt} prefs={prefs} setP={setP} onClearPage={clearPage} onClose={() => setPanel(false)} viewScale={viewPx.current ? viewPx.current / page.w : undefined} />
       <RenameDialog value={renaming} onDone={rename} />
       <TextDialog
         open={!!textEdit}

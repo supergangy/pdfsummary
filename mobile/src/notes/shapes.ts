@@ -12,6 +12,28 @@ export function inside(x: number, y: number, poly: number[]): boolean {
   return hit;
 }
 
+/**
+ * 올가미로 셀 점들 (x, y, x, y, …). 저장된 점만 세면 곧은 형광펜(양 끝 2점)과 글상자(두 모서리)는
+ * 가운데를 둘러싸도 안에 든 점이 하나도 없으므로, 점 사이를 촘촘히 채워서 센다.
+ */
+function lassoPoints(s: Stroke, step = 3): number[] {
+  const p = s.pts, out: number[] = [];
+  if (p.length < 3) return out;
+  if (s.tool === "text" && p.length === 6) {
+    // 글상자는 상자 안을 고르게 채운 점으로
+    const nx = Math.max(1, Math.min(40, Math.ceil((p[3] - p[0]) / 4))), ny = Math.max(1, Math.min(12, Math.ceil((p[4] - p[1]) / 4)));
+    for (let i = 0; i <= nx; i++) for (let j = 0; j <= ny; j++) out.push(p[0] + ((p[3] - p[0]) * i) / nx, p[1] + ((p[4] - p[1]) * j) / ny);
+    return out;
+  }
+  out.push(p[0], p[1]);
+  for (let i = 3; i < p.length; i += 3) {
+    const ax = p[i - 3], ay = p[i - 2], bx = p[i], by = p[i + 1];
+    const n = Math.max(1, Math.ceil(Math.hypot(bx - ax, by - ay) / step));
+    for (let k = 1; k <= n; k++) out.push(ax + ((bx - ax) * k) / n, ay + ((by - ay) * k) / n);
+  }
+  return out;
+}
+
 /** 올가미(닫힌 선) 안에 점의 절반 이상이 든 획들 */
 /** 올가미 안의 획. partial이면 조금이라도 걸친 것도, 아니면 거의 다(90%) 들어온 것만 (예전 기본은 절반) */
 export function lassoSelect(strokes: Stroke[], lasso: number[], partial?: boolean): Set<string> {
@@ -19,11 +41,21 @@ export function lassoSelect(strokes: Stroke[], lasso: number[], partial?: boolea
   for (let i = 0; i < lasso.length; i += 3) poly.push(lasso[i], lasso[i + 1]);
   const out = new Set<string>();
   if (poly.length < 6) return out;
+  // 올가미를 감싸는 네모 밖의 점은 따져 볼 것도 없다 (채운 점이 많아져도 느려지지 않게)
+  let lx0 = Infinity, ly0 = Infinity, lx1 = -Infinity, ly1 = -Infinity;
+  for (let i = 0; i < poly.length; i += 2) {
+    lx0 = Math.min(lx0, poly[i]);
+    lx1 = Math.max(lx1, poly[i]);
+    ly0 = Math.min(ly0, poly[i + 1]);
+    ly1 = Math.max(ly1, poly[i + 1]);
+  }
   for (const s of strokes) {
-    let n = 0, k = 0;
-    for (let i = 0; i < s.pts.length; i += 3) {
-      k++;
-      if (inside(s.pts[i], s.pts[i + 1], poly)) n++;
+    const q = lassoPoints(s);
+    let n = 0;
+    const k = q.length / 2;
+    for (let i = 0; i < q.length; i += 2) {
+      const x = q[i], y = q[i + 1];
+      if (x >= lx0 && x <= lx1 && y >= ly0 && y <= ly1 && inside(x, y, poly)) n++;
     }
     const need = partial === undefined ? 0.5 : partial ? 1e-9 : 0.9;
     if (k && n / k >= need) out.add(s.id);

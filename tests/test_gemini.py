@@ -41,7 +41,7 @@ def test_gemini_answers_and_request_shape():
     out = explain_items("컴퓨터일반", ITEMS, reader=r)
     assert [e["id"] for e in out] == ["a"] and out[0]["table"]["columns"][0] == "구조"
     req = fake.reqs[0]
-    assert req.full_url.endswith(f"/models/{DEFAULT_GEMINI_MODEL}:generateContent")
+    assert req.full_url.endswith(f"/models/{DEFAULT_GEMINI_MODEL.split(',')[0]}:generateContent")
     assert req.get_header("X-goog-api-key") == "g-key"
     assert "g-key" not in req.full_url   # 키는 주소에 넣지 않는다
     b = body(req)
@@ -81,13 +81,13 @@ def test_errors_are_readable():
     from pdfsummary.explain import ExplainError
 
     for code, word in ((401, "키"), (404, "모델"), (429, "한도"), (500, "오류"), (503, "오류")):
-        r = GeminiReader(api_key="g", opener=FakeOpen(code))
+        r = GeminiReader(api_key="g", model="m1", opener=FakeOpen(code))   # 다음 모델 없이
         with pytest.raises(ExplainError, match=word):
             explain_items("책", ITEMS, reader=r)
-    r = GeminiReader(api_key="g", opener=FakeOpen(reply(ANSWER, finish="MAX_TOKENS")))
+    r = GeminiReader(api_key="g", model="m1", opener=FakeOpen(reply(ANSWER, finish="MAX_TOKENS")))
     with pytest.raises(ExplainError, match="잘렸어요"):
         explain_items("책", ITEMS, reader=r)
-    r = GeminiReader(api_key="g", opener=FakeOpen({"candidates": [], "promptFeedback": {"blockReason": "SAFETY"}}))
+    r = GeminiReader(api_key="g", model="m1", opener=FakeOpen({"candidates": [], "promptFeedback": {"blockReason": "SAFETY"}}))
     with pytest.raises(ExplainError, match="SAFETY"):
         explain_items("책", ITEMS, reader=r)
     r = GeminiReader(api_key="")
@@ -116,5 +116,18 @@ def test_key_from_env_or_file_and_backend_choice(tmp_path, monkeypatch):
     assert isinstance(app.ai_reader(), GeminiReader)
     monkeypatch.setenv("GEMINI_API_KEY", "env-key")
     assert gemini_key() == "env-key"
-    monkeypatch.setenv("PDFSUMMARY_GEMINI_MODEL", "gemini-test")
-    assert GeminiReader().model == "gemini-test"
+    monkeypatch.setenv("PDFSUMMARY_GEMINI_MODEL", "gemini-test, gemini-b")
+    assert GeminiReader().models == ["gemini-test", "gemini-b"]
+
+
+def test_busy_model_falls_back_to_the_next_one():
+    fake = FakeOpen(503, reply(ANSWER))
+    r = GeminiReader(api_key="g", model="busy-model,spare-model", opener=fake)
+    assert explain_items("책", ITEMS, reader=r)[0]["id"] == "a"
+    assert "/models/busy-model:" in fake.reqs[0].full_url and "/models/spare-model:" in fake.reqs[1].full_url
+    # 마지막 모델까지 붐비면 오류 글
+    import pytest
+    from pdfsummary.explain import ExplainError
+    r = GeminiReader(api_key="g", model="a,b", opener=FakeOpen(503, 429))
+    with pytest.raises(ExplainError, match="한도"):
+        explain_items("책", ITEMS, reader=r)

@@ -86,3 +86,10 @@ test("page characters become plain text", () => {
   assert.equal(charsToText(cs), "가나\n\n다");
   assert.equal(charsToText(null), "");
 });
+
+test("question and answer labels are not doubled", () => {
+  const sec: StudySection = { title: "S", intro: "", blocks: [{ type: "qa", q: "Q. 스택으로 구현할 수 없는 것은?", a: "정답: ④ 은행 대기열" }], points: [], strategy: "" };
+  const texts = Object.values(layoutStudyNote("t", "s", [sec], new Map()).ink).flat().map((x) => x.text);
+  assert.ok(texts.includes("Q. 스택으로 구현할 수 없는 것은?"));
+  assert.ok(texts.includes("답: ④ 은행 대기열"));
+});

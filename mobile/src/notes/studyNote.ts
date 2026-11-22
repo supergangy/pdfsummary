@@ -101,8 +101,9 @@ function blockOf(tb: TextBoxFn, b: StudyBlock): Block | null {
       return { ss: [panel(x, 0, x + w, h, CALLOUT_BG), bar(ACCENT, x + 1.5, 0, h, 1), t], h };
     }
     case "qa": {
-      const q = tb(x + 12, 10, `Q. ${b.q ?? ""}`, 11, INK, w - 24);
-      const a = tb(x + 12, bottomOf(q) + 6, `답: ${b.a ?? ""}`, 11, BODY, w - 24);
+      // AI가 앞에 "Q."·"정답:"을 이미 붙여 보내면 겹치지 않게 뺀다 ("답: 정답: ④ …")
+      const q = tb(x + 12, 10, `Q. ${(b.q ?? "").replace(/^\s*(Q\.|Q:|문제\s*[:.])\s*/i, "")}`, 11, INK, w - 24);
+      const a = tb(x + 12, bottomOf(q) + 6, `답: ${(b.a ?? "").replace(/^\s*(정답|답|A)\s*[:.：]\s*/i, "")}`, 11, BODY, w - 24);
       const h = bottomOf(a) + 10;
       return { ss: [panel(x, 0, x + w, h, QA_BG), q, a], h };
     }

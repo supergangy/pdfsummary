@@ -1,8 +1,8 @@
 // Google로 계속하기 (웹): Google의 공식 로그인 버튼(Google Identity Services) → ID 토큰 → 서버가 확인
 import { useEffect, useRef, useState } from "react";
-import { Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 
-import { useTheme } from "../../ui";
+import { type, useTheme } from "../../ui";
 
 export type GoogleIds = { web: string; ios?: string };
 export type GoogleButtonProps = {
@@ -43,6 +43,7 @@ export function googleAvailable(ids: GoogleIds | null | undefined): ids is Googl
 
 export function GoogleButton({ ids, onToken, onError, label = "Google로 계속하기" }: GoogleButtonProps) {
   const t = useTheme();
+  const dark = t.dark;
   const box = useRef<unknown>(null); // 웹에서는 View가 곧 DOM 요소
   const cb = useRef({ onToken, onError });
   cb.current = { onToken, onError };
@@ -66,18 +67,24 @@ export function GoogleButton({ ids, onToken, onError, label = "Google로 계속�
           },
         });
         el.innerHTML = "";
-        g.renderButton(el, { type: "standard", theme: "outline", size: "large", text: "continue_with", shape: "pill", locale: "ko", width: 280 });
+        // 밝은 모드는 흰 바탕+테두리, 어두운 모드는 검은 바탕 (Google이 정해 둔 모양 중에서)
+        g.renderButton(el, { type: "standard", theme: dark ? "filled_black" : "outline", size: "large", text: "continue_with", shape: "pill", locale: "ko", width: 280 });
       })
       .catch((e) => !gone && setFailed((e as Error).message));
     return () => {
       gone = true;
     };
-  }, [ids.web]);
+  }, [ids.web, dark]);
 
   return (
     <View accessibilityLabel={label}>
-      <View ref={box as never} testID="google-button" style={{ minHeight: 44, alignSelf: "flex-start" }} />
-      {!!failed && <Text style={{ color: t.bad, fontSize: 13 }}>{failed}</Text>}
+      <View ref={box as never} testID="google-button" style={s.box} />
+      {!!failed && <Text style={[type.caption, s.failed, { color: t.bad }]}>{failed}</Text>}
     </View>
   );
 }
+
+const s = StyleSheet.create({
+  box: { minHeight: 44, alignSelf: "flex-start" },
+  failed: { marginTop: 4 },
+});

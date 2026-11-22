@@ -69,6 +69,14 @@ async function idb(page) {
 
 const strokesOf = (files) => Object.entries(files).filter(([k]) => /\/ink\//.test(k)).reduce((n, [, v]) => n + JSON.parse(v).length, 0);
 
+// E2E_SHOTS=폴더 를 주면 동기화 창의 단계별 화면을 저장한다 (디자인 확인용)
+async function stepShot(page, name) {
+  if (!process.env.E2E_SHOTS) return;
+  fs.mkdirSync(process.env.E2E_SHOTS, { recursive: true });
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: path.join(process.env.E2E_SHOTS, `${name}.png`) });
+}
+
 async function until(fn, ms, what) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
@@ -159,10 +167,13 @@ async function mailCode(to, n, what) {
 
     // A: 동기화 시작 → 코드
     await A.getByLabel("동기화 켜기").click();
+    await stepShot(A, "sync-1-start");
     await A.getByText("계정 없이 코드로").click();
+    await stepShot(A, "sync-2-code-choice");
     await A.getByText("새로 동기화 시작").click();
     const codeEl = A.getByLabel("동기화 코드", { exact: true });
     await codeEl.waitFor({ timeout: 10000 });
+    await stepShot(A, "sync-3-code-on");
     const syncCode = (await codeEl.innerText()).trim();
     if (!/^[A-Z2-7]{5}(-[A-Z2-7]{5}){4}$/.test(syncCode)) fail("동기화 코드 모양이 이상함: " + syncCode);
     await A.getByText("닫기").click();
@@ -211,7 +222,7 @@ async function mailCode(to, n, what) {
 
     // A: PDF 교재 가져오기 → B에 노트와 원본 PDF가
     await A.getByLabel("노트 목록으로").click();
-    const [fc] = await Promise.all([A.waitForEvent("filechooser"), A.getByText("📄 PDF 가져오기").click()]);
+    const [fc] = await Promise.all([A.waitForEvent("filechooser"), A.getByText("PDF 가져오기").click()]);
     await fc.setFiles(book);
     await canvasA.waitFor({ timeout: 15000 });
     await B.getByLabel("노트 목록으로").click();
@@ -230,6 +241,7 @@ async function mailCode(to, n, what) {
     await A.getByLabel("계정 비밀번호").fill(PW);
     await A.getByText("계정 만들고 옮기기").click();
     await A.getByText(/6자리 확인 코드를 보냈어요/).waitFor({ timeout: 10000 });
+    await stepShot(A, "sync-4-signup-code");
     const signupCode = await mailCode(EMAIL, 1, "가입 확인");
     await A.getByLabel("메일로 받은 코드").fill(signupCode === "000000" ? "111111" : "000000");
     await A.getByText("확인하고 계정으로 옮기기").click();
@@ -250,6 +262,7 @@ async function mailCode(to, n, what) {
     await C.getByRole("button", { name: "로그인", exact: true }).click();
     await C.getByLabel("로그인한 계정").waitFor({ timeout: 15000 });
     await C.getByText("(이 기기)").waitFor({ timeout: 5000 });
+    await stepShot(C, "sync-5-account");
     await C.getByText("닫기").click();
     const ms4 = await until(async () => {
       const files = await idb(C);

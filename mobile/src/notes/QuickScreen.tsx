@@ -1,13 +1,13 @@
 // 서버 없이 기기에서 바로 만드는 요약 화면
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Text, View } from "react-native";
+import { ActivityIndicator, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import * as DeviceAi from "../../modules/device-ai";
 import { inkAvailable, inkStatus, prepareInk, recognizeInk } from "../../modules/ink-recognizer";
 import { pageText } from "../../modules/pdf-pages";
 import { ResultView } from "../platform/ResultView";
-import { Bar, Button, Hint, useTheme } from "../ui";
+import { Bar, Button, Hint, type, useTheme } from "../ui";
 import { tooSoon } from "./app-nav";
 import type { Ink, Notebook } from "./model";
 import { overviewPrompt, quickHtml, quickSummary, type QuickSummary, splitInkLines } from "./quick";
@@ -106,30 +106,60 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary }: Props) 
   }
 
   const html = q ? quickHtml(q) : "";
+  // 앱 안에서 볼 때는 앱의 화면 밝기(밝게·어둡게)를 요약에도 맞춘다. 공유하는 파일(html)은 보는 기기 설정을 따른다
+  const shown = html.replace('<html lang="ko">', `<html lang="ko" data-theme="${t.dark ? "dark" : "light"}">`);
   const aiOk = !!ai && ["available", "downloadable", "downloading"].includes(ai.status);
   const hwCount = q?.pages.reduce((n, p) => n + p.items.filter((i) => i.kind === "handwriting").length, 0) ?? 0;
+  const { width } = useWindowDimensions();
+  const wide = width >= 700;
+  const pad = { paddingHorizontal: wide ? 24 : 16 };
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }} edges={["top", "left", "right"]}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, paddingVertical: 8, borderBottomWidth: 1, borderColor: t.line, flexWrap: "wrap" }}>
-        <Button kind="link" label="‹ 노트로" onPress={onBack} />
-        <Text style={{ color: t.ink, fontWeight: "700", fontSize: 16, flex: 1 }} numberOfLines={1}>⚡ {nb.title} · 기기에서 만든 요약</Text>
-        {aiOk && q && !q.overview && <Button label="🤖 기기 AI 개요" onPress={writeOverview} disabled={!!prog} style={{ paddingVertical: 7 }} />}
-        {inkAvailable && ink2 === "downloadable" && hwCount > 0 && (
-          <Button label="✍️ 손글씨 인식 켜기 (약 20MB)" onPress={getInkModel} disabled={!!prog} style={{ paddingVertical: 7 }} />
-        )}
-        <Button label="공유 (HTML)" onPress={() => void shareFile(html, `${nb.title} 요약.html`, "text/html")} disabled={!q} style={{ paddingVertical: 7 }} />
-        <Button label="✨ 서버로 자세히" onPress={serverSummary} style={{ paddingVertical: 7 }} />
+      {/* 맨 위 줄: 왼쪽에 돌아가기와 제목, 오른쪽에 조용한 단추들 (폰에서는 제목을 빼고 요약 안의 큰 제목을 쓴다) */}
+      <View style={[s.bar, pad, { borderColor: t.lineSoft }]}>
+        <View style={[s.lead, wide && s.leadWide]}>
+          <Button kind="link" label="‹ 노트로" onPress={onBack} />
+          {wide && (
+            <>
+              <View style={[s.sep, { backgroundColor: t.line }]} />
+              <Text style={[type.label, s.title, { color: t.ink }]} numberOfLines={1}>
+                {nb.title}
+                <Text style={{ color: t.muted, fontWeight: "500" }}> · 기기에서 만든 요약</Text>
+              </Text>
+            </>
+          )}
+        </View>
+        <View style={s.actions}>
+          {aiOk && q && !q.overview && <Button small label="기기 AI 개요" onPress={writeOverview} disabled={!!prog} />}
+          {inkAvailable && ink2 === "downloadable" && hwCount > 0 && (
+            <Button small label="손글씨 인식 켜기 (약 20MB)" onPress={getInkModel} disabled={!!prog} />
+          )}
+          <Button small label="공유 (HTML)" onPress={() => void shareFile(html, `${nb.title} 요약.html`, "text/html")} disabled={!q} />
+          <Button small label="서버로 자세히" onPress={serverSummary} />
+        </View>
       </View>
       {prog && (
-        <View style={{ padding: 14 }}>
-          <Text style={{ color: t.ink }}>{prog.label}</Text>
+        <View style={[s.strip, pad, { borderColor: t.lineSoft }]}>
+          <Text style={[type.caption, { color: t.sub }]}>{prog.label}</Text>
           <Bar ratio={prog.ratio} />
         </View>
       )}
-      {!!note && <Hint style={{ paddingHorizontal: 14, paddingTop: 8 }}>{note}</Hint>}
-      {!!err && <Hint color={t.bad} style={{ padding: 14 }}>{err}</Hint>}
-      {q ? <ResultView html={html} /> : !err && <ActivityIndicator color={t.accent} style={{ marginTop: 40 }} />}
+      {!!note && <Hint style={[s.msg, pad]}>{note}</Hint>}
+      {!!err && <Hint color={t.bad} style={[s.msg, pad]}>{err}</Hint>}
+      {q ? <ResultView html={shown} /> : !err && <ActivityIndicator color={t.muted} style={{ marginTop: 48 }} />}
     </SafeAreaView>
   );
 }
+
+const s = StyleSheet.create({
+  bar: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 12, minHeight: 60, paddingVertical: 12, borderBottomWidth: 1 },
+  lead: { flexDirection: "row", alignItems: "center", gap: 12, flexGrow: 1 },
+  // 넓은 화면: 제목이 길면 단추를 밀어내지 않고 말줄임 (단추가 많아 좁아지면 단추가 다음 줄로)
+  leadWide: { flexBasis: 0, flexShrink: 1, minWidth: 220 },
+  sep: { width: 1, height: 16 },
+  title: { flexShrink: 1, letterSpacing: -0.2 },
+  actions: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end", gap: 8, flexShrink: 1, maxWidth: "100%" },
+  strip: { paddingVertical: 12, borderBottomWidth: 1 },
+  msg: { paddingTop: 12 },
+});

@@ -14,6 +14,7 @@ import Animated, { cancelAnimation, useAnimatedStyle, useDerivedValue, useShared
 import { scheduleOnRN, scheduleOnUI } from "react-native-worklets";
 
 import { StylusView } from "../../modules/stylus";
+import { useTheme } from "../ui";
 import { penDoubleClick } from "./editor-logic";
 import type { LineDash, Page, Stroke } from "./model";
 import { inkPicture, paperPicture, type PathCache } from "./render";
@@ -46,7 +47,6 @@ type Props = {
   lassoRect: boolean; // 사각형 올가미
   fingerDraw: boolean;
   zoom: ZoomCmd;
-  dark?: boolean;
   onStroke: (pts: number[], stylus: boolean) => void;
   onErase: (phase: 0 | 1 | 2, x: number, y: number, radius: number) => void;
   selection?: Selection;
@@ -59,6 +59,7 @@ type Props = {
 
 export function PageCanvas(props: Props) {
   const { page, background, strokes, hidden, tool, color, width, fingerDraw, zoom } = props;
+  const theme = useTheme();
 
   // ── 보기(확대·이동) ─────────────────────────────────────
   const scale = useSharedValue(1);
@@ -541,9 +542,9 @@ export function PageCanvas(props: Props) {
     <StylusView style={{ flex: 1 }} onButton={onPenButton}>
     <GestureDetector gesture={gesture}>
       <View style={{ flex: 1, overflow: "hidden" }} onLayout={onLayout} testID="page-canvas">
-        <Canvas style={{ flex: 1, backgroundColor: props.dark ? "#2A2C30" : "#E7E4DE" }}>
+        <Canvas style={{ flex: 1, backgroundColor: theme.canvas }}>
           <Group transform={transform}>
-            <Rect x={-0.5} y={-0.5} width={page.w + 1} height={page.h + 1} color="rgba(0,0,0,0.18)" />
+            <Rect x={-0.5} y={-0.5} width={page.w + 1} height={page.h + 1} color={theme.dark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.10)"} />
             <Rect x={0} y={0} width={page.w} height={page.h} color="#FFFFFF" />
             <Group clip={sharpClip}>
               {image ? <Image image={image} x={0} y={0} width={page.w} height={page.h} fit="fill" /> : null}

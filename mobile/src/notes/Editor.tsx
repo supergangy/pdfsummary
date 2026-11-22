@@ -1,10 +1,10 @@
 // 필기 화면: 도구 모음 + 쪽 그리기 + 자동 저장
-import { useCallback, useEffect, useMemo, useRef, useState, type Ref } from "react";
-import { ActivityIndicator, Alert, AppState, BackHandler, Modal, PixelRatio, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View, type HostInstance } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
+import { ActivityIndicator, Alert, AppState, BackHandler, Modal, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View, type HostInstance } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { pageText } from "../../modules/pdf-pages";
-import { useTheme } from "../ui";
+import { Button, floating, radius, styles as ui, type, useTheme, type Theme } from "../ui";
 import { clampPage, isHighlighterTap, justAfter, otherPage, pageBg, penSwap, swatchEdge, type BgCache, type SwapSaved } from "./editor-logic";
 import { bounds, eraseFrom, fitHighlight, hitAlong, straighten, thin, type CharBox } from "./geometry";
 import { History, removal, type Op } from "./history";
@@ -252,7 +252,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     if (stylus && p.fingerDraw && !p.stylusSeen) {
       // 펜을 처음 쓰면: 손가락은 화면 옮기기로 (손바닥이 닿아도 써지지 않게)
       setP({ fingerDraw: false, stylusSeen: true });
-      say("펜이 감지되어 손가락은 화면 옮기기로 바꿨어요. 도구 모음의 ✋ 단추로 바꿀 수 있어요.");
+      say("펜이 감지되어 손가락은 화면 옮기기로 바꿨어요. 도구 모음의 '손가락' 단추로 바꿀 수 있어요.");
     }
     const hl = p.tool === "highlighter";
     let clean = thin(pts, 0.35);
@@ -623,16 +623,16 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
 
   if (loadErr) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: t.bg, padding: 20 }}>
-        <Text style={{ color: t.bad }}>{loadErr}</Text>
-        <Btn label="← 노트 목록" onPress={onClose} />
+      <SafeAreaView style={[sx.center, { backgroundColor: t.bg }]}>
+        <Text style={[type.body, { color: t.bad, textAlign: "center" }]}>{loadErr}</Text>
+        <Button label="‹ 노트 목록" onPress={onClose} />
       </SafeAreaView>
     );
   }
   if (!nb || !prefs || !page) {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: t.bg, alignItems: "center", justifyContent: "center" }}>
-        <ActivityIndicator color={t.accent} />
+      <SafeAreaView style={[sx.center, { backgroundColor: t.bg }]}>
+        <ActivityIndicator color={t.muted} />
       </SafeAreaView>
     );
   }
@@ -644,8 +644,9 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const width = tool === "highlighter" ? prefs.hlWidth : prefs.penWidth;
   const edge = swatchEdge(t.card); // 색 단추 테두리 (어두운 모드에서도 검정 단추가 보이게)
   const narrow = win.width < 480; // 세로로 든 폰: 윗줄이 좁아 노트 이름 자리가 없다 → 되돌리기 단추를 도구 줄로 내린다
+  const pad = win.width >= 700 ? 16 : 8; // 화면 양옆 여백
   const undoRedo = (
-    <View style={{ flexDirection: "row", gap: 4, marginRight: narrow ? 4 : 6 }}>
+    <View style={sx.row}>
       <HistBtn glyph="↶" text="되돌리기" onPress={undo} disabled={!hist.current.canUndo} label="되돌리기" wide={!narrow} />
       <HistBtn glyph="↷" text="다시" onPress={redo} disabled={!hist.current.canRedo} label="다시 하기" wide={!narrow} />
     </View>
@@ -671,99 +672,83 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const pick = (next: ToolName) => (tool === next ? openPanel() : setP({ tool: next }));
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: t.card }} edges={["top", "left", "right"]}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }} edges={["top", "left", "right"]}>
       {/* 윗줄: 노트 이름, 되돌리기, 쪽 넘기기, 요약 (항상 보임) */}
-      <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingTop: 4, gap: 2, backgroundColor: t.card }}>
-        <Btn label="‹ 노트" onPress={close} label2="노트 목록으로" />
-        <Pressable onPress={() => setRenaming(nb.title)} accessibilityRole="button" accessibilityLabel="노트 이름 바꾸기" style={{ flex: 1, paddingHorizontal: 6 }}>
-          <Text numberOfLines={1} style={{ color: t.ink, fontWeight: "700", fontSize: 16 }}>{nb.title}</Text>
+      <View style={[sx.topBar, { paddingHorizontal: pad, gap: narrow ? 2 : 6 }]}>
+        <IconBtn glyph="‹" big onPress={close} label="노트 목록으로" />
+        <Pressable onPress={() => setRenaming(nb.title)} accessibilityRole="button" accessibilityLabel="노트 이름 바꾸기" style={sx.title}>
+          <Text numberOfLines={1} style={[type.heading, { color: t.ink }]}>{nb.title}</Text>
         </Pressable>
         {!narrow && undoRedo}
-        <Btn label="◀" onPress={() => go(pi - 1)} disabled={pi === 0} label2="이전 쪽" />
-        <Pressable onPress={() => setGrid(true)} accessibilityRole="button" accessibilityLabel="쪽 모아보기" style={{ paddingHorizontal: 6, paddingVertical: 6, borderRadius: 8, backgroundColor: t.soft }}>
-          <Text style={{ color: t.ink, minWidth: 52, textAlign: "center" }}>{pi + 1} / {nb.pages.length}</Text>
-        </Pressable>
-        <Btn label="▶" onPress={() => go(pi + 1)} disabled={pi >= nb.pages.length - 1} label2="다음 쪽" />
-        <Btn label="⋯" onPress={() => setMenu(true)} label2="더 보기" />
-        <Pressable onPress={quick} accessibilityRole="button" accessibilityLabel="요약 만들기" style={{ backgroundColor: t.accent, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 7, marginLeft: 4 }}>
-          <Text style={{ color: t.accentInk, fontWeight: "700" }}>요약</Text>
-        </Pressable>
+        {/* 쪽 넘기기는 ‹ 1 / 4 › 한 덩어리로. 가운데 쪽 번호를 누르면 쪽 모아보기 */}
+        <View style={[sx.pageNav, { backgroundColor: t.sunken }]}>
+          <IconBtn compact glyph="‹" onPress={() => go(pi - 1)} disabled={pi === 0} label="이전 쪽" />
+          <Pressable onPress={() => setGrid(true)} accessibilityRole="button" accessibilityLabel="쪽 모아보기" style={sx.pageNo}>
+            <Text style={[type.label, sx.tabular, { color: t.ink }]}>{pi + 1} / {nb.pages.length}</Text>
+          </Pressable>
+          <IconBtn compact glyph="›" onPress={() => go(pi + 1)} disabled={pi >= nb.pages.length - 1} label="다음 쪽" />
+        </View>
+        <IconBtn glyph="⋯" onPress={() => setMenu(true)} label="더 보기" />
+        <Button kind="primary" small label="요약" accessibilityLabel="요약 만들기" onPress={quick} />
       </View>
       {/* 아랫줄: 도구 (좁으면 옆으로 밀어서) */}
-      <View ref={barRef} collapsable={false} style={{ borderBottomWidth: 1, borderColor: t.line, backgroundColor: t.card }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: "center", paddingHorizontal: 8, paddingVertical: 5, gap: 4 }} keyboardShouldPersistTaps="handled">
-          {narrow && undoRedo}
-          <ToolBtn ref={toolRef("pen")} label={`✒️ ${PENS.find((x) => x.id === prefs.penBrush)?.label ?? "펜"}`} on={tool === "pen"} onPress={() => pick("pen")} hint="한 번 더 누르면 펜 설정" />
-          <ToolBtn ref={toolRef("highlighter")} label="🖍 형광펜" on={tool === "highlighter"} onPress={() => pick("highlighter")} hint="한 번 더 누르면 형광펜 설정" />
-          <ToolBtn ref={toolRef("eraser")} label={prefs.eraserMode === "area" ? "⌫ 영역 지우개" : "⌫ 지우개"} on={tool === "eraser"} onPress={() => pick("eraser")} hint="한 번 더 누르면 지우개 설정" />
-          <ToolBtn ref={toolRef("lasso")} label={prefs.lassoMode === "rect" ? "⬚ 올가미" : "➰ 올가미"} on={tool === "lasso"} onPress={() => pick("lasso")} hint="둘러싸서 고르고 옮기기, 한 번 더 누르면 설정" />
-          <ToolBtn label="T 글상자" on={tool === "text"} onPress={() => setP({ tool: "text" })} hint="쪽을 누르면 글을 써 넣어요" />
+      <View ref={barRef} collapsable={false} style={[sx.toolBar, { borderColor: t.lineSoft, backgroundColor: t.bg }]}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[sx.toolRow, { paddingHorizontal: pad }]} keyboardShouldPersistTaps="handled">
+          {narrow && (
+            <>
+              {undoRedo}
+              <Divider />
+            </>
+          )}
+          <ToolBtn ref={toolRef("pen")} label={PENS.find((x) => x.id === prefs.penBrush)?.label ?? "펜"} on={tool === "pen"} onPress={() => pick("pen")} hint="한 번 더 누르면 펜 설정" />
+          <ToolBtn ref={toolRef("highlighter")} label="형광펜" on={tool === "highlighter"} onPress={() => pick("highlighter")} hint="한 번 더 누르면 형광펜 설정" />
+          <ToolBtn ref={toolRef("eraser")} label={prefs.eraserMode === "area" ? "영역 지우개" : "지우개"} on={tool === "eraser"} onPress={() => pick("eraser")} hint="한 번 더 누르면 지우개 설정" />
+          <ToolBtn ref={toolRef("lasso")} label="올가미" on={tool === "lasso"} onPress={() => pick("lasso")} hint="둘러싸서 고르고 옮기기, 한 번 더 누르면 설정" />
+          <ToolBtn label="글상자" on={tool === "text"} onPress={() => setP({ tool: "text" })} hint="쪽을 누르면 글을 써 넣어요" />
           {tool === "text" && (
             <>
-              <Sep />
-              {PEN_COLORS.map((c) => (
-                <Pressable
-                  key={c}
-                  onPress={() => setP({ penColor: c })}
-                  accessibilityRole="button"
-                  accessibilityLabel={`글 색 ${c}`}
-                  accessibilityState={{ selected: c === prefs.penColor }}
-                  style={{ width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", borderWidth: c === prefs.penColor ? 2 : 0, borderColor: t.accent }}
-                >
-                  <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: c, borderWidth: 1, borderColor: edge }} />
-                </Pressable>
-              ))}
-              <Text style={{ color: t.muted, marginLeft: 6 }}>쪽을 누르면 글상자, 글상자를 누르면 고치기</Text>
+              <Divider />
+              <View style={sx.swatches}>
+                {PEN_COLORS.map((c) => (
+                  <Swatch key={c} color={c} edge={edge} on={c === prefs.penColor} onPress={() => setP({ penColor: c })} label={`글 색 ${c}`} />
+                ))}
+              </View>
+              <Text style={[type.caption, { color: t.muted, marginLeft: 8 }]}>쪽을 누르면 글상자, 글상자를 누르면 고치기</Text>
             </>
           )}
-          {tool !== "text" && <Btn label="⚙︎" onPress={openPanel} label2="도구 설정" />}
+          {tool !== "text" && <IconBtn glyph="⚙︎" onPress={openPanel} label="도구 설정" />}
           {tool !== "eraser" && tool !== "lasso" && tool !== "text" && (
             <>
-              <Sep />
-              {colors.map((c) => (
-                <Pressable
-                  key={c}
-                  onPress={() => setP(tool === "highlighter" ? { hlColor: c } : { penColor: c })}
-                  accessibilityRole="button"
-                  accessibilityLabel={`색 ${c}`}
-                  accessibilityState={{ selected: c === color }}
-                  style={{ width: 30, height: 30, borderRadius: 15, alignItems: "center", justifyContent: "center", borderWidth: c === color ? 2 : 0, borderColor: t.accent }}
-                >
-                  <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: c, borderWidth: 1, borderColor: edge }} />
-                </Pressable>
-              ))}
-              <Sep />
+              <Divider />
+              <View style={sx.swatches}>
+                {colors.map((c) => (
+                  <Swatch key={c} color={c} edge={edge} on={c === color} onPress={() => setP(tool === "highlighter" ? { hlColor: c } : { penColor: c })} label={`색 ${c}`} />
+                ))}
+              </View>
+              <Divider />
               {widths.map((w, i) => (
-                <Pressable
-                  key={w}
-                  onPress={() => setP(tool === "highlighter" ? { hlWidth: w } : { penWidth: w })}
-                  accessibilityRole="button"
-                  accessibilityLabel={`굵기 ${i + 1}`}
-                  accessibilityState={{ selected: w === width }}
-                  style={{ width: 30, height: 30, borderRadius: 8, alignItems: "center", justifyContent: "center", backgroundColor: w === width ? t.soft : "transparent" }}
-                >
-                  <View style={{ width: 6 + i * 6, height: 6 + i * 6, borderRadius: 10, backgroundColor: t.ink }} />
-                </Pressable>
+                <WidthDot key={w} size={6 + i * 6} on={w === width} onPress={() => setP(tool === "highlighter" ? { hlWidth: w } : { penWidth: w })} label={`굵기 ${i + 1}`} />
               ))}
               {tool === "highlighter" && (
-                <ToolBtn label="― 직선" on={prefs.straight} onPress={() => setP({ straight: !prefs.straight })} hint="가로로 그으면 곧은 선으로" />
+                <ToolBtn chip label="직선" on={prefs.straight} onPress={() => setP({ straight: !prefs.straight })} hint="가로로 그으면 곧은 선으로" />
               )}
               {tool === "pen" && (
-                <ToolBtn label="△ 도형 펴기" on={prefs.shapes} onPress={() => setP({ shapes: !prefs.shapes })} hint="선·사각형·원·삼각형을 반듯하게" />
+                <ToolBtn chip label="도형 펴기" on={prefs.shapes} onPress={() => setP({ shapes: !prefs.shapes })} hint="선·사각형·원·삼각형을 반듯하게" />
               )}
             </>
           )}
-          <Sep />
+          <Divider />
           <ToolBtn
-            label={prefs.fingerDraw ? "☝️ 손가락: 쓰기" : "✋ 손가락: 이동"}
+            chip
+            label={prefs.fingerDraw ? "손가락: 쓰기" : "손가락: 이동"}
             on={false}
             onPress={() => setP({ fingerDraw: !prefs.fingerDraw })}
             hint="손가락으로 쓸지, 화면만 옮길지"
           />
-          <Sep />
-          <Btn label="−" onPress={() => setZoom((z) => ({ kind: "out", n: z.n + 1 }))} label2="축소" />
-          <Btn label="맞춤" onPress={() => setZoom((z) => ({ kind: "fit", n: z.n + 1 }))} label2="쪽 폭에 맞추기" />
-          <Btn label="+" onPress={() => setZoom((z) => ({ kind: "in", n: z.n + 1 }))} label2="확대" />
+          <Divider />
+          <IconBtn glyph="−" onPress={() => setZoom((z) => ({ kind: "out", n: z.n + 1 }))} label="축소" />
+          <TextBtn label="맞춤" onPress={() => setZoom((z) => ({ kind: "fit", n: z.n + 1 }))} label2="쪽 폭에 맞추기" />
+          <IconBtn glyph="＋" onPress={() => setZoom((z) => ({ kind: "in", n: z.n + 1 }))} label="확대" />
         </ScrollView>
       </View>
 
@@ -791,45 +776,54 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         onPenDouble={onPenDouble}
       />
 
+      {/* 올가미로 고른 것: 아래에 떠 있는 작은 막대 (색 바꾸기·지우기·끝내기) */}
       {selection && (
-        <View style={{ position: "absolute", bottom: 24, alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: t.card, borderRadius: 24, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: t.line, shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 8, elevation: 4 }}>
-          <Text style={{ color: t.muted, marginRight: 4 }}>{selection.ids.size}개 고름 · 끌어서 옮기기</Text>
-          {PEN_COLORS.slice(0, 5).map((c) => (
-            <Pressable key={c} onPress={() => replaceSelected((s) => ({ ...s, color: c }))} accessibilityRole="button" accessibilityLabel={`고른 것 색 ${c}`} style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: c, borderWidth: 1, borderColor: edge }} />
-          ))}
-          <Btn label="🗑" onPress={deleteSelected} label2="고른 것 지우기" />
-          <Btn label="✕" onPress={() => setSelection(null)} label2="고르기 끝내기" />
+        <View style={[floating(t), sx.selBar, narrow && sx.selBarNarrow]}>
+          <Text style={[type.caption, { color: t.sub, marginRight: 4 }, narrow && sx.selTextNarrow]}>{selection.ids.size}개 고름 · 끌어서 옮기기</Text>
+          <View style={sx.swatches}>
+            {PEN_COLORS.slice(0, 5).map((c) => (
+              <Swatch key={c} color={c} edge={edge} onPress={() => replaceSelected((s) => ({ ...s, color: c }))} label={`고른 것 색 ${c}`} />
+            ))}
+          </View>
+          <Divider />
+          <TextBtn label="지우기" danger onPress={deleteSelected} label2="고른 것 지우기" />
+          <IconBtn glyph="✕" onPress={() => setSelection(null)} label="고르기 끝내기" />
         </View>
       )}
 
       {!!toast && (
-        <View pointerEvents="none" style={{ position: "absolute", bottom: 28, left: 16, right: 16, alignItems: "center" }}>
-          <Text style={{ backgroundColor: "rgba(20,20,24,0.88)", color: "#fff", paddingHorizontal: 14, paddingVertical: 9, borderRadius: 10, overflow: "hidden" }}>{toast}</Text>
+        <View pointerEvents="none" style={sx.toastWrap}>
+          <View style={[floating(t), sx.toast, { backgroundColor: t.ink, borderColor: t.ink }]}>
+            <Text style={[sx.toastText, { color: t.bg }]}>{toast}</Text>
+          </View>
         </View>
       )}
       {!!busy && (
-        <View style={{ position: "absolute", inset: 0, backgroundColor: "rgba(0,0,0,0.25)", alignItems: "center", justifyContent: "center" }}>
-          <View style={{ backgroundColor: t.card, padding: 20, borderRadius: 12, flexDirection: "row", gap: 10, alignItems: "center" }}>
-            <ActivityIndicator color={t.accent} />
-            <Text style={{ color: t.ink }}>{busy}</Text>
+        <View style={[sx.cover, { backgroundColor: backdrop(t) }]}>
+          <View style={[floating(t), sx.busyBox]}>
+            <ActivityIndicator color={t.sub} />
+            <Text style={[type.body, { color: t.ink }]}>{busy}</Text>
           </View>
         </View>
       )}
 
       <Modal visible={menu} transparent animationType="fade" onRequestClose={() => setMenu(false)}>
-        <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)", alignItems: "flex-end" }} onPress={() => setMenu(false)}>
+        <Pressable style={[sx.menuBack, { backgroundColor: popBackdrop(t) }]} onPress={() => setMenu(false)}>
           {/* 화면이 낮으면(가로로 든 폰·나눠 쓰기) 메뉴 안에서 밀어서 끝까지 볼 수 있게 */}
-          <Pressable style={{ marginTop: 60, marginRight: 12, maxHeight: Math.max(120, win.height - 72), backgroundColor: t.card, borderRadius: 12, paddingVertical: 6, minWidth: 240, borderWidth: 1, borderColor: t.line }} onPress={() => {}}>
-            <ScrollView keyboardShouldPersistTaps="handled">
-              <MenuItem label="⚡ 바로 요약 (기기에서, 서버 없이)" onPress={quick} />
-              <MenuItem label="✨ 서버로 자세히 요약 (요약집·AI)" onPress={summarize} />
-              <MenuItem label="▦ 쪽 모아보기" onPress={() => { setMenu(false); setGrid(true); }} />
-              <MenuItem label="📄 PDF로 내보내기 (필기 포함)" onPress={exportPdf} />
+          <Pressable style={[floating(t), sx.menu, { marginRight: pad, maxHeight: Math.max(120, win.height - 72) }]} onPress={() => {}}>
+            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={sx.menuList}>
+              <MenuItem label="바로 요약 (기기에서, 서버 없이)" onPress={quick} />
+              <MenuItem label="서버로 자세히 요약 (요약집·AI)" onPress={summarize} />
+              <MenuSep />
+              <MenuItem label="쪽 모아보기" onPress={() => { setMenu(false); setGrid(true); }} />
+              <MenuItem label="PDF로 내보내기 (필기 포함)" onPress={exportPdf} />
+              <MenuSep />
               <MenuItem label="＋ 뒤에 빈 쪽 (같은 속지)" onPress={() => addPage()} />
               <MenuItem label="＋ 뒤에 줄 쪽" onPress={() => addPage("lined")} />
               <MenuItem label="＋ 뒤에 모눈 쪽" onPress={() => addPage("grid")} />
-              <MenuItem label="✎ 노트 이름 바꾸기" onPress={() => { setMenu(false); setRenaming(nb.title); }} />
-              <MenuItem label="🗑 이 쪽 지우기" onPress={deletePage} disabled={nb.pages.length <= 1} danger />
+              <MenuSep />
+              <MenuItem label="노트 이름 바꾸기" onPress={() => { setMenu(false); setRenaming(nb.title); }} />
+              <MenuItem label="이 쪽 지우기" onPress={deletePage} disabled={nb.pages.length <= 1} danger />
             </ScrollView>
           </Pressable>
         </Pressable>
@@ -863,6 +857,27 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   );
 }
 
+// ── 창과 작은 부품 ────────────────────────────────────────────────
+
+/** 창 뒤를 덮는 반투명 바탕: 가운데 뜨는 창용 / 메뉴처럼 가볍게 뜨는 것용 (쪽이 조금 더 보이게) */
+const backdrop = (t: Theme) => (t.dark ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.25)");
+const popBackdrop = (t: Theme) => (t.dark ? "rgba(0,0,0,0.35)" : "rgba(0,0,0,0.12)");
+
+/** 가운데 뜨는 작은 창 (글상자 · 노트 이름) */
+function Dialog({ open, title, maxWidth, onClose, children }: { open: boolean; title: string; maxWidth: number; onClose: () => void; children: ReactNode }) {
+  const t = useTheme();
+  return (
+    <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={[sx.dialogBack, { backgroundColor: backdrop(t) }]}>
+        <View style={[floating(t), sx.dialog, { maxWidth }]}>
+          <Text style={[type.title, { color: t.ink }]}>{title}</Text>
+          {children}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function TextDialog({ open, initial, size, editing, onCancel, onSave }: { open: boolean; initial: string; size: number; editing: boolean; onCancel: () => void; onSave: (text: string, size: number) => void }) {
   const t = useTheme();
   const [v, setV] = useState("");
@@ -874,36 +889,35 @@ function TextDialog({ open, initial, size, editing, onCancel, onSave }: { open: 
     }
   }, [open, initial, size]);
   return (
-    <Modal visible={open} transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)", alignItems: "center", justifyContent: "center", padding: 20 }}>
-        <View style={{ backgroundColor: t.card, borderRadius: 12, padding: 18, width: "100%", maxWidth: 520 }}>
-          <Text style={{ color: t.ink, fontWeight: "700", fontSize: 17, marginBottom: 10 }}>{editing ? "글상자 고치기" : "글상자"}</Text>
-          <TextInput
-            value={v}
-            onChangeText={setV}
-            autoFocus
-            multiline
-            accessibilityLabel="글상자 내용"
-            placeholder="여기에 쓰세요"
-            placeholderTextColor={t.muted}
-            style={{ borderWidth: 1, borderColor: t.line, borderRadius: 8, padding: 10, color: t.ink, fontSize: 16, minHeight: 110, textAlignVertical: "top" }}
-          />
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 12 }}>
-            <Text style={{ color: t.muted }}>글자 크기</Text>
-            {TEXT_SIZES.map((s, i) => (
-              <Pressable key={s} onPress={() => setSz(s)} accessibilityRole="radio" accessibilityState={{ selected: sz === s }} style={{ paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: sz === s ? t.accent : t.line, backgroundColor: sz === s ? t.soft : t.card }}>
-                <Text style={{ color: sz === s ? t.accent : t.ink, fontSize: 12 + i * 3 }}>{["작게", "보통", "크게"][i]}</Text>
-              </Pressable>
-            ))}
-          </View>
-          <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
-            {editing && <Btn label="🗑 지우기" onPress={() => onSave("", sz)} />}
-            <Btn label="취소" onPress={onCancel} />
-            <Btn label="넣기" onPress={() => onSave(v, sz)} />
-          </View>
-        </View>
+    <Dialog open={open} title={editing ? "글상자 고치기" : "글상자"} maxWidth={520} onClose={onCancel}>
+      <TextInput
+        value={v}
+        onChangeText={setV}
+        autoFocus
+        multiline
+        accessibilityLabel="글상자 내용"
+        placeholder="여기에 쓰세요"
+        placeholderTextColor={t.muted}
+        style={[ui.input, sx.textArea, { borderColor: t.line, color: t.ink, backgroundColor: t.card }]}
+      />
+      <View style={sx.sizeRow}>
+        <Text style={[type.label, { color: t.sub, marginRight: 4 }]}>글자 크기</Text>
+        {TEXT_SIZES.map((s, i) => {
+          const on = sz === s;
+          return (
+            <Pressable key={s} onPress={() => setSz(s)} accessibilityRole="radio" accessibilityState={{ selected: on }} style={[sx.sizeChip, { backgroundColor: on ? t.ink : t.sunken }]}>
+              <Text style={{ color: on ? t.bg : t.sub, fontSize: 12 + i * 3, fontWeight: on ? "600" : "500" }}>{["작게", "보통", "크게"][i]}</Text>
+            </Pressable>
+          );
+        })}
       </View>
-    </Modal>
+      <View style={sx.actions}>
+        {editing && <TextBtn label="지우기" danger onPress={() => onSave("", sz)} />}
+        <View style={{ flex: 1 }} />
+        <Button label="취소" onPress={onCancel} />
+        <Button kind="primary" label="넣기" onPress={() => onSave(v, sz)} />
+      </View>
+    </Dialog>
   );
 }
 
@@ -914,32 +928,28 @@ function RenameDialog({ value, onDone }: { value: string | null; onDone: (v: str
     if (value !== null) setV(value);
   }, [value]);
   return (
-    <Modal visible={value !== null} transparent animationType="fade" onRequestClose={() => onDone("")}>
-      <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)", alignItems: "center", justifyContent: "center", padding: 20 }}>
-        <View style={{ backgroundColor: t.card, borderRadius: 12, padding: 18, width: "100%", maxWidth: 420 }}>
-          <Text style={{ color: t.ink, fontWeight: "700", fontSize: 17, marginBottom: 10 }}>노트 이름</Text>
-          <TextInput
-            value={v}
-            onChangeText={setV}
-            autoFocus
-            accessibilityLabel="노트 이름"
-            onSubmitEditing={() => onDone(v)}
-            style={{ borderWidth: 1, borderColor: t.line, borderRadius: 8, padding: 10, color: t.ink, fontSize: 16 }}
-          />
-          <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
-            <Btn label="취소" onPress={() => onDone("")} />
-            <Btn label="저장" onPress={() => onDone(v)} />
-          </View>
-        </View>
+    <Dialog open={value !== null} title="노트 이름" maxWidth={420} onClose={() => onDone("")}>
+      <TextInput
+        value={v}
+        onChangeText={setV}
+        autoFocus
+        accessibilityLabel="노트 이름"
+        onSubmitEditing={() => onDone(v)}
+        style={[ui.input, { borderColor: t.line, color: t.ink, backgroundColor: t.card, fontSize: 16 }]}
+      />
+      <View style={sx.actions}>
+        <View style={{ flex: 1 }} />
+        <Button label="취소" onPress={() => onDone("")} />
+        <Button kind="primary" label="저장" onPress={() => onDone(v)} />
       </View>
-    </Modal>
+    </Dialog>
   );
 }
 
 /** 되돌리기·다시 하기: 되돌릴 것이 없어도 단추 자리는 보이게 (바탕은 그대로, 글자만 흐리게). 넓은 화면에서는 글도 같이 */
 function HistBtn({ glyph, text, onPress, disabled, label, wide }: { glyph: string; text: string; onPress: () => void; disabled: boolean; label: string; wide: boolean }) {
   const t = useTheme();
-  const dim = disabled ? 0.35 : 1;
+  const ink = { color: t.sub, opacity: disabled ? 0.35 : 1 };
   return (
     <Pressable
       onPress={onPress}
@@ -947,31 +957,49 @@ function HistBtn({ glyph, text, onPress, disabled, label, wide }: { glyph: strin
       accessibilityRole="button"
       accessibilityLabel={label}
       hitSlop={4}
-      style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: 4, height: 36, paddingHorizontal: wide ? 12 : 10, borderRadius: 10, backgroundColor: t.soft, opacity: pressed ? 0.6 : 1 })}
+      style={({ pressed }) => [sx.histBtn, { paddingHorizontal: wide ? 14 : 10, backgroundColor: t.sunken, opacity: pressed ? 0.6 : 1 }]}
     >
-      <Text style={{ color: t.ink, fontSize: 20, lineHeight: 24, opacity: dim }}>{glyph}</Text>
-      {wide && <Text style={{ color: t.ink, fontSize: 14, fontWeight: "600", opacity: dim }}>{text}</Text>}
+      <Text style={[sx.histGlyph, ink]}>{glyph}</Text>
+      {wide && <Text style={[sx.histText, ink]}>{text}</Text>}
     </Pressable>
   );
 }
 
-function Btn({ label, onPress, disabled, label2 }: { label: string; onPress: () => void; disabled?: boolean; label2?: string }) {
+/** 글자 하나짜리 단추 (‹ › ⋯ − ＋ ⚙︎ ✕): 바탕 없이 회색 글자만 */
+function IconBtn({ glyph, onPress, disabled, label, big, compact }: { glyph: string; onPress: () => void; disabled?: boolean; label: string; big?: boolean; compact?: boolean }) {
   const t = useTheme();
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled}
       accessibilityRole="button"
-      accessibilityLabel={label2 ?? label}
+      accessibilityLabel={label}
       hitSlop={4}
-      style={({ pressed }) => ({ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, opacity: disabled ? 0.35 : pressed ? 0.6 : 1 })}
+      style={({ pressed }) => [sx.iconBtn, compact && sx.iconCompact, { backgroundColor: pressed ? t.sunken : "transparent", opacity: disabled ? 0.3 : 1 }]}
     >
-      <Text style={{ color: t.ink, fontSize: 16 }}>{label}</Text>
+      <Text style={[big ? sx.glyphBig : compact ? sx.glyphNav : sx.glyph, { color: big ? t.ink : t.sub }]}>{glyph}</Text>
     </Pressable>
   );
 }
 
-function ToolBtn({ label, on, onPress, hint, ref }: { label: string; on: boolean; onPress: () => void; hint?: string; ref?: Ref<HostInstance> }) {
+/** 낱말 단추 (맞춤, 지우기): 바탕 없이 글자만. danger는 빨간 글자 */
+function TextBtn({ label, onPress, label2, danger }: { label: string; onPress: () => void; label2?: string; danger?: boolean }) {
+  const t = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label2 ?? label}
+      hitSlop={4}
+      style={({ pressed }) => [sx.textBtn, { backgroundColor: pressed ? t.sunken : "transparent" }]}
+    >
+      <Text style={[sx.textBtnText, { color: danger ? t.bad : t.sub }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/** 도구 단추: 고른 것은 검은 알약. chip은 켜고 끄는 단추라 꺼져 있어도 옅은 회색 바탕 */
+function ToolBtn({ label, on, onPress, hint, ref, chip }: { label: string; on: boolean; onPress: () => void; hint?: string; ref?: Ref<HostInstance>; chip?: boolean }) {
   const t = useTheme();
   return (
     <Pressable
@@ -980,23 +1008,133 @@ function ToolBtn({ label, on, onPress, hint, ref }: { label: string; on: boolean
       accessibilityRole="button"
       accessibilityLabel={hint ? `${label} (${hint})` : label}
       accessibilityState={{ selected: on }}
-      style={{ paddingHorizontal: 10, paddingVertical: 7, borderRadius: 8, backgroundColor: on ? t.soft : "transparent", borderWidth: 1, borderColor: on ? t.accent : "transparent" }}
+      style={({ pressed }) => [sx.toolBtn, chip && sx.toolChip, { backgroundColor: on ? t.ink : chip ? t.sunken : "transparent", opacity: pressed ? 0.7 : 1 }]}
     >
-      <Text style={{ color: on ? t.accent : t.ink, fontWeight: on ? "700" : "500" }}>{label}</Text>
+      <Text style={[sx.toolText, { color: on ? t.bg : t.sub, fontWeight: on ? "600" : "500" }]}>{label}</Text>
     </Pressable>
   );
 }
 
-function MenuItem({ label, onPress, disabled, danger }: { label: string; onPress: () => void; disabled?: boolean; danger?: boolean }) {
+/** 동그란 색 단추. 고른 색은 둘레에 검은 고리 (사이를 조금 띄워서) */
+function Swatch({ color, on, onPress, label, edge }: { color: string; on?: boolean; onPress: () => void; label: string; edge: string }) {
   const t = useTheme();
   return (
-    <Pressable onPress={onPress} disabled={disabled} accessibilityRole="menuitem" style={({ pressed }) => ({ paddingHorizontal: 16, paddingVertical: 12, opacity: disabled ? 0.4 : 1, backgroundColor: pressed ? t.soft : "transparent" })}>
-      <Text style={{ color: danger ? t.bad : t.ink, fontSize: 15 }}>{label}</Text>
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={on === undefined ? undefined : { selected: on }}
+      style={[sx.swatchRing, { borderColor: on ? t.ink : "transparent" }]}
+    >
+      <View style={[sx.swatch, { backgroundColor: color, borderColor: edge }]} />
     </Pressable>
   );
 }
 
-function Sep() {
+/** 굵기 빠른 고르기: 점 크기가 굵기. 고른 것은 색 단추처럼 둘레에 검은 고리 */
+function WidthDot({ size, on, onPress, label }: { size: number; on: boolean; onPress: () => void; label: string }) {
   const t = useTheme();
-  return <View style={{ width: 1, height: 22, backgroundColor: t.line, marginHorizontal: 4 }} />;
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: on }}
+      style={[sx.widthBtn, { borderColor: on ? t.ink : "transparent" }]}
+    >
+      <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: on ? t.ink : t.sub }} />
+    </Pressable>
+  );
 }
+
+/** ⋯ 메뉴 한 줄. 괄호 안 덧말은 옅은 글자로 */
+function MenuItem({ label, onPress, disabled, danger }: { label: string; onPress: () => void; disabled?: boolean; danger?: boolean }) {
+  const t = useTheme();
+  const cut = label.indexOf(" (");
+  const main = cut < 0 ? label : label.slice(0, cut);
+  const more = cut < 0 ? "" : label.slice(cut);
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="menuitem"
+      style={({ pressed }) => [sx.menuItem, { opacity: disabled ? 0.35 : 1, backgroundColor: pressed ? t.sunken : "transparent" }]}
+    >
+      <Text style={[type.body, { color: danger ? t.bad : t.ink }]}>
+        {main}
+        {!!more && <Text style={{ color: t.muted }}>{more}</Text>}
+      </Text>
+    </Pressable>
+  );
+}
+
+function MenuSep() {
+  const t = useTheme();
+  return <View style={[sx.menuSep, { backgroundColor: t.lineSoft }]} />;
+}
+
+/** 도구 모음의 무리 나누기: 가는 세로줄 */
+function Divider() {
+  const t = useTheme();
+  return <View style={[sx.divider, { backgroundColor: t.line }]} />;
+}
+
+const sx = StyleSheet.create({
+  center: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 16 },
+  row: { flexDirection: "row", alignItems: "center", gap: 4 },
+  tabular: { fontVariant: ["tabular-nums"] },
+
+  // 윗줄
+  topBar: { flexDirection: "row", alignItems: "center", gap: 6, paddingTop: 8, paddingBottom: 4 },
+  title: { flex: 1, minHeight: 40, justifyContent: "center", paddingRight: 8 },
+  pageNav: { flexDirection: "row", alignItems: "center", height: 36, borderRadius: radius.pill, paddingHorizontal: 2 },
+  pageNo: { minWidth: 48, height: 36, paddingHorizontal: 4, alignItems: "center", justifyContent: "center" },
+  histBtn: { flexDirection: "row", alignItems: "center", gap: 6, height: 36, borderRadius: radius.pill },
+  histGlyph: { fontSize: 18, lineHeight: 22 },
+  histText: { fontSize: 14, fontWeight: "500", letterSpacing: -0.2 },
+
+  // 도구 줄
+  toolBar: { borderBottomWidth: 1 },
+  toolRow: { alignItems: "center", paddingTop: 4, paddingBottom: 8, gap: 4 },
+  toolBtn: { height: 34, paddingHorizontal: 14, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" },
+  toolChip: { marginLeft: 4 },
+  toolText: { fontSize: 14, letterSpacing: -0.2 },
+  swatches: { flexDirection: "row", alignItems: "center", gap: 2 },
+  swatchRing: { width: 32, height: 32, borderRadius: 16, borderWidth: 2, alignItems: "center", justifyContent: "center" },
+  swatch: { width: 24, height: 24, borderRadius: 12, borderWidth: 1 },
+  widthBtn: { width: 32, height: 32, borderRadius: 16, borderWidth: 2, alignItems: "center", justifyContent: "center" },
+  divider: { width: 1, height: 20, marginHorizontal: 8 },
+  iconBtn: { minWidth: 36, height: 36, paddingHorizontal: 6, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" },
+  iconCompact: { minWidth: 30, paddingHorizontal: 4 },
+  glyphNav: { fontSize: 23, lineHeight: 26, marginTop: -2 },
+  glyph: { fontSize: 20, lineHeight: 24 },
+  glyphBig: { fontSize: 30, lineHeight: 32, marginTop: -3 },
+  textBtn: { height: 36, paddingHorizontal: 10, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" },
+  textBtnText: { fontSize: 14, fontWeight: "500", letterSpacing: -0.2 },
+
+  // 떠 있는 것들
+  selBar: { position: "absolute", bottom: 24, alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 6, borderRadius: radius.pill, paddingLeft: 18, paddingRight: 6, paddingVertical: 6 },
+  // 좁은 폰: 설명 글을 윗줄에 두고 단추는 아랫줄에 (한 줄에 다 들어가지 않아서)
+  selBarNarrow: { left: 16, right: 16, alignSelf: "auto", flexWrap: "wrap", justifyContent: "center", rowGap: 2, borderRadius: radius.xl, paddingLeft: 12, paddingTop: 10 },
+  selTextNarrow: { width: "100%", textAlign: "center", marginRight: 0 },
+  toastWrap: { position: "absolute", bottom: 32, left: 16, right: 16, alignItems: "center" },
+  toast: { maxWidth: 560, borderRadius: radius.xl, paddingHorizontal: 18, paddingVertical: 10 },
+  toastText: { fontSize: 14, lineHeight: 20, fontWeight: "500", textAlign: "center", letterSpacing: -0.2 },
+  cover: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, alignItems: "center", justifyContent: "center" },
+  busyBox: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 20, paddingHorizontal: 24, borderRadius: radius.lg },
+
+  // ⋯ 메뉴
+  menuBack: { flex: 1, alignItems: "flex-end" },
+  menu: { marginTop: 56, minWidth: 280, maxWidth: 360, borderRadius: radius.lg },
+  menuList: { paddingVertical: 8 },
+  menuItem: { marginHorizontal: 8, paddingHorizontal: 12, paddingVertical: 11, borderRadius: radius.md },
+  menuSep: { height: 1, marginVertical: 6, marginHorizontal: 20 },
+
+  // 가운데 뜨는 창
+  dialogBack: { flex: 1, alignItems: "center", justifyContent: "center", padding: 20 },
+  dialog: { width: "100%", borderRadius: radius.xl, padding: 24, gap: 16 },
+  textArea: { minHeight: 120, fontSize: 16, textAlignVertical: "top" },
+  sizeRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 6 },
+  sizeChip: { height: 36, paddingHorizontal: 14, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" },
+  actions: { flexDirection: "row", alignItems: "center", gap: 8, marginTop: 8 },
+});

@@ -2,7 +2,8 @@ import * as DocumentPicker from "expo-document-picker";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator, Alert, BackHandler, Platform, Pressable, ScrollView, Switch, Text, TextInput, useColorScheme, View,
+  ActivityIndicator, Alert, BackHandler, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, useColorScheme,
+  useWindowDimensions, View,
 } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
@@ -36,7 +37,11 @@ import { EMPTY, loadSettings, saveSettings } from "./src/platform/storage";
 import type { Picked } from "./src/platform/types";
 import { uploadPdf } from "./src/platform/upload";
 import { SettingsSheet } from "./src/SettingsSheet";
-import { Bar, Button, Card, DARK, Hint, LIGHT, Segmented, ThemeContext, useTheme } from "./src/ui";
+import { loadThemeMode, saveThemeMode } from "./src/themePref";
+import {
+  Bar, Button, Card, DARK, floating, Hint, LIGHT, radius, ScreenTitle, Segmented, styles as ui, ThemeContext, ThemeModeContext, type,
+  useTheme, type ThemeMode,
+} from "./src/ui";
 
 type Slot = { picked: Picked; info?: UploadInfo; ratio: number; error?: string };
 type ColorRow = ColorInfo & { on: boolean };
@@ -77,14 +82,29 @@ const NOTES = {
 
 export default function App() {
   const scheme = useColorScheme();
-  const theme = scheme === "dark" ? DARK : LIGHT;
+  // 화면 밝기: 기본은 밝게. 설정에서 어둡게·기기 설정 따르기로 바꿀 수 있다
+  const [mode, setModeState] = useState<ThemeMode>("light");
+  useEffect(() => {
+    loadThemeMode().then(setModeState).catch(() => undefined);
+  }, []);
+  const themeMode = useMemo(() => ({
+    mode,
+    setMode: (m: ThemeMode) => {
+      setModeState(m);
+      void saveThemeMode(m);
+    },
+  }), [mode]);
+  const dark = mode === "dark" || (mode === "system" && scheme === "dark");
+  const theme = dark ? DARK : LIGHT;
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: theme.bg }}>
       <SafeAreaProvider>
-        <ThemeContext.Provider value={theme}>
-          <StatusBar style={scheme === "dark" ? "light" : "dark"} />
-          <Root />
-        </ThemeContext.Provider>
+        <ThemeModeContext.Provider value={themeMode}>
+          <ThemeContext.Provider value={theme}>
+            <StatusBar style={dark ? "light" : "dark"} />
+            <Root />
+          </ThemeContext.Provider>
+        </ThemeModeContext.Provider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
@@ -219,17 +239,16 @@ function Root() {
           setScreen({ name: "summary", settings: true });
         }}
       />
-      {!!shareErr && (
-        <Pressable onPress={() => setShareErr("")} style={{ position: "absolute", bottom: 24, left: 16, right: 16 }}>
-          <Text style={{ backgroundColor: "#c23b3b", color: "#fff", padding: 12, borderRadius: 10, overflow: "hidden" }}>{shareErr}</Text>
-        </Pressable>
-      )}
+      {!!shareErr && <ErrorToast text={shareErr} onClose={() => setShareErr("")} />}
     </>
   );
 }
 
 function Main({ note, onBack, startWithSettings }: { note?: NoteInput; onBack: () => void; startWithSettings?: boolean }) {
   const t = useTheme();
+  // 넓은 화면(태블릿)은 여백을 넉넉히, 폰은 조금 좁게
+  const wide = useWindowDimensions().width >= WIDE;
+  const pad = wide ? 24 : 16;
   const [settings, setSettings] = useState<Settings>(EMPTY);
   const [server, setServer] = useState<ServerState | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -459,14 +478,22 @@ function Main({ note, onBack, startWithSettings }: { note?: NoteInput; onBack: (
   if (html && job) {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }} edges={["top", "left", "right"]}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1, borderColor: t.line, flexWrap: "wrap" }}>
-          <Button kind="link" label="← 다시 만들기" onPress={() => setHtml(null)} />
-          <Button kind="link" label={note ? "노트로" : "노트 목록"} onPress={onBack} />
-          {!!notice && <Text style={{ color: t.muted, fontSize: 13, flexBasis: "100%" }}>{notice}</Text>}
-          <View style={{ flex: 1 }} />
-          <Button label="공유 (HTML)" onPress={() => share("요약.html")} busy={sharing === "요약.html"} style={{ paddingVertical: 8 }} />
-          <Button label="Markdown·이미지 (zip)" onPress={() => share("요약.zip")} busy={sharing === "요약.zip"} style={{ paddingVertical: 8 }} />
+        <View style={[s.resultBar, { paddingHorizontal: pad, borderColor: t.lineSoft }]}>
+          <View style={s.resultLinks}>
+            <Button kind="link" label="‹ 다시 만들기" onPress={() => setHtml(null)} />
+            <View style={[s.vline, { backgroundColor: t.line }]} />
+            <Button kind="link" label={note ? "노트로" : "노트 목록"} onPress={onBack} />
+          </View>
+          <View style={s.resultActions}>
+            <Button small label="Markdown·이미지 (zip)" onPress={() => share("요약.zip")} busy={sharing === "요약.zip"} />
+            <Button small label="공유 (HTML)" onPress={() => share("요약.html")} busy={sharing === "요약.html"} />
+          </View>
         </View>
+        {!!notice && (
+          <View style={[s.notice, { paddingHorizontal: pad, backgroundColor: t.sunken }]}>
+            <Text style={[type.caption, { color: t.sub }]}>{notice}</Text>
+          </View>
+        )}
         <ResultView html={html} />
       </SafeAreaView>
     );
@@ -476,14 +503,23 @@ function Main({ note, onBack, startWithSettings }: { note?: NoteInput; onBack: (
   const running = (!!job && (!job.state || job.state.status === "running")) || !!deviceProg;
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }}>
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 60, width: "100%", maxWidth: 760, alignSelf: "center" }} keyboardShouldPersistTaps="handled">
-        <Button kind="link" label={note ? "‹ 노트로 돌아가기" : "‹ 노트 목록"} onPress={onBack} />
-        <View style={{ flexDirection: "row", alignItems: "center", marginTop: 8, marginBottom: 12 }}>
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: t.ink, fontSize: 26, fontWeight: "800" }}>{note ? `✨ ${note.nb.title} 요약` : "✨ PDF 요약"}</Text>
-            <Text style={{ color: t.muted, marginTop: 2 }}>형광펜·밑줄·손글씨만 모아 목차대로 정리해요.</Text>
-          </View>
-          <Button label="설정" onPress={() => setShowSettings(true)} style={{ paddingVertical: 8 }} />
+      <ScrollView
+        contentContainerStyle={[s.page, { paddingHorizontal: pad, paddingTop: wide ? 24 : 16 }]}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={s.backRow}>
+          <Button kind="link" label={note ? "‹ 노트로 돌아가기" : "‹ 노트 목록"} onPress={onBack} />
+        </View>
+        <View style={s.head}>
+          <ScreenTitle
+            title={note ? `${note.nb.title} 요약` : "PDF 요약"}
+            sub="형광펜·밑줄·손글씨만 모아 목차대로 정리해요."
+            right={
+              <View style={s.headRight}>
+                <Button small label="설정" onPress={() => setShowSettings(true)} />
+              </View>
+            }
+          />
         </View>
 
         {loaded && !ready && (
@@ -493,44 +529,47 @@ function Main({ note, onBack, startWithSettings }: { note?: NoteInput; onBack: (
                 ? "자세한 요약은 서버가 있어야 만들 수 있어요. 서버가 있으면 설정에서 서버 주소와 접속 코드를 넣어 주세요. 서버가 없으면 위의 '‹ 노트로 돌아가기'를 누른 뒤 노트 화면의 '요약' 단추를 쓰세요 (서버 없이 기기에서 바로 만들어요)."
                 : "PDF 분석은 서버에서 해요. 설정에서 서버 주소와 접속 코드를 넣어 주세요."}
             </Hint>
-            <Button kind="primary" label="설정 열기" onPress={() => setShowSettings(true)} style={{ marginTop: 12 }} />
+            <Button kind="primary" label="설정 열기" onPress={() => setShowSettings(true)} style={[s.mainBtn, !wide && s.mainBtnFull]} />
           </Card>
         )}
 
         {note ? (
           <Card step={1} title="노트 보내기">
             <FileSlot label="노트" slot={main} onPick={() => {}} big fixed />
-            <Hint style={{ marginTop: 8 }}>
+            <Hint style={s.below}>
               {note.nb.pages.length}쪽 · 이 앱에서 그은 획 {strokeCount(note.ink)}개를 표시로 넣어 서버에서 분석해요.
             </Hint>
           </Card>
         ) : (
-        <Card step={1} title="PDF 고르기">
-          <FileSlot label="필기한 PDF" slot={main} onPick={() => pick("main")} big />
-          <View style={{ height: 10 }} />
-          <FileSlot
-            label="필기 전 원본 PDF (선택)"
-            hint="넣으면 책에 원래 인쇄된 색칠·밑줄은 빼고 내가 한 필기만 찾아요."
-            slot={orig}
-            onPick={() => pick("orig")}
-            onRemove={() => setOrig(null)}
-          />
-          {Platform.OS !== "web" && (
-            <Hint style={{ marginTop: 10 }}>굿노트·삼성노트 등에서 PDF로 내보낸 뒤 공유 → '필기 요약'을 눌러도 바로 들어와요.</Hint>
-          )}
-        </Card>
+          <Card step={1} title="PDF 고르기">
+            <View style={s.stack}>
+              <FileSlot label="필기한 PDF" slot={main} onPick={() => pick("main")} big />
+              <FileSlot
+                label="필기 전 원본 PDF (선택)"
+                title="필기 전 원본 PDF"
+                tag="선택"
+                hint="넣으면 책에 원래 인쇄된 색칠·밑줄은 빼고 내가 한 필기만 찾아요."
+                slot={orig}
+                onPick={() => pick("orig")}
+                onRemove={() => setOrig(null)}
+              />
+            </View>
+            {Platform.OS !== "web" && (
+              <Hint style={s.below}>굿노트·삼성노트 등에서 PDF로 내보낸 뒤 공유 → '필기 요약'을 눌러도 바로 들어와요.</Hint>
+            )}
+          </Card>
         )}
 
         {mainId && (
           <Card step={2} title="형광펜 색 고르기">
             {colorsBusy ? (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <ActivityIndicator color={t.accent} />
-                <Text style={{ color: t.muted }}>형광펜 색을 찾는 중…</Text>
+              <View style={s.busyRow}>
+                <ActivityIndicator color={t.muted} />
+                <Text style={[type.body, { color: t.muted }]}>형광펜 색을 찾는 중…</Text>
               </View>
             ) : colors && colors.length ? (
-              <>
-                <Hint style={{ marginBottom: 10 }}>내가 칠한 색만 켜 두세요. 색마다 의미(예: 핵심, 정의)를 적으면 요약에 같이 표시돼요.</Hint>
+              <View style={s.stackTight}>
+                <Hint style={s.lead}>내가 칠한 색만 켜 두세요. 색마다 의미(예: 핵심, 정의)를 적으면 요약에 같이 표시돼요.</Hint>
                 {colors.map((c, i) => (
                   <ColorRowView
                     key={`${c.filter}-${i}`}
@@ -542,7 +581,7 @@ function Main({ note, onBack, startWithSettings }: { note?: NoteInput; onBack: (
                   />
                 ))}
                 {!anyColor && <Hint color={t.bad}>색을 하나 이상 켜 주세요.</Hint>}
-              </>
+              </View>
             ) : (
               <Hint color={colorsErr ? t.bad : undefined}>
                 {colorsErr || "형광펜은 찾지 못했어요. 밑줄·동그라미·손글씨·메모는 그대로 정리돼요."}
@@ -553,6 +592,7 @@ function Main({ note, onBack, startWithSettings }: { note?: NoteInput; onBack: (
 
         {mainId && (
           <Card step={3} title="정리 방법">
+            <View style={s.options}>
             <Segmented
               label="결과 모양"
               value={opts.style}
@@ -602,54 +642,60 @@ function Main({ note, onBack, startWithSettings }: { note?: NoteInput; onBack: (
             />
             </>
             )}
+            </View>
             {note && (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginVertical: 8 }}>
-                <Switch value={onlyInk} onValueChange={setOnlyInk} accessibilityLabel="이 앱에서 한 필기만" />
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: t.ink, fontWeight: "600" }}>이 앱에서 한 필기만</Text>
-                  <Text style={{ color: t.muted, fontSize: 13 }}>
+              <View style={[s.switchRow, { borderColor: t.lineSoft }]}>
+                <View style={s.grow}>
+                  <Text style={[type.label, { color: t.ink }]}>이 앱에서 한 필기만</Text>
+                  <Text style={[type.caption, { color: t.muted }]}>
                     {onlyInk ? "책에 인쇄된 색칠·그림, 다른 앱에서 한 필기는 빼고 여기서 그은 것만 봐요." : "PDF에 원래 있던 필기(다른 앱에서 한 것)도 함께 찾아요."}
                   </Text>
                 </View>
+                <Toggle value={onlyInk} onValueChange={setOnlyInk} accessibilityLabel="이 앱에서 한 필기만" />
               </View>
             )}
-            {!aiOk && <Hint>설정에 Claude API 키를 넣으면 AI 기능을 쓸 수 있어요.</Hint>}
+            {!aiOk && <Hint style={s.below}>설정에 Claude API 키를 넣으면 AI 기능을 쓸 수 있어요.</Hint>}
             {!aiOk && opts.style === "list" && Platform.OS !== "web" && device && !deviceOk && device.reason && DEVICE_REASON[device.reason] && (
-              <Hint>{DEVICE_REASON[device.reason]}</Hint>
+              <Hint style={s.below}>{DEVICE_REASON[device.reason]}</Hint>
             )}
-            <Button kind="primary" label="요약 만들기" onPress={run} disabled={!canRun} busy={running} style={{ marginTop: 16, alignSelf: "flex-start", paddingHorizontal: 28 }} />
+            <Button kind="primary" label="요약 만들기" onPress={run} disabled={!canRun} busy={running} style={[s.mainBtn, s.runBtn, !wide && s.mainBtnFull]} />
           </Card>
         )}
 
         {(running || runErr || job?.state?.status === "done") && (
-          <Card title={runErr ? "만들지 못했어요" : running ? "만드는 중…" : "✅ 다 만들었어요"}>
+          <Card title={runErr ? "만들지 못했어요" : running ? "만드는 중…" : "다 만들었어요"}>
             {deviceProg && (
               <>
-                <Text style={{ color: t.ink }}>
+                <Text style={[type.body, { color: t.ink }]}>
                   {deviceProg.download !== undefined
                     ? "기기 안 AI 모델을 받는 중… (처음 한 번만)"
-                    : `📱 기기 안 AI가 설명을 쓰는 중… ${deviceProg.title}`}
+                    : `기기 안 AI가 설명을 쓰는 중… ${deviceProg.title}`}
                 </Text>
                 <Bar ratio={deviceProg.download !== undefined ? (deviceProg.download ?? 0) : deviceProg.total ? deviceProg.done / deviceProg.total : 0} />
                 {deviceProg.download === undefined && (
-                  <Text style={{ color: t.muted, fontSize: 13, marginTop: 4 }}>{deviceProg.done}/{deviceProg.total} · 앱을 켜 둔 채로 기다려 주세요.</Text>
+                  <Text style={[type.caption, s.barNote, { color: t.muted }]}>{deviceProg.done}/{deviceProg.total} · 앱을 켜 둔 채로 기다려 주세요.</Text>
                 )}
-                <Button kind="link" label="여기까지만 넣기" onPress={() => (stopDevice.current = true)} style={{ alignSelf: "flex-start", marginTop: 6 }} />
+                <View style={s.below}>
+                  <Button kind="link" label="여기까지만 넣기" onPress={() => (stopDevice.current = true)} />
+                </View>
               </>
             )}
             {running && !deviceProg && (
               <>
-                <Text style={{ color: t.ink }}>{lastLine(job?.state?.log ?? [])}</Text>
+                <Text style={[type.body, { color: t.ink }]}>{lastLine(job?.state?.log ?? [])}</Text>
                 {Object.entries(job?.state?.progress ?? {}).map(([k, [d, n]]) => (
-                  <View key={k} style={{ marginTop: 10 }}>
-                    <Text style={{ color: t.muted, fontSize: 13 }}>{k.replace(/^[^\p{L}]+/u, "")} {d}/{n}</Text>
+                  <View key={k} style={s.progress}>
+                    <View style={s.progressHead}>
+                      <Text style={[type.caption, s.grow, { color: t.sub }]}>{k.replace(/^[^\p{L}]+/u, "")}</Text>
+                      <Text style={[type.caption, { color: t.muted }]}>{d}/{n}</Text>
+                    </View>
                     <Bar ratio={n ? d / n : 0} />
                   </View>
                 ))}
               </>
             )}
-            {!!runErr && <Text style={{ color: t.bad }}>{runErr}</Text>}
-            {job?.state?.status === "done" && !html && !runErr && !deviceProg && <ActivityIndicator color={t.accent} />}
+            {!!runErr && <Text style={[type.body, { color: t.bad }]}>{runErr}</Text>}
+            {job?.state?.status === "done" && !html && !runErr && !deviceProg && <ActivityIndicator color={t.muted} style={s.spinStart} />}
           </Card>
         )}
       </ScrollView>
@@ -669,9 +715,11 @@ function Main({ note, onBack, startWithSettings }: { note?: NoteInput; onBack: (
 }
 
 function FileSlot({
-  label, hint, slot, onPick, onRemove, big, fixed,
+  label, title, tag, hint, slot, onPick, onRemove, big, fixed,
 }: {
-  label: string;
+  label: string; // 읽어 주기용 이름 ('…고르기')
+  title?: string; // 화면에 보이는 이름 (없으면 label)
+  tag?: string; // 이름 옆 작은 꼬리표 (예: 선택)
   hint?: string;
   slot: Slot | null;
   onPick: () => void;
@@ -681,50 +729,72 @@ function FileSlot({
 }) {
   const t = useTheme();
   const uploading = slot && !slot.info && !slot.error;
-  return (
-    <Pressable
-      onPress={slot ? undefined : onPick}
-      accessibilityRole={slot ? undefined : "button"}
-      accessibilityLabel={slot ? undefined : `${label} 고르기`}
-      style={{
-        borderWidth: slot ? 1 : 2,
-        borderStyle: slot ? "solid" : "dashed",
-        borderColor: t.line,
-        borderRadius: 12,
-        padding: big && !slot ? 26 : 14,
-        backgroundColor: slot ? t.card : t.bg,
-        alignItems: big && !slot ? "center" : "stretch",
-      }}
-    >
-      {!slot ? (
-        <>
-          <Text style={{ fontSize: big ? 30 : 20, textAlign: big ? "center" : "left" }}>{big ? "📄" : "📗"}</Text>
-          <Text style={{ color: t.ink, fontWeight: "700", fontSize: big ? 17 : 15, marginTop: 6, textAlign: big ? "center" : "left" }}>
-            {big ? "필기한 PDF 고르기" : label}
-          </Text>
-          {!!hint && <Hint style={{ marginTop: 4 }}>{hint}</Hint>}
-        </>
-      ) : (
-        <View>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-            <Text style={{ fontSize: 22 }}>{big ? "📕" : "📗"}</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: t.ink, fontWeight: "600" }} numberOfLines={2}>{slot.picked.name}</Text>
-              <Text style={{ color: slot.error ? t.bad : t.muted, fontSize: 13 }}>
-                {slot.error
-                  ? slot.error
-                  : slot.info
-                    ? `${slot.info.pages}쪽${big ? (slot.info.has_toc ? " · PDF 목차 있음" : " · 글자 크기로 제목을 찾아요") : ""}`
-                    : fixed ? "보내는 중…" : "올리는 중…"}
-              </Text>
-            </View>
-            {!fixed && <Button kind="link" label="바꾸기" onPress={onPick} />}
-            {onRemove && <Button kind="link" label="빼기" onPress={onRemove} />}
+
+  // 파일을 넣기 전: 살짝 들어간 회색 칸 (점선 없이)
+  if (!slot) {
+    return (
+      <Pressable
+        onPress={onPick}
+        accessibilityRole="button"
+        accessibilityLabel={`${label} 고르기`}
+        style={({ pressed }) => [big ? s.zoneBig : s.zoneSmall, { backgroundColor: t.sunken, opacity: pressed && !fixed ? 0.7 : 1 }]}
+      >
+        {/* 노트에서 온 칸은 고를 것이 없으니 '＋'를 빼고 파일 표시만 */}
+        {fixed ? (
+          <View style={[s.badge, { backgroundColor: t.card }]}>
+            <Text style={[s.badgeText, { color: t.muted }]}>PDF</Text>
           </View>
-          {uploading && <Bar ratio={slot.ratio} />}
+        ) : (
+          <View style={[big ? s.plusBig : s.plusSmall, { backgroundColor: t.card, borderColor: t.line }]}>
+            <Text style={[s.plusText, { color: t.sub, fontSize: big ? 22 : 18 }]}>＋</Text>
+          </View>
+        )}
+        {big ? (
+          <View style={s.zoneTextBig}>
+            <Text style={[type.heading, s.center, { color: t.ink }]}>{fixed ? label : "필기한 PDF 고르기"}</Text>
+            <Text style={[type.caption, s.center, { color: t.muted }]}>
+              {fixed ? "서버를 연결하면 이 노트를 보내요" : "눌러서 PDF 파일을 골라요"}
+            </Text>
+          </View>
+        ) : (
+          <View style={s.grow}>
+            <View style={s.titleRow}>
+              <Text style={[type.label, { color: t.ink }]}>{title ?? label}</Text>
+              {!!tag && (
+                <View style={[s.tag, { backgroundColor: t.card, borderColor: t.line }]}>
+                  <Text style={[type.small, { color: t.muted }]}>{tag}</Text>
+                </View>
+              )}
+            </View>
+            {!!hint && <Text style={[type.caption, s.hintGap, { color: t.muted }]}>{hint}</Text>}
+          </View>
+        )}
+      </Pressable>
+    );
+  }
+
+  // 넣은 뒤: 파일 이름과 상태, 바꾸기·빼기
+  return (
+    <View style={[s.file, { backgroundColor: t.card, borderColor: t.line }]}>
+      <View style={s.fileRow}>
+        <View style={[s.badge, { backgroundColor: t.sunken }]}>
+          <Text style={[s.badgeText, { color: t.muted }]}>PDF</Text>
         </View>
-      )}
-    </Pressable>
+        <View style={s.grow}>
+          <Text style={[type.label, s.fileName, { color: t.ink }]} numberOfLines={2}>{slot.picked.name}</Text>
+          <Text style={[type.caption, { color: slot.error ? t.bad : t.muted }]}>
+            {slot.error
+              ? slot.error
+              : slot.info
+                ? `${slot.info.pages}쪽${big ? (slot.info.has_toc ? " · PDF 목차 있음" : " · 글자 크기로 제목을 찾아요") : ""}`
+                : fixed ? "보내는 중…" : "올리는 중…"}
+          </Text>
+        </View>
+        {!fixed && <Button kind="link" label="바꾸기" onPress={onPick} />}
+        {onRemove && <Button kind="link" label="빼기" onPress={onRemove} />}
+      </View>
+      {uploading && <Bar ratio={slot.ratio} />}
+    </View>
   );
 }
 
@@ -740,16 +810,16 @@ function ColorRowView({
   const t = useTheme();
   const pages = c.pages.slice(0, 6).join(", ") + (c.pages.length > 6 ? "…" : "");
   return (
-    <View style={{ borderWidth: 1, borderColor: t.line, borderRadius: 10, padding: 10, marginBottom: 8, opacity: c.on ? 1 : 0.5 }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-        <Switch value={c.on} onValueChange={onToggle} accessibilityLabel={`${c.name} ${c.code ?? ""} 포함`} />
-        <View style={{ width: 22, height: 22, borderRadius: 6, backgroundColor: c.css, borderWidth: 1, borderColor: "rgba(0,0,0,0.12)" }} />
-        <View style={{ flex: 1 }}>
-          <Text style={{ color: t.ink, fontWeight: "600" }}>
-            {c.name} <Text style={{ color: t.muted, fontWeight: "400", fontSize: 12 }}>{c.code ?? "(색 계열)"} · {c.count}곳 · {pages}쪽</Text>
+    <View style={[s.colorRow, { borderColor: t.lineSoft, backgroundColor: t.card, opacity: c.on ? 1 : 0.5 }]}>
+      <View style={s.colorHead}>
+        <View style={[s.swatch, { backgroundColor: c.css, borderColor: t.line }]} />
+        <View style={s.grow}>
+          <Text style={[type.label, { color: t.ink }]}>
+            {c.name} <Text style={[type.small, s.plain, { color: t.muted }]}>{c.code ?? "(색 계열)"} · {c.count}곳 · {pages}쪽</Text>
           </Text>
-          <Text style={{ color: t.muted, fontSize: 13 }} numberOfLines={1}>{c.sample ? `“${c.sample}”` : "(글자 없음)"}</Text>
+          <Text style={[type.caption, s.hintGap, { color: t.sub }]} numberOfLines={1}>{c.sample ? `“${c.sample}”` : "(글자 없음)"}</Text>
         </View>
+        <Toggle value={c.on} onValueChange={onToggle} accessibilityLabel={`${c.name} ${c.code ?? ""} 포함`} />
       </View>
       {showLabel && (
         <TextInput
@@ -758,9 +828,107 @@ function ColorRowView({
           placeholder="의미 (예: 핵심)"
           placeholderTextColor={t.muted}
           accessibilityLabel={`${c.name} 색의 의미`}
-          style={{ marginTop: 8, borderWidth: 1, borderColor: t.line, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, color: t.ink }}
+          style={[ui.input, s.labelInput, { borderColor: t.line, color: t.ink, backgroundColor: t.card }]}
         />
       )}
     </View>
   );
 }
+
+/** 켜고 끄기 단추: 켜면 고른 칩처럼 진한 글자색 길, 끄면 옅은 테두리색 길 (강조색은 쓰지 않는다) */
+function Toggle({ value, onValueChange, accessibilityLabel }: { value: boolean; onValueChange: (v: boolean) => void; accessibilityLabel: string }) {
+  const t = useTheme();
+  const onThumb = t.dark ? t.bg : "#FFFFFF";
+  const offThumb = t.dark ? t.muted : "#FFFFFF";
+  // 웹판은 켜진 손잡이 색을 따로 받는다 (안 주면 청록색)
+  const web = Platform.OS === "web" ? { activeThumbColor: onThumb } : {};
+  return (
+    <Switch
+      value={value}
+      onValueChange={onValueChange}
+      accessibilityLabel={accessibilityLabel}
+      trackColor={{ false: t.line, true: t.ink }}
+      thumbColor={Platform.OS === "web" || !value ? offThumb : onThumb}
+      ios_backgroundColor={t.line}
+      {...web}
+    />
+  );
+}
+
+/** 목록 화면 아래에 잠깐 뜨는 오류 알림 (누르면 닫힘) */
+function ErrorToast({ text, onClose }: { text: string; onClose: () => void }) {
+  const t = useTheme();
+  return (
+    <Pressable onPress={onClose} style={[s.toast, floating(t)]}>
+      <View style={[s.toastDot, { backgroundColor: t.bad }]} />
+      <Text style={[type.body, s.grow, { color: t.ink }]}>{text}</Text>
+    </Pressable>
+  );
+}
+
+// 이보다 넓으면 태블릿처럼 여백을 넉넉히
+const WIDE = 700;
+
+const s = StyleSheet.create({
+  // 만드는 화면
+  page: { width: "100%", maxWidth: 760, alignSelf: "center", paddingBottom: 64 },
+  backRow: { flexDirection: "row" },
+  head: { marginTop: 16, marginBottom: 16 },
+  headRight: { alignSelf: "center" }, // 목록 화면처럼 제목 묶음의 가운데 높이에
+  stack: { gap: 12 },
+  stackTight: { gap: 8 },
+  lead: { marginBottom: 4 },
+  below: { marginTop: 12, alignSelf: "flex-start" },
+  grow: { flex: 1 },
+  center: { textAlign: "center" },
+  plain: { fontWeight: "400" },
+  busyRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  options: { gap: 12, marginTop: -4 },
+  switchRow: { flexDirection: "row", alignItems: "center", gap: 16, marginTop: 16, paddingTop: 16, borderTopWidth: 1 },
+  mainBtn: { marginTop: 16, alignSelf: "flex-start", paddingHorizontal: 28 },
+  runBtn: { marginTop: 24 },
+  mainBtnFull: { alignSelf: "stretch" },
+  progress: { marginTop: 16 },
+  progressHead: { flexDirection: "row", alignItems: "center", gap: 8 },
+  barNote: { marginTop: 8 },
+  spinStart: { alignSelf: "flex-start" },
+
+  // 파일 칸
+  zoneBig: { borderRadius: radius.lg, paddingVertical: 32, paddingHorizontal: 20, alignItems: "center", gap: 12 },
+  zoneSmall: { borderRadius: radius.lg, padding: 16, flexDirection: "row", alignItems: "center", gap: 14 },
+  zoneTextBig: { gap: 4 },
+  plusBig: { width: 44, height: 44, borderRadius: 22, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  plusSmall: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  plusText: { fontWeight: "400", lineHeight: 24 },
+  titleRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  tag: { borderRadius: radius.pill, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 1 },
+  hintGap: { marginTop: 2 },
+  file: { borderWidth: 1, borderRadius: radius.lg, padding: 14 },
+  fileRow: { flexDirection: "row", alignItems: "center", gap: 14 },
+  fileName: { lineHeight: 20 },
+  badge: { width: 36, height: 44, borderRadius: radius.sm, alignItems: "center", justifyContent: "center" },
+  badgeText: { fontSize: 11, fontWeight: "700", letterSpacing: 0.4 },
+
+  // 형광펜 색 줄
+  colorRow: { borderWidth: 1, borderRadius: radius.md, paddingVertical: 12, paddingHorizontal: 14 },
+  colorHead: { flexDirection: "row", alignItems: "center", gap: 12 },
+  swatch: { width: 20, height: 20, borderRadius: 10, borderWidth: 1 },
+  labelInput: { marginTop: 12, paddingVertical: 10, fontSize: 14 },
+
+  // 결과 화면
+  resultBar: {
+    flexDirection: "row", alignItems: "center", flexWrap: "wrap", justifyContent: "space-between",
+    rowGap: 10, columnGap: 16, paddingVertical: 12, borderBottomWidth: 1,
+  },
+  resultLinks: { flexDirection: "row", alignItems: "center", gap: 14 },
+  resultActions: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  vline: { width: 1, height: 14 },
+  notice: { paddingVertical: 10 },
+
+  // 오류 알림
+  toast: {
+    position: "absolute", bottom: 24, left: 16, right: 16,
+    flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 14, paddingHorizontal: 16, borderRadius: radius.md,
+  },
+  toastDot: { width: 8, height: 8, borderRadius: 4 },
+});

@@ -388,26 +388,56 @@ export function quickHtml(q: QuickSummary): string {
         const m = `<mark style="background:${it.kind === "highlight" ? it.color + "66" : "transparent"};${it.kind !== "highlight" ? `text-decoration:underline 2px ${it.color};` : ""}">${esc(it.sentence.mark)}</mark>`;
         main = `<p>${esc(it.sentence.before)}${m}${esc(it.sentence.after)}</p>`; // 띄어쓰기는 before·after에 원문대로 들어 있다
       } else if (it.text) {
-        main = `<p>${it.kind === "memo" ? "📝 " : ""}${esc(it.text).replace(/\n/g, "<br>")}</p>`;
+        main = `<p>${esc(it.text).replace(/\n/g, "<br>")}</p>`;
       } else {
         main = "";
       }
       const pic = it.kind === "handwriting" || it.kind === "mark" || (!it.text && it.kind !== "memo") ? inkSvg(it) : "";
-      return `<li style="border-left-color:${it.color}">${main}${pic}<small>${LABEL[it.kind]}</small></li>`;
+      // --c: 표시한 펜·형광펜 색 (종류 이름 앞의 작은 점)
+      return `<li style="--c:${it.color}">${main}${pic}<small>${LABEL[it.kind]}</small></li>`;
     }).join("");
     return `<section><h2>${page + 1}쪽</h2><ul>${rows}</ul></section>`;
   }).join("");
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(q.title)} 요약</title><style>
-:root{--bg:#faf9f6;--card:#fff;--ink:#202328;--muted:#6a707a;--line:#e5e2da}
-@media (prefers-color-scheme:dark){:root{--bg:#141518;--card:#1e2025;--ink:#e7e8ea;--muted:#9aa0a8;--line:#31343b}}
-body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 -apple-system,"Apple SD Gothic Neo","Noto Sans KR",sans-serif}
-main{max-width:820px;margin:0 auto;padding:28px 18px 60px}h1{margin:0 0 4px;font-size:26px}
-.meta{color:var(--muted);font-size:14px;margin-bottom:18px}.ov{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin-bottom:18px}
-h2{font-size:15px;color:var(--muted);border-bottom:1px solid var(--line);padding-bottom:4px;margin:26px 0 10px}
-ul{list-style:none;margin:0;padding:0}li{background:var(--card);border:1px solid var(--line);border-left:4px solid;border-radius:8px;padding:10px 14px;margin:8px 0}
-li p{margin:0}mark{color:inherit;font-weight:700;border-radius:3px;padding:0}small{display:block;color:var(--muted);font-size:12px;margin-top:4px}
-svg.ink{display:block;max-width:100%;height:auto;margin-top:4px;background:#fff;border-radius:6px}
-</style></head><body><main><h1>${esc(q.title)}</h1><div class="meta">기기에서 만든 요약 · ${stats || "표시 없음"}</div>
-${q.overview ? `<div class="ov"><b>개요</b> ${esc(q.overview)}</div>` : ""}${body || "<p>필기한 부분이 없어요.</p>"}</main></body></html>`;
+<title>${esc(q.title)} 요약</title><style>${QUICK_CSS}</style></head><body><main>
+<div class="kicker">기기에서 만든 요약</div><h1>${esc(q.title)}</h1><div class="meta">${stats || "표시 없음"}</div>
+${q.overview ? `<div class="ov"><b>개요</b> ${esc(q.overview)}</div>` : ""}${body || "<p class=\"empty\">필기한 부분이 없어요.</p>"}</main></body></html>`;
 }
+
+// 요약 HTML의 모양: 흰 바탕과 넉넉한 여백, 큰 제목, 회색 단계로 나눈 위계 (앱의 모던 미니멀과 같은 색)
+// 어두운 색은 기기 설정이 어두울 때, 또는 앱이 <html data-theme="dark">를 붙였을 때 쓴다
+// 검은 펜(기본 펜 색)은 글자색(--ink)으로 그려 어두운 화면에서도 보이게, 흰 펜은 밝은 화면에서 글자색으로 (--wp)
+const DARK_VARS = "color-scheme:dark;--bg:#121212;--ink:#F2F2F2;--sub:#D0D0D0;--muted:#9E9E9E;--line:#333333;--soft:#2A2A2A;--sunken:#1C1C1C;--wp:#FFFFFF";
+const BLACK = (sel: string, tail = "") => `${sel}[style*="#1F2328" i]${tail},${sel}[style*="#000000" i]${tail}`;
+const QUICK_CSS = `
+:root{color-scheme:light;--bg:#FFFFFF;--ink:#212121;--sub:#424242;--muted:#757575;--line:#E0E0E0;--soft:#EEEEEE;--sunken:#F5F5F5;--wp:var(--ink)}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){${DARK_VARS}}}
+:root[data-theme=dark]{${DARK_VARS}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.75 Pretendard,"Pretendard Variable",-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR","Malgun Gothic",system-ui,sans-serif;word-break:keep-all;overflow-wrap:anywhere;-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%}
+main{max-width:760px;margin:0 auto;padding:48px 24px 96px}
+.kicker{font-size:13px;line-height:20px;font-weight:600;color:var(--muted)}
+h1{margin:8px 0 8px;font-size:30px;line-height:1.3;font-weight:700;letter-spacing:-.02em}
+.meta{font-size:14px;line-height:20px;color:var(--muted)}
+.ov{margin:32px 0 0;padding:16px 20px;border-radius:12px;background:var(--sunken);color:var(--sub)}
+.ov b{display:block;margin-bottom:4px;font-size:12px;line-height:16px;font-weight:700;color:var(--muted)}
+section{margin-top:48px}
+h2{margin:0;padding-bottom:12px;border-bottom:1px solid var(--line);font-size:18px;line-height:26px;font-weight:700;letter-spacing:-.01em}
+ul{list-style:none;margin:0;padding:0}
+li{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:20px 0;border-bottom:1px solid var(--soft)}
+li:last-child{border-bottom:0}
+li p{margin:0;align-self:stretch}
+li small{order:-1;display:inline-flex;align-items:center;gap:8px;font-size:12px;line-height:16px;font-weight:600;color:var(--muted)}
+li small::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--c,var(--muted));box-shadow:0 0 0 1px var(--soft)}
+mark{color:inherit;font-weight:600;padding:2px;margin:0 -2px;border-radius:4px;text-underline-offset:4px;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+svg.ink{display:block;max-width:100%;height:auto}
+svg.ink [stroke="#1F2328" i],svg.ink [stroke="#000000" i]{stroke:var(--ink)}
+svg.ink [fill="#1F2328" i],svg.ink [fill="#000000" i]{fill:var(--ink)}
+svg.ink [stroke="#FFFFFF" i]{stroke:var(--wp)}
+svg.ink [fill="#FFFFFF" i]{fill:var(--wp)}
+.empty{margin:40px 0 0;color:var(--muted)}
+${BLACK("li", " small::before")}{background:var(--ink)}
+li[style*="#FFFFFF" i] small::before{background:var(--wp)}
+${BLACK("mark")},mark[style*="#FFFFFF" i]{text-decoration-color:currentColor!important}
+@media (max-width:600px){main{padding:32px 16px 72px}h1{font-size:26px}section{margin-top:40px}}
+`;

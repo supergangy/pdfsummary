@@ -1,12 +1,12 @@
 // 노트 목록: PDF 가져오기, 새 노트(속지 고르기), 열기·이름 바꾸기·지우기
 import * as DocumentPicker from "expo-document-picker";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Image, Modal, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from "react-native";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { ActivityIndicator, Alert, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { available as pdfAvailable } from "../../modules/pdf-pages";
 import type { Picked } from "../platform/types";
-import { Button, Hint, useTheme } from "../ui";
+import { Button, Chip, floating, Hint, radius, ScreenTitle, styles as ui, type, useTheme, type Theme } from "../ui";
 import { keepFolder } from "./app-nav";
 import { importPdf } from "./importPdf";
 import { PACK_EXT, packNotebook, unpackNotebook } from "./pack";
@@ -36,6 +36,14 @@ const PAPERS: { value: Paper; label: string }[] = [
   { value: "dotted", label: "점" },
   { value: "plain", label: "무지" },
 ];
+
+/** 화면 크기에 따른 여백: 넓은 화면(태블릿)은 넉넉하게, 폰은 조금 좁게 */
+const WIDE = 700;
+const MAX_W = 1200; // 아주 넓은 화면에서는 가운데로 모은다
+const MIN_CARD = 180; // 노트 카드의 가장 좁은 너비
+
+/** 창 뒤를 덮는 옅은 그늘 (어두운 모드는 조금 더 진하게) */
+const backdrop = (t: Theme) => (t.dark ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.25)");
 
 export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syncStatus, onSync, folder, onFolder: setFolder }: Props) {
   const t = useTheme();
@@ -187,69 +195,86 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
   const counts = new Map<string, number>();
   for (const nb of list ?? []) if (nb.folder) counts.set(nb.folder, (counts.get(nb.folder) ?? 0) + 1);
 
-  const cols = Math.max(2, Math.min(6, Math.floor((Math.min(width, 1200) - 32) / 180)));
-  const cardW = (Math.min(width, 1200) - 32 - (cols - 1) * 14) / cols;
+  // 넓은 화면은 여백·간격을 넉넉하게. 카드 너비는 줄마다 꼭 맞게 나눈다
+  const wide = width >= WIDE;
+  const pad = wide ? 24 : 16;
+  const gap = wide ? 24 : 16;
+  const inner = Math.min(width, MAX_W) - pad * 2;
+  const cols = Math.max(2, Math.min(6, Math.floor((inner + gap) / (MIN_CARD + gap))));
+  const cardW = Math.floor((inner - (cols - 1) * gap) / cols);
+
+  const syncLabel = syncStatus
+    ? syncStatus.state === "offline" ? "연결 안 됨" : syncStatus.waiting || syncStatus.state === "syncing" ? "동기화 중" : "동기화됨"
+    : "동기화";
+  const topButtons = (
+    <View style={s.topButtons}>
+      <Button small label={syncLabel} accessibilityLabel={syncStatus ? `동기화: ${statusText(syncStatus)}` : "동기화 켜기"} onPress={onSync} />
+      <Button small label="설정" onPress={onSettings} />
+    </View>
+  );
+  const subText = "PDF 교재에 바로 필기하고, 칠한 부분만 모아 요약해요.";
+  // 폰에서는 단추 네 개를 두 줄로 반씩 나눠 가지런히
+  const actionStyle = wide ? undefined : s.actionHalf;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }}>
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 60, width: "100%", maxWidth: 1200, alignSelf: "center" }}>
-        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 6, marginBottom: 16 }}>
-          <View style={{ flex: 1, minWidth: 200 }}>
-            <Text style={{ color: t.ink, fontSize: 26, fontWeight: "800" }}>📚 필기 노트</Text>
-            <Text style={{ color: t.muted, marginTop: 2 }}>PDF 교재에 바로 필기하고, 칠한 부분만 모아 요약해요.</Text>
-          </View>
-          <Button
-            label={syncStatus ? `☁️ ${syncStatus.state === "offline" ? "연결 안 됨" : syncStatus.waiting || syncStatus.state === "syncing" ? "동기화 중" : "동기화됨"}` : "☁️ 동기화"}
-            accessibilityLabel={syncStatus ? `동기화: ${statusText(syncStatus)}` : "동기화 켜기"}
-            onPress={onSync}
-            style={{ paddingVertical: 8 }}
-          />
-          <Button label="설정" onPress={onSettings} style={{ paddingVertical: 8 }} />
-        </View>
-
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 18 }}>
-          <Button kind="primary" label="📄 PDF 가져오기" onPress={pickPdf} disabled={!pdfAvailable} />
-          <Button label="＋ 새 노트" onPress={() => setNewOpen(true)} />
-          <Button label="📦 노트 파일 가져오기" onPress={pickPack} />
-          <Button label="✨ PDF만 넣어 요약하기" onPress={onSummaryTool} />
-        </View>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingBottom: 14 }}>
-          <Chip label={`전체 ${list?.length ?? ""}`} on={folder === null} onPress={() => setFolder(null)} />
-          {folders.map((f) => (
-            <Chip key={f} label={`📁 ${f} ${counts.get(f) ?? 0}`} on={folder === f} onPress={() => setFolder(f)} onLongPress={() => deleteFolder(f)} />
-          ))}
-          <Chip label="＋ 폴더" on={false} onPress={() => setFolderDialog(true)} />
-          {folder !== null && <Chip label="폴더 지우기" on={false} onPress={() => deleteFolder(folder)} />}
-        </ScrollView>
-        {!pdfAvailable && <Hint>이 앱(Expo Go 등)에서는 PDF를 열 수 없어요. 개발용 빌드에서 쓸 수 있어요. 빈 노트는 쓸 수 있어요.</Hint>}
-        {!!err && <Hint color={t.bad} style={{ marginBottom: 10 }}>{err}</Hint>}
-
-        {shown === null ? (
-          <ActivityIndicator color={t.accent} style={{ marginTop: 30 }} />
-        ) : shown.length === 0 && folder !== null ? (
-          <Text style={{ color: t.muted, paddingVertical: 30, textAlign: "center" }}>이 폴더에 노트가 없어요. 노트의 ⋯ → '폴더로 옮기기'로 넣을 수 있어요.</Text>
-        ) : shown.length === 0 ? (
-          <View style={{ alignItems: "center", paddingVertical: 40, gap: 8 }}>
-            <Text style={{ fontSize: 40 }}>📝</Text>
-            <Text style={{ color: t.ink, fontSize: 17, fontWeight: "600" }}>아직 노트가 없어요</Text>
-            <Text style={{ color: t.muted, textAlign: "center" }}>
-              교재 PDF를 가져오거나 새 노트를 만들어 보세요.{"\n"}굿노트·삼성노트 등에서 PDF를 공유 → '필기 요약'으로 보내도 돼요.
-            </Text>
-          </View>
+      <ScrollView contentContainerStyle={[s.page, { paddingHorizontal: pad, paddingTop: wide ? 32 : 20 }]}>
+        {wide ? (
+          <ScreenTitle title="필기 노트" sub={subText} right={topButtons} />
         ) : (
-          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 14 }}>
-            {shown.map((nb) => (
-              <NoteCard key={nb.id} nb={nb} store={store} width={cardW} onPress={() => onOpen(nb.id)} onMore={() => setActions(nb)} />
-            ))}
+          <View style={{ gap: 4 }}>
+            <ScreenTitle title="필기 노트" right={topButtons} />
+            <Text style={[type.body, { color: t.muted }]}>{subText}</Text>
           </View>
         )}
+
+        <View style={[s.actions, { marginTop: wide ? 28 : 20 }]}>
+          <Button kind="primary" label="PDF 가져오기" onPress={pickPdf} disabled={!pdfAvailable} style={actionStyle} />
+          <Button label="＋ 새 노트" onPress={() => setNewOpen(true)} style={actionStyle} />
+          <Button label="노트 파일 가져오기" onPress={pickPack} style={actionStyle} />
+          <Button label="PDF만 넣어 요약하기" onPress={onSummaryTool} style={actionStyle} />
+        </View>
+
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: wide ? 28 : 24 }} contentContainerStyle={s.chips}>
+          <Chip role="button" label={`전체 ${list?.length ?? ""}`} on={folder === null} onPress={() => setFolder(null)} />
+          {folders.map((f) => (
+            <Chip key={f} role="button" label={`${f} ${counts.get(f) ?? 0}`} on={folder === f} onPress={() => setFolder(f)} onLongPress={() => deleteFolder(f)} />
+          ))}
+          <GhostPill label="＋ 폴더" onPress={() => setFolderDialog(true)} />
+          {folder !== null && <GhostPill label="폴더 지우기" onPress={() => deleteFolder(folder)} />}
+        </ScrollView>
+        {!pdfAvailable && <Hint style={{ marginTop: 12 }}>이 앱(Expo Go 등)에서는 PDF를 열 수 없어요. 개발용 빌드에서 쓸 수 있어요. 빈 노트는 쓸 수 있어요.</Hint>}
+        {!!err && <Hint color={t.bad} style={{ marginTop: 12 }}>{err}</Hint>}
+
+        <View style={{ marginTop: wide ? 24 : 20 }}>
+          {shown === null ? (
+            <ActivityIndicator color={t.muted} style={{ marginTop: 48 }} />
+          ) : shown.length === 0 && folder !== null ? (
+            <Empty>
+              <Text style={[type.body, { color: t.muted, textAlign: "center" }]}>이 폴더에 노트가 없어요. 노트의 ⋯ → '폴더로 옮기기'로 넣을 수 있어요.</Text>
+            </Empty>
+          ) : shown.length === 0 ? (
+            <Empty>
+              <Text style={[type.title, { color: t.ink, textAlign: "center" }]}>아직 노트가 없어요</Text>
+              <Text style={[type.body, { color: t.muted, textAlign: "center" }]}>
+                교재 PDF를 가져오거나 새 노트를 만들어 보세요.{"\n"}굿노트·삼성노트 등에서 PDF를 공유 → '필기 요약'으로 보내도 돼요.
+              </Text>
+            </Empty>
+          ) : (
+            <View style={[s.grid, { columnGap: gap, rowGap: wide ? 32 : 24 }]}>
+              {shown.map((nb) => (
+                <NoteCard key={nb.id} nb={nb} store={store} width={cardW} onPress={() => onOpen(nb.id)} onMore={() => setActions(nb)} />
+              ))}
+            </View>
+          )}
+        </View>
       </ScrollView>
 
       {!!busy && (
-        <View style={{ position: "absolute", inset: 0, backgroundColor: "rgba(0,0,0,0.25)", alignItems: "center", justifyContent: "center" }}>
-          <View style={{ backgroundColor: t.card, padding: 20, borderRadius: 12, flexDirection: "row", gap: 10, alignItems: "center" }}>
-            <ActivityIndicator color={t.accent} />
-            <Text style={{ color: t.ink }}>{busy}</Text>
+        <View style={[s.busyWrap, { backgroundColor: backdrop(t) }]}>
+          <View style={[floating(t), s.busyBox]}>
+            <ActivityIndicator color={t.ink} />
+            <Text style={[type.body, { color: t.ink }]}>{busy}</Text>
           </View>
         </View>
       )}
@@ -257,38 +282,27 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
       <NewNoteDialog visible={newOpen} onCancel={() => setNewOpen(false)} onCreate={createBlank} />
       <NameDialog visible={folderDialog} title="새 폴더" placeholder="폴더 이름 (예: 정보처리기사)" onCancel={() => setFolderDialog(false)} onDone={addFolder} />
       <Modal visible={!!moving} transparent animationType="fade" onRequestClose={() => setMoving(null)}>
-        <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)", alignItems: "center", justifyContent: "center", padding: 20 }} onPress={() => setMoving(null)}>
-          <Pressable style={{ backgroundColor: t.card, borderRadius: 12, minWidth: 260, paddingVertical: 6 }} onPress={() => {}}>
-            <Text style={{ color: t.muted, paddingHorizontal: 16, paddingVertical: 10 }}>어느 폴더로 옮길까요?</Text>
+        <Pressable style={[s.backdrop, { backgroundColor: backdrop(t) }]} onPress={() => setMoving(null)}>
+          <Pressable style={[floating(t), s.menu]} onPress={() => {}}>
+            <Text style={[type.heading, s.menuHead, { color: t.ink }]}>어느 폴더로 옮길까요?</Text>
             {folders.map((f) => (
-              <Pressable key={f} onPress={() => moving && moveNote(moving, f)} style={{ paddingHorizontal: 16, paddingVertical: 12 }} accessibilityRole="menuitem">
-                <Text style={{ color: moving?.folder === f ? t.accent : t.ink, fontSize: 15 }}>📁 {f}{moving?.folder === f ? " (지금)" : ""}</Text>
-              </Pressable>
+              <MenuItem key={f} label={`${f}${moving?.folder === f ? " (지금)" : ""}`} muted={moving?.folder === f} onPress={() => moving && moveNote(moving, f)} />
             ))}
-            <Pressable onPress={() => moving && moveNote(moving, undefined)} style={{ paddingHorizontal: 16, paddingVertical: 12 }} accessibilityRole="menuitem">
-              <Text style={{ color: t.ink, fontSize: 15 }}>폴더 밖으로</Text>
-            </Pressable>
-            {!folders.length && <Text style={{ color: t.muted, paddingHorizontal: 16, paddingBottom: 10 }}>먼저 '＋ 폴더'로 폴더를 만들어 주세요.</Text>}
+            <MenuItem label="폴더 밖으로" onPress={() => moving && moveNote(moving, undefined)} />
+            {!folders.length && <Text style={[type.caption, s.menuNote, { color: t.muted }]}>먼저 '＋ 폴더'로 폴더를 만들어 주세요.</Text>}
           </Pressable>
         </Pressable>
       </Modal>
 
       <Modal visible={!!actions} transparent animationType="fade" onRequestClose={() => setActions(null)}>
-        <Pressable style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)", alignItems: "center", justifyContent: "center", padding: 20 }} onPress={() => setActions(null)}>
-          <Pressable style={{ backgroundColor: t.card, borderRadius: 12, minWidth: 260, paddingVertical: 6 }} onPress={() => {}}>
-            <Text style={{ color: t.muted, paddingHorizontal: 16, paddingVertical: 10 }} numberOfLines={1}>{actions?.title}</Text>
-            <Pressable onPress={() => actions && onOpen(actions.id)} style={{ paddingHorizontal: 16, paddingVertical: 12 }} accessibilityRole="menuitem">
-              <Text style={{ color: t.ink, fontSize: 15 }}>열기</Text>
-            </Pressable>
-            <Pressable onPress={() => { setMoving(actions); setActions(null); }} style={{ paddingHorizontal: 16, paddingVertical: 12 }} accessibilityRole="menuitem">
-              <Text style={{ color: t.ink, fontSize: 15 }}>📁 폴더로 옮기기</Text>
-            </Pressable>
-            <Pressable onPress={() => actions && sendPack(actions)} style={{ paddingHorizontal: 16, paddingVertical: 12 }} accessibilityRole="menuitem">
-              <Text style={{ color: t.ink, fontSize: 15 }}>📦 다른 기기로 보내기 (노트 파일)</Text>
-            </Pressable>
-            <Pressable onPress={() => actions && remove(actions)} style={{ paddingHorizontal: 16, paddingVertical: 12 }} accessibilityRole="menuitem">
-              <Text style={{ color: t.bad, fontSize: 15 }}>🗑 노트 지우기</Text>
-            </Pressable>
+        <Pressable style={[s.backdrop, { backgroundColor: backdrop(t) }]} onPress={() => setActions(null)}>
+          <Pressable style={[floating(t), s.menu]} onPress={() => {}}>
+            <Text style={[type.heading, s.menuHead, { color: t.ink }]} numberOfLines={1}>{actions?.title}</Text>
+            <MenuItem label="열기" onPress={() => actions && onOpen(actions.id)} />
+            <MenuItem label="폴더로 옮기기" onPress={() => { setMoving(actions); setActions(null); }} />
+            <MenuItem label="다른 기기로 보내기 (노트 파일)" onPress={() => actions && sendPack(actions)} />
+            <View style={[s.menuLine, { backgroundColor: t.lineSoft }]} />
+            <MenuItem label="노트 지우기" danger onPress={() => actions && remove(actions)} />
           </Pressable>
         </Pressable>
       </Modal>
@@ -322,42 +336,77 @@ function NoteCard({ nb, store, width, onPress, onMore }: { nb: Notebook; store: 
       accessibilityLabel={`${nb.title} 열기`}
       style={({ pressed }) => ({ width, opacity: pressed ? 0.85 : 1 })}
     >
-      <View style={{ width, height: h, borderRadius: 8, overflow: "hidden", backgroundColor: "#fff", borderWidth: 1, borderColor: t.line, alignItems: "center", justifyContent: "center" }}>
+      {/* 쪽 그림은 종이라서 어두운 모드에서도 흰 바탕 */}
+      <View style={[s.thumb, { width, height: h, borderColor: t.lineSoft }]}>
         {thumb ? (
           <Image source={{ uri: thumb }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
         ) : (
           <PaperThumb paper={first?.paper} />
         )}
       </View>
-      <View style={{ flexDirection: "row", alignItems: "center", marginTop: 6 }}>
-        <View style={{ flex: 1 }}>
-          <Text style={{ color: t.ink, fontWeight: "600" }} numberOfLines={1}>{nb.title}</Text>
-          <Text style={{ color: t.muted, fontSize: 12 }}>
+      <View style={s.cardFoot}>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={[type.label, s.cardTitle, { color: t.ink }]} numberOfLines={1}>{nb.title}</Text>
+          <Text style={[type.caption, { color: t.muted }]}>
             {nb.pages.length}쪽 · {date.getMonth() + 1}/{date.getDate()} {String(date.getHours()).padStart(2, "0")}:{String(date.getMinutes()).padStart(2, "0")}
           </Text>
         </View>
-        <Pressable onPress={onMore} hitSlop={10} accessibilityRole="button" accessibilityLabel={`${nb.title} 더 보기`}>
-          <Text style={{ color: t.muted, fontSize: 20, paddingHorizontal: 4 }}>⋯</Text>
+        <Pressable
+          onPress={onMore}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel={`${nb.title} 더 보기`}
+          style={({ pressed }) => [s.more, pressed && { backgroundColor: t.sunken }]}
+        >
+          <Text style={{ color: t.muted, fontSize: 18, lineHeight: 20 }}>⋯</Text>
         </Pressable>
       </View>
     </Pressable>
   );
 }
 
-function PaperThumb({ paper }: { paper?: Paper }) {
-  const lines = Array.from({ length: 9 });
+/** 빈 노트의 겉모습: 속지 무늬를 옅게 (줄·모눈·점, 무지는 비워 둔다). small = 새 노트 창의 작은 견본 */
+function PaperThumb({ paper, small }: { paper?: Paper; small?: boolean }) {
+  const rows = small ? 7 : 12;
   if (paper === "lined") {
     return (
-      <View style={{ width: "100%", height: "100%", paddingTop: 22 }}>
-        {lines.map((_, i) => <View key={i} style={{ height: 1, backgroundColor: "#C9DCF0", marginHorizontal: 10, marginBottom: 12 }} />)}
+      <View style={[s.paperFill, s.paperCol, { paddingHorizontal: small ? 8 : 12 }]}>
+        {Array.from({ length: rows }, (_, i) => <View key={i} style={[s.paperLine, { backgroundColor: PAPER_LINE }]} />)}
       </View>
     );
   }
-  if (paper === "grid" || paper === "dotted") {
-    return <Text style={{ color: "#B8C2CC", fontSize: 30 }}>{paper === "grid" ? "▦" : "⁘"}</Text>;
+  if (paper === "grid") {
+    const cols = small ? 5 : 8;
+    return (
+      <View style={s.paperFill}>
+        <View style={[StyleSheet.absoluteFill, s.paperCol]}>
+          {Array.from({ length: rows + 2 }, (_, i) => <View key={i} style={[s.paperLine, { backgroundColor: PAPER_GRID }]} />)}
+        </View>
+        <View style={[StyleSheet.absoluteFill, s.paperRow]}>
+          {Array.from({ length: cols }, (_, i) => <View key={i} style={{ width: 1, backgroundColor: PAPER_GRID }} />)}
+        </View>
+      </View>
+    );
   }
-  return <Text style={{ color: "#C8CCD2", fontSize: 30 }}>📄</Text>;
+  if (paper === "dotted") {
+    const cols = small ? 5 : 7;
+    return (
+      <View style={[s.paperFill, s.paperCol]}>
+        {Array.from({ length: rows }, (_, r) => (
+          <View key={r} style={s.paperRow}>
+            {Array.from({ length: cols }, (_, c) => <View key={c} style={[s.dot, { backgroundColor: PAPER_DOT }]} />)}
+          </View>
+        ))}
+      </View>
+    );
+  }
+  return null;
 }
+
+// 속지 무늬 색 (종이 위라서 모드와 관계없이 같다)
+const PAPER_LINE = "#CFDDEB";
+const PAPER_GRID = "#E1E7EE";
+const PAPER_DOT = "#B9C3CD";
 
 function NewNoteDialog({ visible, onCancel, onCreate }: { visible: boolean; onCancel: () => void; onCreate: (p: Paper, title: string) => void }) {
   const t = useTheme();
@@ -367,54 +416,43 @@ function NewNoteDialog({ visible, onCancel, onCreate }: { visible: boolean; onCa
     if (visible) setTitle("");
   }, [visible]);
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)", alignItems: "center", justifyContent: "center", padding: 20 }}>
-        <View style={{ backgroundColor: t.card, borderRadius: 12, padding: 18, width: "100%", maxWidth: 440 }}>
-          <Text style={{ color: t.ink, fontWeight: "700", fontSize: 18, marginBottom: 12 }}>새 노트</Text>
-          <TextInput
-            value={title}
-            onChangeText={setTitle}
-            placeholder="노트 이름 (예: 정보처리기사 오답)"
-            placeholderTextColor={t.muted}
-            accessibilityLabel="새 노트 이름"
-            style={{ borderWidth: 1, borderColor: t.line, borderRadius: 8, padding: 10, color: t.ink, fontSize: 16, marginBottom: 14 }}
-          />
-          <Text style={{ color: t.ink, fontWeight: "600", marginBottom: 8 }}>속지</Text>
-          <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
-            {PAPERS.map((p) => (
-              <Pressable
-                key={p.value}
-                onPress={() => setPaper(p.value)}
-                accessibilityRole="radio"
-                accessibilityState={{ selected: paper === p.value }}
-                style={{ paddingHorizontal: 16, paddingVertical: 9, borderRadius: 8, borderWidth: 1, borderColor: paper === p.value ? t.accent : t.line, backgroundColor: paper === p.value ? t.soft : t.card }}
-              >
-                <Text style={{ color: paper === p.value ? t.accent : t.ink, fontWeight: "600" }}>{p.label}</Text>
-              </Pressable>
-            ))}
-          </View>
-          <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
-            <Button label="취소" onPress={onCancel} />
-            <Button kind="primary" label="만들기" onPress={() => onCreate(paper, title)} />
-          </View>
-        </View>
+    <Dialog visible={visible} onCancel={onCancel} title="새 노트" maxWidth={460}>
+      <TextInput
+        value={title}
+        onChangeText={setTitle}
+        placeholder="노트 이름 (예: 정보처리기사 오답)"
+        placeholderTextColor={t.muted}
+        accessibilityLabel="새 노트 이름"
+        style={[ui.input, { borderColor: t.line, color: t.ink, backgroundColor: t.card }]}
+      />
+      <Text style={[type.label, { color: t.ink, marginTop: 24, marginBottom: 12 }]}>속지</Text>
+      <View style={s.papers}>
+        {PAPERS.map((p) => {
+          const on = paper === p.value;
+          return (
+            <Pressable
+              key={p.value}
+              onPress={() => setPaper(p.value)}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: on }}
+              style={({ pressed }) => [s.paperPick, { opacity: pressed ? 0.75 : 1 }]}
+            >
+              {/* 고른 속지는 검은 테두리로 감싼다 (어두운 모드에서는 흰 테두리) */}
+              <View style={[s.paperRing, { borderColor: on ? t.ink : "transparent" }]}>
+                <View style={[s.paperSample, { borderColor: t.line }]}>
+                  <PaperThumb paper={p.value} small />
+                </View>
+              </View>
+              <Text style={[type.caption, { color: on ? t.ink : t.muted, fontWeight: on ? "700" : "500" }]}>{p.label}</Text>
+            </Pressable>
+          );
+        })}
       </View>
-    </Modal>
-  );
-}
-
-function Chip({ label, on, onPress, onLongPress }: { label: string; on: boolean; onPress: () => void; onLongPress?: () => void }) {
-  const t = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      onLongPress={onLongPress}
-      accessibilityRole="button"
-      accessibilityState={{ selected: on }}
-      style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: 18, borderWidth: 1, borderColor: on ? t.accent : t.line, backgroundColor: on ? t.accent : t.card }}
-    >
-      <Text style={{ color: on ? t.accentInk : t.ink, fontWeight: "600" }}>{label}</Text>
-    </Pressable>
+      <View style={s.dialogButtons}>
+        <Button label="취소" onPress={onCancel} />
+        <Button kind="primary" label="만들기" onPress={() => onCreate(paper, title)} />
+      </View>
+    </Dialog>
   );
 }
 
@@ -425,26 +463,105 @@ function NameDialog({ visible, title, placeholder, onCancel, onDone }: { visible
     if (visible) setV("");
   }, [visible]);
   return (
+    <Dialog visible={visible} onCancel={onCancel} title={title} maxWidth={420}>
+      <TextInput
+        value={v}
+        onChangeText={setV}
+        autoFocus
+        placeholder={placeholder}
+        placeholderTextColor={t.muted}
+        accessibilityLabel={title}
+        onSubmitEditing={() => onDone(v)}
+        style={[ui.input, { borderColor: t.line, color: t.ink, backgroundColor: t.card }]}
+      />
+      <View style={s.dialogButtons}>
+        <Button label="취소" onPress={onCancel} />
+        <Button kind="primary" label="만들기" onPress={() => onDone(v)} />
+      </View>
+    </Dialog>
+  );
+}
+
+/** 가운데 뜨는 창 (바탕을 눌러도 닫히지 않는다) */
+function Dialog({ visible, onCancel, title, maxWidth, children }: { visible: boolean; onCancel: () => void; title: string; maxWidth: number; children: ReactNode }) {
+  const t = useTheme();
+  return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-      <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.3)", alignItems: "center", justifyContent: "center", padding: 20 }}>
-        <View style={{ backgroundColor: t.card, borderRadius: 12, padding: 18, width: "100%", maxWidth: 420 }}>
-          <Text style={{ color: t.ink, fontWeight: "700", fontSize: 17, marginBottom: 10 }}>{title}</Text>
-          <TextInput
-            value={v}
-            onChangeText={setV}
-            autoFocus
-            placeholder={placeholder}
-            placeholderTextColor={t.muted}
-            accessibilityLabel={title}
-            onSubmitEditing={() => onDone(v)}
-            style={{ borderWidth: 1, borderColor: t.line, borderRadius: 8, padding: 10, color: t.ink, fontSize: 16 }}
-          />
-          <View style={{ flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 14 }}>
-            <Button label="취소" onPress={onCancel} />
-            <Button kind="primary" label="만들기" onPress={() => onDone(v)} />
-          </View>
+      <View style={[s.backdrop, { backgroundColor: backdrop(t) }]}>
+        <View style={[floating(t), s.dialog, { maxWidth }]}>
+          <Text style={[type.title, { color: t.ink, marginBottom: 20 }]}>{title}</Text>
+          {children}
         </View>
       </View>
     </Modal>
   );
 }
+
+/** 메뉴 한 줄. danger = 지우기처럼 되돌릴 수 없는 일, muted = 지금 상태라 고를 필요 없는 것 */
+function MenuItem({ label, onPress, danger, muted }: { label: string; onPress: () => void; danger?: boolean; muted?: boolean }) {
+  const t = useTheme();
+  return (
+    <Pressable onPress={onPress} accessibilityRole="menuitem" style={({ pressed }) => [s.menuItem, pressed && { backgroundColor: t.sunken }]}>
+      <Text style={[type.body, { color: danger ? t.bad : muted ? t.muted : t.ink }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/** 폴더 줄 끝의 '할 일' 알약 (폴더 추가·지우기): 고르는 칩과 헷갈리지 않게 바탕 없이 테두리만 */
+function GhostPill({ label, onPress }: { label: string; onPress: () => void }) {
+  const t = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      style={({ pressed }) => [ui.chip, s.ghost, { borderColor: t.line, opacity: pressed ? 0.6 : 1 }]}
+    >
+      <Text style={{ color: t.sub, fontSize: 14, fontWeight: "500", letterSpacing: -0.2 }}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/** 노트가 없을 때: 옅은 테두리 상자 안에 조용히 가운데 정렬 */
+function Empty({ children }: { children: ReactNode }) {
+  const t = useTheme();
+  return <View style={[s.empty, { borderColor: t.lineSoft }]}>{children}</View>;
+}
+
+const s = StyleSheet.create({
+  page: { paddingBottom: 64, width: "100%", maxWidth: MAX_W, alignSelf: "center" },
+  topButtons: { flexDirection: "row", gap: 8, alignSelf: "center" },
+  actions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  actionHalf: { flexGrow: 1, flexBasis: "40%", paddingHorizontal: 10 },
+  chips: { gap: 8, alignItems: "center" },
+  ghost: { borderWidth: 1, backgroundColor: "transparent", paddingVertical: 7 },
+  grid: { flexDirection: "row", flexWrap: "wrap" },
+  empty: { borderWidth: 1, borderRadius: radius.xl, paddingVertical: 56, paddingHorizontal: 20, alignItems: "center", gap: 8 },
+
+  thumb: { borderRadius: radius.md, borderWidth: 1, overflow: "hidden", backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center" },
+  cardFoot: { flexDirection: "row", alignItems: "center", marginTop: 12, gap: 4 },
+  cardTitle: { fontSize: 15, fontWeight: "700", letterSpacing: -0.2 },
+  more: { width: 32, height: 32, borderRadius: radius.sm, alignItems: "center", justifyContent: "center" },
+
+  paperFill: { width: "100%", height: "100%" },
+  paperCol: { justifyContent: "space-evenly" },
+  paperRow: { flexDirection: "row", justifyContent: "space-evenly" },
+  paperLine: { height: 1 },
+  dot: { width: 3, height: 3, borderRadius: 1.5 },
+
+  backdrop: { flex: 1, alignItems: "center", justifyContent: "center", padding: 20 },
+  dialog: { borderRadius: radius.xl, padding: 24, width: "100%" },
+  dialogButtons: { flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 28 },
+  papers: { flexDirection: "row", gap: 12 },
+  paperPick: { flex: 1, alignItems: "center", gap: 8 },
+  paperRing: { width: "100%", borderWidth: 2, borderRadius: radius.md, padding: 2 },
+  paperSample: { aspectRatio: 3 / 4, borderWidth: 1, borderRadius: radius.sm, overflow: "hidden", backgroundColor: "#FFFFFF" },
+
+  menu: { borderRadius: radius.xl, minWidth: 280, maxWidth: 360, paddingVertical: 8 },
+  menuHead: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 },
+  menuItem: { marginHorizontal: 8, paddingHorizontal: 12, paddingVertical: 12, borderRadius: radius.md },
+  menuNote: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 12 },
+  menuLine: { height: 1, marginHorizontal: 20, marginVertical: 6 },
+
+  busyWrap: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, alignItems: "center", justifyContent: "center" },
+  busyBox: { paddingVertical: 20, paddingHorizontal: 24, borderRadius: radius.lg, flexDirection: "row", gap: 12, alignItems: "center" },
+});

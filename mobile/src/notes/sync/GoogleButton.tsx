@@ -2,9 +2,9 @@
 import { GoogleSignin, isErrorWithCode, statusCodes } from "@react-native-google-signin/google-signin";
 import Constants from "expo-constants";
 import { useState } from "react";
-import { Platform } from "react-native";
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from "react-native";
 
-import { Button } from "../../ui";
+import { radius, useTheme } from "../../ui";
 
 export type GoogleIds = { web: string; ios?: string };
 export type GoogleButtonProps = {
@@ -24,6 +24,7 @@ export function googleAvailable(ids: GoogleIds | null | undefined): ids is Googl
 }
 
 export function GoogleButton({ ids, onToken, onError, label = "Google로 계속하기" }: GoogleButtonProps) {
+  const t = useTheme();
   const [busy, setBusy] = useState(false);
   const press = async () => {
     setBusy(true);
@@ -44,5 +45,25 @@ export function GoogleButton({ ids, onToken, onError, label = "Google로 계속�
       setBusy(false);
     }
   };
-  return <Button label={`G  ${label}`} accessibilityLabel={label} onPress={() => void press()} busy={busy} style={{ alignSelf: "flex-start" }} />;
+  // 흰 바탕 + 옅은 테두리 단추. 왼쪽 'G'는 Google 파란색 (Google 로그인 단추 안내에 맞춤)
+  return (
+    <Pressable
+      onPress={() => void press()}
+      disabled={busy}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled: busy, busy }}
+      style={({ pressed }) => [s.btn, { backgroundColor: t.card, borderColor: t.line, opacity: pressed ? 0.75 : 1 }]}
+    >
+      <View style={s.mark}>{busy ? <ActivityIndicator size="small" color={t.ink} /> : <Text style={s.g}>G</Text>}</View>
+      <Text style={[s.label, { color: t.ink }]}>{label}</Text>
+    </Pressable>
+  );
 }
+
+const s = StyleSheet.create({
+  btn: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 10, minHeight: 46, paddingHorizontal: 18, borderWidth: 1, borderRadius: radius.md },
+  mark: { width: 20, alignItems: "center" },
+  g: { color: "#4285F4", fontSize: 18, fontWeight: "700" },
+  label: { fontSize: 15, fontWeight: "600", letterSpacing: -0.2 },
+});

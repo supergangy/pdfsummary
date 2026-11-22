@@ -110,7 +110,7 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await page.mouse.up();
     await page.waitForTimeout(400);
     if (await page.getByLabel("되돌리기").isDisabled()) fail("펜 획이 기록되지 않음");
-    await page.getByText("⌫ 지우개").click();
+    await page.getByLabel(/한 번 더 누르면 지우개 설정/).click();
     await page.mouse.move(x0 + 100, y0 - 30);
     await page.mouse.down();
     await page.mouse.move(x0 + 100, y0 + 40, { steps: 10 });
@@ -120,12 +120,12 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await page.waitForTimeout(400);
 
     // ── 도구 설정: 붓펜·파선 / 영역 지우개 / S펜 단추 지우개 ──
-    await page.getByText(/^✒️ /).click(); // 펜 고르기
-    await page.getByText(/^✒️ /).click(); // 한 번 더 → 설정 창
+    await page.getByLabel(/한 번 더 누르면 펜 설정/).click(); // 펜 고르기
+    await page.getByLabel(/한 번 더 누르면 펜 설정/).click(); // 한 번 더 → 설정 창
     const panel = page.getByLabel("펜 설정", { exact: true });
     await panel.waitFor({ timeout: 5000 });
     // 설정 창은 도구 모음을 가리지 않고 바로 밑에, 누른 도구 단추의 왼쪽 끝에 맞춰 뜬다
-    const penBox = await page.getByText(/^✒️ /).locator("..").boundingBox(); // 글자를 감싼 단추
+    const penBox = await page.getByLabel(/한 번 더 누르면 펜 설정/).boundingBox(); // 펜 단추
     const panelBox = await panel.boundingBox();
     if (panelBox.y < penBox.y + penBox.height) fail(`펜 설정 창이 도구 모음을 가림 (창 위 ${panelBox.y}, 단추 아래 ${penBox.y + penBox.height})`);
     if (panelBox.y > penBox.y + penBox.height + 24) fail(`펜 설정 창이 도구 모음에서 너무 떨어져 뜸 (창 위 ${panelBox.y})`);
@@ -143,8 +143,8 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     const fancy = all.find((st) => st.brush === "calligraphy" && st.dash === "dash");
     if (!fancy) fail("붓펜·파선으로 그은 획이 그 설정으로 저장되지 않음: " + JSON.stringify(all.map((x) => [x.brush, x.dash])));
     const before = all.length;
-    await page.getByText(/^⌫ /).click();
-    await page.getByText(/^⌫ /).click();
+    await page.getByLabel(/한 번 더 누르면 지우개 설정/).click();
+    await page.getByLabel(/한 번 더 누르면 지우개 설정/).click();
     const ep = page.getByLabel("지우개 설정", { exact: true });
     await ep.waitFor({ timeout: 5000 });
     await ep.getByLabel("영역 지우개", { exact: true }).click();
@@ -160,7 +160,7 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await page.waitForTimeout(1300);
     if ((await allStrokes(page)).length !== before) fail("영역 지우개를 되돌리기로 한 번에 되살리지 못함");
     // S펜(웹: 펜) 단추를 누른 채 문지르면 펜 도구여도 지우개 — 붓펜 획을 가로질러
-    await page.getByText(/^✒️ /).click();
+    await page.getByLabel(/한 번 더 누르면 펜 설정/).click();
     // 진짜(신뢰된) 펜 입력(크롬 개발자 도구 입력): 펜을 대고 긋다가 옆 단추(buttons 2)를 누르면 그때부터 지우개.
     // (단추를 누른 채 떠 있다가 닿는 경우는 웹 브라우저가 '오른쪽 단추 누름'으로 보내 그리기 자체가 시작되지 않는다 —
     //  태블릿 앱은 네이티브 S펜 감싸개로 떠 있을 때부터 단추를 안다)
@@ -187,7 +187,7 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     if (cal.length !== 2) fail(`펜 단추 지우개가 획을 나누지 않음 (붓펜 획 ${cal.length}개)`);
     console.log("✓ 도구 설정: 붓펜·파선 저장, 영역 지우개로 획 나누기·한 번에 되돌리기, 펜 단추 누르고 문지르면 지우개");
     // 이미 고른 펜을 빠르게 두 번 눌러도 설정 창이 떴다가 바로 닫히지 않는다
-    await page.getByText(/^✒️ /).dblclick();
+    await page.getByLabel(/한 번 더 누르면 펜 설정/).dblclick();
     const pp = page.getByLabel("펜 설정", { exact: true });
     await page.waitForTimeout(600);
     if (!(await pp.isVisible())) fail("펜 단추를 빠르게 두 번 누르면 설정 창이 바로 닫힘");
@@ -202,15 +202,15 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
         await page.waitForTimeout(60);
       }
     };
-    // 도구 모음에서 형광펜일 때만 '― 직선', 펜일 때만 '△ 도형 펴기'가 보인다
-    const selected = async (name) => page.getByText(name.startsWith("🖍") ? "― 직선" : "△ 도형 펴기", { exact: true }).isVisible();
+    // 도구 모음에서 형광펜일 때만 '직선', 펜일 때만 '도형 펴기'가 보인다
+    const selected = async (name) => page.getByText(name === "형광펜" ? "직선" : "도형 펴기", { exact: true }).isVisible();
     await doublePress();
     await page.getByText("형광펜으로 바꿨어요").waitFor({ timeout: 3000 });
-    if (!(await selected("🖍 형광펜"))) fail("S펜 단추를 두 번 눌렀는데 형광펜이 골라지지 않음");
+    if (!(await selected("형광펜"))) fail("S펜 단추를 두 번 눌렀는데 형광펜이 골라지지 않음");
     await page.waitForTimeout(600);
     await doublePress();
     await page.getByText("만년필로 돌아왔어요").waitFor({ timeout: 3000 });
-    if (!(await selected("✒️ 만년필"))) fail("다시 두 번 눌렀는데 원래 펜으로 돌아오지 않음");
+    if (!(await selected("만년필"))) fail("다시 두 번 눌렀는데 원래 펜으로 돌아오지 않음");
     // 한 번만 누르면(또는 천천히 두 번) 바뀌지 않는다
     await page.waitForTimeout(600);
     await penHover(2);
@@ -221,14 +221,14 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await page.waitForTimeout(60);
     await penHover(0);
     await page.waitForTimeout(300);
-    if (!(await selected("✒️ 만년필"))) fail("천천히 두 번 눌렀는데 도구가 바뀜");
+    if (!(await selected("만년필"))) fail("천천히 두 번 눌렀는데 도구가 바뀜");
     console.log("✓ S펜 단추 두 번: 형광펜으로 바꾸고 다시 두 번이면 원래 펜으로 (천천히 누르면 그대로)");
-    await page.getByText(/^⌫ /).click();
-    await page.getByText(/^⌫ /).click();
+    await page.getByLabel(/한 번 더 누르면 지우개 설정/).click();
+    await page.getByLabel(/한 번 더 누르면 지우개 설정/).click();
     await page.getByLabel("지우개 설정", { exact: true }).getByLabel("획 지우개", { exact: true }).click();
     await page.getByLabel("지우개 설정", { exact: true }).getByLabel("닫기", { exact: true }).click();
     // 올가미로 그 획을 골라 아래로 250px 옮긴다
-    await page.getByText("➰ 올가미").click();
+    await page.getByLabel(/둘러싸서 고르고 옮기기/).click();
     const lasso = [[x0 - 30, y0 - 30], [x0 + 230, y0 - 30], [x0 + 230, y0 + 50], [x0 - 30, y0 + 50], [x0 - 29, y0 - 29]];
     await page.mouse.move(lasso[0][0], lasso[0][1]);
     await page.mouse.down();
@@ -241,18 +241,18 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await page.mouse.up();
     await page.waitForTimeout(400);
     // 글상자
-    await page.getByText("T 글상자").click();
+    await page.getByLabel(/쪽을 누르면 글을 써 넣어요/).click();
     await page.mouse.click(x0 + 400, y0 + 120);
     await page.getByLabel("글상자 내용").fill("메모 시험: 효소는 촉매");
     await page.getByText("넣기", { exact: true }).click();
     await canvas.getByText("메모 시험: 효소는 촉매").waitFor({ timeout: 5000 });
-    await page.getByText(/^✒️ /).click();
+    await page.getByLabel(/한 번 더 누르면 펜 설정/).click();
     await page.getByLabel("노트 목록으로").click();
     await page.getByLabel("시험 노트 열기").click();
     await canvas.waitFor();
     await page.waitForTimeout(1000);
     await page.getByLabel("더 보기").click();
-    const [dl] = await Promise.all([page.waitForEvent("download"), page.getByText("📄 PDF로 내보내기 (필기 포함)").click()]);
+    const [dl] = await Promise.all([page.waitForEvent("download"), page.getByText("PDF로 내보내기 (필기 포함)").click()]);
     const out = path.join(TMP, "export.pdf");
     await dl.saveAs(out);
     // 쪽 좌표로: 빈 A4(595pt)가 화면 폭에 맞춰져 있다
@@ -281,18 +281,18 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     await page.getByText("이 폴더에 노트가 없어요", { exact: false }).waitFor();
     await page.getByText(/^전체/).click();
     await page.getByLabel("시험 노트 더 보기").click();
-    await page.getByText("📁 폴더로 옮기기").click();
-    await page.getByText("📁 수학", { exact: true }).click();
-    await page.getByText("📁 수학 1").waitFor({ timeout: 5000 });
+    await page.getByText("폴더로 옮기기").click();
+    await page.getByText("수학", { exact: true }).click();
+    await page.getByText("수학 1").waitFor({ timeout: 5000 });
     console.log("✓ 폴더 만들기·노트 옮기기, 쪽 모아보기");
 
     // ── 노트 파일로 내보냈다가 다시 가져오기 (다른 기기로 옮기기) ──
     await page.getByLabel("시험 노트 더 보기").click();
-    const [pk] = await Promise.all([page.waitForEvent("download"), page.getByText("📦 다른 기기로 보내기 (노트 파일)").click()]);
+    const [pk] = await Promise.all([page.waitForEvent("download"), page.getByText("다른 기기로 보내기 (노트 파일)").click()]);
     // (자동화 도구로 고를 때는 영문 파일 이름이어야 한다. 실제 파일 고르기 창에서는 한글 이름도 된다)
     const packPath = path.join(TMP, "test-note.pnote");
     await pk.saveAs(packPath);
-    const [fc0] = await Promise.all([page.waitForEvent("filechooser"), page.getByText("📦 노트 파일 가져오기").click()]);
+    const [fc0] = await Promise.all([page.waitForEvent("filechooser"), page.getByText("노트 파일 가져오기").click()]);
     await fc0.setFiles(packPath);
     await canvas.waitFor({ timeout: 15000 });
     await canvas.getByText("메모 시험: 효소는 촉매").waitFor({ timeout: 10000 });
@@ -312,7 +312,7 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     await page.getByText("‹ 노트 목록").first().click();
 
     // ── PDF 가져와서 형광펜 → 요약 ──
-    const [fc] = await Promise.all([page.waitForEvent("filechooser"), page.getByText("📄 PDF 가져오기").click()]);
+    const [fc] = await Promise.all([page.waitForEvent("filechooser"), page.getByText("PDF 가져오기").click()]);
     await fc.setFiles(book);
     await canvas.waitFor({ timeout: 20000 });
     await page.waitForTimeout(2500);
@@ -323,7 +323,7 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     // 글줄 가운데에서 조금 아래로 비껴 그어도 '글자 크기에 맞춰'가 글줄 높이·글자 끝에 맞춘다
     const lineH = ry1 - ry0;
     const yy = b2.y + ty + ((ry0 + ry1) / 2 + lineH * 0.3) * s;
-    await page.getByText("🖍 형광펜").click();
+    await page.getByLabel(/한 번 더 누르면 형광펜 설정/).click();
     await page.waitForTimeout(800); // 쪽 글자 상자를 읽을 시간
     await page.mouse.move(b2.x + tx + (rx0 + 1) * s, yy);
     await page.mouse.down();
@@ -343,7 +343,7 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     await page.getByText("＋ 뒤에 빈 쪽 (같은 속지)").click();
     await page.waitForTimeout(900); // 메뉴가 닫힌 바로 뒤에 끝난 획은 버려진다 (빠르게 두 번 누른 둘째 누름 막기)
     if (!/^2 \/ \d+$/.test(await pageNo())) fail("빈 쪽을 끼운 뒤 그 쪽으로 가지 않음: " + (await pageNo()));
-    await page.getByText(/^✒️ /).click();
+    await page.getByLabel(/한 번 더 누르면 펜 설정/).click();
     await page.mouse.move(b2.x + 200, b2.y + 200);
     await page.mouse.down();
     await page.mouse.move(b2.x + 400, b2.y + 220, { steps: 8 });
@@ -358,7 +358,7 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     await page.waitForTimeout(800);
     if ((await allStrokes(page)).filter((st) => st.tool === "pen").length !== onNew - 1) fail("다른 쪽의 필기가 되돌려지지 않음");
     await page.getByLabel("요약 만들기").click();
-    await page.getByText("✨ 서버로 자세히").waitFor({ timeout: 20000 });
+    await page.getByText("서버로 자세히", { exact: true }).waitFor({ timeout: 20000 });
     await page.getByText("‹ 노트로").click();
     await canvas.waitFor({ timeout: 20000 });
     await page.waitForTimeout(1200);
@@ -369,7 +369,7 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
 
     await page.getByLabel("요약 만들기").click();
     // 먼저 기기에서 바로 만든 요약 (서버 없이): PDF 글자층에서 칠한 글자를 읽는다
-    await page.getByText("✨ 서버로 자세히").waitFor({ timeout: 20000 });
+    await page.getByText("서버로 자세히", { exact: true }).waitFor({ timeout: 20000 });
     await page.waitForTimeout(2500);
     let quick = "";
     for (const f of page.frames()) {
@@ -381,7 +381,7 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     if (!/<mark[^>]*>경쟁적 저해제<\/mark>/.test(quick)) fail("기기 요약에서 칠한 부분이 강조되지 않음");
     if (!quick.includes("기질과 구조가 비슷하여")) fail("기기 요약에 앞뒤 문장이 없음");
     console.log("✓ 기기에서 바로 요약: 칠한 글자와 그 문장");
-    await page.getByText("✨ 서버로 자세히").click();
+    await page.getByText("서버로 자세히", { exact: true }).click();
     await page.getByText(/“경쟁적 저해제”/).waitFor({ timeout: 30000 });
     if (await page.getByText(/기질 특이성/).count()) fail("책에 인쇄된 강조가 내 형광펜 색으로 잡힘");
     await page.getByText("요약 만들기", { exact: true }).click();

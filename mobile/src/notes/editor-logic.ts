@@ -1,4 +1,5 @@
 // 필기 화면(Editor)의 작은 계산들. 화면 없이 Node로 시험할 수 있게 따로 둔다.
+import { PENS, type LineDash, type PenBrush } from "./model.ts";
 
 /** 쪽 바탕 그림 기억: 쪽 id → 그림 (쪽 번호로 기억하면 쪽을 끼우거나 지울 때 한 쪽씩 밀린다) */
 export type BgCache = Record<string, { uri: string; w: number }>;
@@ -61,4 +62,68 @@ export function previewPts(scale: number): number[] {
 export function previewScale(viewScale: number | undefined): number {
   if (viewScale === undefined || !Number.isFinite(viewScale)) return 1;
   return Math.max(1, Math.min(3, viewScale));
+}
+
+// ── S펜 옆 단추 두 번: 등록한 도구로 바꾸기 ─────────────────
+
+/** S펜 옆 단추를 펜을 띄운 채 짧게 두 번 눌렀는지 알아낸다. 단추를 누른 채 쓰기(지우개)는 세지 않는다.
+ *  돌려준 함수에 단추 소식(눌림/뗌, 떠 있었는지, 시각)을 차례로 넣으면, 두 번째로 누른 순간 true. */
+export function penDoubleClick(gap = 450, short = 300) {
+  let first: number | null = null; // 첫 번째 짧은 누름이 시작된 때
+  let down: number | null = null; // 지금 누름이 시작된 때
+  let downHover = false;
+  return (pressed: boolean, hover: boolean, now: number): boolean => {
+    if (pressed) {
+      if (hover && first !== null && now - first < gap) {
+        first = null;
+        down = null;
+        return true;
+      }
+      down = now;
+      downHover = hover;
+      return false;
+    }
+    // 뗌: 떠 있는 채로 짧게 눌렀다 뗐을 때만 '첫 번째 누름' (닿은 채 뗐으면 단추 지우개를 쓴 것)
+    first = down !== null && downHover && hover && now - down < short ? down : null;
+    down = null;
+    return false;
+  };
+}
+
+/** 두 번 누르면 바꿀 도구. favorite = 등록해 둔 펜 (종류·색·굵기·선 모양) */
+export type SwapTarget = "highlighter" | "eraser" | "lasso" | "favorite" | "off";
+export type PenLook = { penBrush: PenBrush; penColor: string; penWidth: number; penDash: LineDash };
+type SwapTool = "pen" | "highlighter" | "eraser" | "lasso" | "text";
+/** 바꾸기 전 모습 (돌아올 때 쓴다)과 바꾼 도구 */
+export type SwapSaved = { from: { tool: SwapTool } & PenLook; to: SwapTool };
+
+/** 두 번 눌렀을 때: 등록한 도구로 바꾸거나, 바꿔 둔 채(그 도구 그대로)면 원래대로 돌아온다.
+ *  바꿀 설정과 다음 상태, 알림 글을 돌려준다. 바꿀 것이 없으면 null. */
+export function penSwap(
+  p: { tool: SwapTool; swapTool: SwapTarget; favorite: PenLook | null } & PenLook,
+  saved: SwapSaved | null,
+): { patch: Partial<{ tool: SwapTool } & PenLook>; saved: SwapSaved | null; say: string } | null {
+  if (p.swapTool === "off") return null;
+  if (saved && p.tool === saved.to) return { patch: { ...saved.from }, saved: null, say: `${ro(toolLabel(saved.from.tool, saved.from.penBrush))} 돌아왔어요` };
+  const from = { tool: p.tool, penBrush: p.penBrush, penColor: p.penColor, penWidth: p.penWidth, penDash: p.penDash };
+  if (p.swapTool === "favorite") {
+    if (!p.favorite) return { patch: {}, saved, say: "즐겨찾는 펜을 먼저 등록해 주세요 (펜 설정)" };
+    return { patch: { tool: "pen", ...p.favorite }, saved: { from, to: "pen" }, say: "즐겨찾는 펜으로 바꿨어요" };
+  }
+  // 이미 그 도구를 쓰고 있으면 펜으로
+  const to: SwapTool = p.tool === p.swapTool ? "pen" : p.swapTool;
+  return { patch: { tool: to }, saved: { from, to }, say: `${ro(toolLabel(to, p.penBrush))} 바꿨어요` };
+}
+
+function toolLabel(tool: SwapTool, brush: PenBrush): string {
+  if (tool === "pen") return PENS.find((x) => x.id === brush)?.label ?? "펜";
+  return tool === "highlighter" ? "형광펜" : tool === "eraser" ? "지우개" : tool === "lasso" ? "올가미" : "글상자";
+}
+
+/** 낱말 뒤에 '로/으로' (받침 없거나 ㄹ이면 '로') */
+export function ro(word: string): string {
+  const c = word.charCodeAt(word.length - 1) - 0xac00;
+  if (c < 0 || c > 11171) return `${word}(으)로`;
+  const jong = c % 28;
+  return word + (jong === 0 || jong === 8 ? "로" : "으로");
 }

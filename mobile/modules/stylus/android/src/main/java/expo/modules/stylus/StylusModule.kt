@@ -10,6 +10,7 @@ import expo.modules.kotlin.views.ExpoView
 
 // S펜 옆 단추: 안쪽 화면에 오는 펜 이벤트(닿기·떠 있기)를 엿보아 단추가 눌렸는지 알린다.
 // 펜을 화면에 대기 전(떠 있을 때)부터 알 수 있어, 단추를 누른 채 쓰면 처음부터 지우개가 된다.
+// hover: 펜이 화면에 닿지 않고 떠 있을 때 바뀐 것인지 (떠 있을 때 두 번 누르면 도구 바꾸기)
 class StylusModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("Stylus")
@@ -23,7 +24,7 @@ class StylusView(context: Context, appContext: AppContext) : ExpoView(context, a
   private val onButton by EventDispatcher()
   private var pressed = false
 
-  private fun watch(ev: MotionEvent) {
+  private fun watch(ev: MotionEvent, hover: Boolean) {
     if (ev.pointerCount < 1) return
     val tool = ev.getToolType(0)
     if (tool != MotionEvent.TOOL_TYPE_STYLUS && tool != MotionEvent.TOOL_TYPE_ERASER) return
@@ -32,17 +33,17 @@ class StylusView(context: Context, appContext: AppContext) : ExpoView(context, a
     val now = (ev.buttonState and mask) != 0 || tool == MotionEvent.TOOL_TYPE_ERASER
     if (now != pressed) {
       pressed = now
-      onButton(mapOf("pressed" to now))
+      onButton(mapOf("pressed" to now, "hover" to hover))
     }
   }
 
   override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-    watch(ev)
+    watch(ev, false)
     return super.dispatchTouchEvent(ev)
   }
 
   override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
-    watch(ev) // 펜이 화면 위에 떠 있을 때(호버)
+    watch(ev, true) // 펜이 화면 위에 떠 있을 때(호버)
     return super.dispatchGenericMotionEvent(ev)
   }
 }

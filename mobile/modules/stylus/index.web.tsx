@@ -2,7 +2,7 @@
 import { useRef } from "react";
 import { View, type ViewProps } from "react-native";
 
-export type StylusViewProps = ViewProps & { onButton?: (pressed: boolean) => void };
+export type StylusViewProps = ViewProps & { onButton?: (pressed: boolean, hover: boolean) => void };
 
 type PE = { nativeEvent: { pointerType?: string; buttons?: number } };
 
@@ -14,9 +14,10 @@ export function StylusView({ onButton, ...rest }: StylusViewProps) {
     const now = ((ev.buttons ?? 0) & (2 | 32)) !== 0;
     if (now !== last.current) {
       last.current = now;
-      onButton?.(now);
+      onButton?.(now, ((ev.buttons ?? 0) & 1) === 0); // 1 = 펜 끝이 닿음
     }
   };
+  // onPointerMove는 펜이 떠 있을 때도 온다 (두 번 누르기를 떠 있을 때 알려고)
   const extra = { onPointerDown: watch, onPointerMove: watch, onPointerUp: watch } as unknown as ViewProps;
   return <View {...rest} {...extra} />;
 }

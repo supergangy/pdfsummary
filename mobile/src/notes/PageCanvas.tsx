@@ -14,6 +14,7 @@ import Animated, { cancelAnimation, useAnimatedStyle, useDerivedValue, useShared
 import { scheduleOnRN, scheduleOnUI } from "react-native-worklets";
 
 import { StylusView } from "../../modules/stylus";
+import { penDoubleClick } from "./editor-logic";
 import type { LineDash, Page, Stroke } from "./model";
 import { inkPicture, paperPicture, type PathCache } from "./render";
 
@@ -53,6 +54,7 @@ type Props = {
   onMoveSelection?: (dx: number, dy: number) => void; // 고른 것을 끌어 옮겼을 때
   onTextTap?: (x: number, y: number) => void; // 글상자 도구로 쪽을 눌렀을 때
   onViewWidth?: (pagePx: number) => void; // 쪽이 화면에서 몇 픽셀 폭인지 (바탕 그림 해상도용)
+  onPenDouble?: () => void; // S펜 옆 단추를 펜을 띄운 채 두 번 눌렀을 때
 };
 
 export function PageCanvas(props: Props) {
@@ -166,8 +168,10 @@ export function PageCanvas(props: Props) {
   const live = useSharedValue<number[]>([]);
   const eraser = useSharedValue({ x: -1000, y: -1000, r: 0 });
   const penBtn = useSharedValue(false); // S펜 옆 단추를 누르고 있는지
-  const onPenButton = useCallback((pressed: boolean) => {
+  const double = useRef(penDoubleClick());
+  const onPenButton = useCallback((pressed: boolean, hover: boolean) => {
     penBtn.value = pressed;
+    if (double.current(pressed, hover, Date.now())) cb.current.onPenDouble?.();
   }, [penBtn]);
 
   // ── 움직이는 동안: 관성, 쪽 사진 ─────────────────────────

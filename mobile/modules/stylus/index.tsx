@@ -3,13 +3,14 @@ import { requireNativeView, requireOptionalNativeModule } from "expo";
 import type { ComponentType } from "react";
 import { View, type ViewProps } from "react-native";
 
-export type StylusViewProps = ViewProps & { onButton?: (pressed: boolean) => void };
+/** hover: 펜이 화면에 닿지 않고 떠 있을 때 바뀐 것인지 */
+export type StylusViewProps = ViewProps & { onButton?: (pressed: boolean, hover: boolean) => void };
 
-type NativeProps = ViewProps & { onButton?: (e: { nativeEvent: { pressed: boolean } }) => void };
+type NativeProps = ViewProps & { onButton?: (e: { nativeEvent: { pressed: boolean; hover?: boolean } }) => void };
 
 const Native: ComponentType<NativeProps> | null = requireOptionalNativeModule("Stylus") ? requireNativeView<NativeProps>("Stylus") : null;
 
 export function StylusView({ onButton, ...rest }: StylusViewProps) {
   if (!Native) return <View {...rest} />;
-  return <Native {...rest} onButton={onButton ? (e) => onButton(e.nativeEvent.pressed) : undefined} />;
+  return <Native {...rest} onButton={onButton ? (e) => onButton(e.nativeEvent.pressed, !!e.nativeEvent.hover) : undefined} />;
 }

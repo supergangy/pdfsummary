@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { clampPage, isHighlighterTap, justAfter, otherPage, pageBg, previewPts, previewScale, reach, swatchEdge, type BgCache } from "./editor-logic.ts";
+import { clampPage, isHighlighterTap, justAfter, otherPage, pageBg, penDoubleClick, penSwap, previewPts, previewScale, reach, ro, swatchEdge, type BgCache, type SwapSaved } from "./editor-logic.ts";
 import { History } from "./history.ts";
 import { insertPage, removePage, type Ink, type Notebook, type Stroke } from "./model.ts";
 
@@ -97,4 +97,53 @@ test("pen preview is drawn at the zoom the page is shown at, and still fits its 
     assert.ok(Math.min(...xs) >= 14 - 1e-6 && Math.max(...xs) <= 330, "키워도 가로 330 안");
     assert.ok(Math.min(...ys) >= 0 && Math.max(...ys) <= 64, "키워도 세로 64 안");
   }
+});
+
+test("S Pen side button: two short presses while hovering = double click; holding it to erase does not count", () => {
+  const feed = (events: [boolean, boolean, number][]) => {
+    const f = penDoubleClick();
+    return events.map(([pressed, hover, at]) => f(pressed, hover, at));
+  };
+  // 떠 있는 채로 짧게 두 번 → 두 번째 누름에서 true
+  assert.deepEqual(feed([[true, true, 0], [false, true, 120], [true, true, 260], [false, true, 380]]), [false, false, true, false]);
+  // 너무 느리게 두 번 → 아님
+  assert.deepEqual(feed([[true, true, 0], [false, true, 120], [true, true, 700]]), [false, false, false]);
+  // 첫 번째를 길게 누름 → 아님
+  assert.deepEqual(feed([[true, true, 0], [false, true, 400], [true, true, 440]]), [false, false, false]);
+  // 단추를 누른 채 화면에 대고 지움(닿은 채 뗌) → 바로 다시 눌러도 아님
+  assert.deepEqual(feed([[true, true, 0], [false, false, 150], [true, true, 250]]), [false, false, false]);
+  // 쓰다가(닿은 채) 눌렀다 뗌 → 아님
+  assert.deepEqual(feed([[true, false, 0], [false, false, 100], [true, true, 200]]), [false, false, false]);
+  // 세 번 빠르게: 두 번째에서 한 번만
+  assert.deepEqual(feed([[true, true, 0], [false, true, 100], [true, true, 200], [false, true, 300], [true, true, 400]]), [false, false, true, false, false]);
+});
+
+test("double click switches to the registered tool and back", () => {
+  const pen = { tool: "pen" as const, penBrush: "fountain" as const, penColor: "#1F2328", penWidth: 2, penDash: "solid" as const, favorite: null };
+  // 펜 → 형광펜 → (그대로 두 번) → 펜
+  const a = penSwap({ ...pen, swapTool: "highlighter" }, null)!;
+  assert.deepEqual(a.patch, { tool: "highlighter" });
+  assert.equal(a.say, "형광펜으로 바꿨어요");
+  const b = penSwap({ ...pen, tool: "highlighter", swapTool: "highlighter" }, a.saved)!;
+  assert.deepEqual(b.patch, { tool: "pen", penBrush: "fountain", penColor: "#1F2328", penWidth: 2, penDash: "solid" });
+  assert.equal(b.say, "만년필로 돌아왔어요");
+  assert.equal(b.saved, null);
+  // 바꾼 뒤 손으로 다른 도구를 골랐으면, 그 도구에서 다시 바꾼다 (예전 상태로 끌려가지 않게)
+  const c = penSwap({ ...pen, tool: "eraser", swapTool: "highlighter" }, a.saved as SwapSaved)!;
+  assert.deepEqual(c.patch, { tool: "highlighter" });
+  // 즐겨찾는 펜: 펜 모양을 통째로 바꾸고, 돌아올 때 원래 펜 모양으로
+  const fav = { penBrush: "ballpoint" as const, penColor: "#D7263D", penWidth: 1.2, penDash: "solid" as const };
+  const d = penSwap({ ...pen, swapTool: "favorite", favorite: fav }, null)!;
+  assert.deepEqual(d.patch, { tool: "pen", ...fav });
+  const e = penSwap({ ...pen, ...fav, swapTool: "favorite", favorite: fav }, d.saved)!;
+  assert.equal(e.patch.penBrush, "fountain");
+  assert.equal(e.patch.penColor, "#1F2328");
+  // 즐겨찾는 펜이 없으면 알려만 준다, 끄기면 아무것도
+  assert.equal(penSwap({ ...pen, swapTool: "favorite" }, null)!.say, "즐겨찾는 펜을 먼저 등록해 주세요 (펜 설정)");
+  assert.equal(penSwap({ ...pen, swapTool: "off" }, null), null);
+  // 이미 그 도구면 펜으로
+  assert.deepEqual(penSwap({ ...pen, tool: "highlighter", swapTool: "highlighter" }, null)!.patch, { tool: "pen" });
+  assert.equal(ro("지우개"), "지우개로");
+  assert.equal(ro("볼펜"), "볼펜으로");
+  assert.equal(ro("연필"), "연필로");
 });

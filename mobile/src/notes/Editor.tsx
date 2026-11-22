@@ -5,7 +5,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { pageText } from "../../modules/pdf-pages";
 import { useTheme } from "../ui";
-import { clampPage, isHighlighterTap, justAfter, otherPage, pageBg, swatchEdge, type BgCache } from "./editor-logic";
+import { clampPage, isHighlighterTap, justAfter, otherPage, pageBg, penSwap, swatchEdge, type BgCache, type SwapSaved } from "./editor-logic";
 import { bounds, eraseFrom, fitHighlight, hitAlong, straighten, thin, type CharBox } from "./geometry";
 import { History, removal, type Op } from "./history";
 import {
@@ -68,6 +68,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   inkRef.current = ink;
   const nbRef = useRef(nb);
   nbRef.current = nb;
+  const prefsRef = useRef(prefs);
+  prefsRef.current = prefs;
   const dirty = useRef(new Set<string>());
   const metaDirty = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -217,6 +219,19 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     setToast(s);
     setTimeout(() => setToast((x) => (x === s ? "" : x)), 2600);
   };
+
+  // S펜 옆 단추를 (펜을 띄운 채) 두 번 누르면 등록한 도구로, 한 번 더 두 번 누르면 원래대로
+  const swapSaved = useRef<SwapSaved | null>(null);
+  const onPenDouble = useCallback(() => {
+    const p = prefsRef.current;
+    if (!p) return;
+    const r = penSwap(p, swapSaved.current);
+    if (!r) return;
+    swapSaved.current = r.saved;
+    if (Object.keys(r.patch).length) setP(r.patch);
+    say(r.say);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ⋯ 메뉴가 닫힌 때를 적어 둔다 (메뉴 항목을 빠르게 두 번 누르면 둘째 누름이 밑의 종이에 닿는다)
   useEffect(() => {
@@ -773,6 +788,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         onLasso={onLasso}
         onMoveSelection={onMoveSelection}
         onTextTap={onTextTap}
+        onPenDouble={onPenDouble}
       />
 
       {selection && (

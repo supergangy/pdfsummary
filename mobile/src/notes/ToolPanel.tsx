@@ -16,6 +16,7 @@ import {
   type LineDash,
   type Stroke,
 } from "./model";
+import type { SwapTarget } from "./editor-logic";
 import type { Prefs } from "./prefs";
 import { inkPicture, type PathCache } from "./render";
 
@@ -97,7 +98,48 @@ function PenOptions({ prefs, setP, viewScale }: { prefs: Prefs; setP: Props["set
       </View>
       <Colors colors={PEN_COLORS} value={prefs.penColor} onPick={(c) => setP({ penColor: c })} />
       <Toggle label="도형 펴기" hint="선·사각형·원·삼각형을 반듯하게" value={prefs.shapes} onChange={(v) => setP({ shapes: v })} />
+      <PenSwapOptions prefs={prefs} setP={setP} />
     </>
+  );
+}
+
+const SWAPS: { v: SwapTarget; label: string }[] = [
+  { v: "highlighter", label: "형광펜" },
+  { v: "eraser", label: "지우개" },
+  { v: "lasso", label: "올가미" },
+  { v: "favorite", label: "즐겨찾는 펜" },
+  { v: "off", label: "끄기" },
+];
+
+/** S펜 옆 단추 두 번: 바꿀 도구 고르기, 즐겨찾는 펜 등록 */
+function PenSwapOptions({ prefs, setP }: { prefs: Prefs; setP: Props["setP"] }) {
+  const t = useTheme();
+  const fav = prefs.favorite;
+  const favLabel = fav ? `${PENS.find((x) => x.id === fav.penBrush)?.label ?? "펜"} · 굵기 ${fav.penWidth}` : "아직 등록하지 않았어요";
+  return (
+    <View style={{ gap: 8, borderTopWidth: 1, borderColor: t.line, paddingTop: 12 }}>
+      <Text style={{ color: t.ink, fontWeight: "600" }}>S펜 단추를 두 번 누르면</Text>
+      <Text style={{ color: t.muted, fontSize: 12.5 }}>펜을 화면에서 살짝 띄운 채 옆 단추를 빠르게 두 번. 한 번 더 두 번 누르면 원래대로 돌아와요.</Text>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }} accessibilityRole="radiogroup" accessibilityLabel="두 번 누르면 바꿀 도구">
+        {SWAPS.map((s) => (
+          <Chip key={s.v} label={s.label} on={prefs.swapTool === s.v} onPress={() => setP({ swapTool: s.v })} />
+        ))}
+      </View>
+      {prefs.swapTool === "favorite" && (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          {fav && <View style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: fav.penColor, borderWidth: 1, borderColor: t.line }} />}
+          <Text style={{ color: fav ? t.ink : t.muted, flex: 1 }}>{favLabel}</Text>
+          <Pressable
+            onPress={() => setP({ favorite: { penBrush: prefs.penBrush, penColor: prefs.penColor, penWidth: prefs.penWidth, penDash: prefs.penDash } })}
+            accessibilityRole="button"
+            accessibilityLabel="지금 펜을 즐겨찾는 펜으로 등록"
+            style={({ pressed }) => ({ paddingHorizontal: 12, paddingVertical: 8, borderRadius: 18, borderWidth: 1, borderColor: t.line, opacity: pressed ? 0.6 : 1 })}
+          >
+            <Text style={{ color: t.ink, fontWeight: "600" }}>지금 펜을 등록</Text>
+          </Pressable>
+        </View>
+      )}
+    </View>
   );
 }
 

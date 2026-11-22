@@ -194,6 +194,35 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await pp.getByLabel("만년필", { exact: true }).click();
     await pp.getByLabel("실선", { exact: true }).click();
     await pp.getByLabel("닫기", { exact: true }).click();
+    // S펜 옆 단추를 펜을 띄운 채 빠르게 두 번 누르면 형광펜으로, 다시 두 번 누르면 원래 펜으로 (기본 설정)
+    const penHover = (buttons) => canvas.dispatchEvent("pointermove", { pointerType: "pen", buttons, bubbles: true, clientX: x0 + 300, clientY: y0 + 300 });
+    const doublePress = async () => {
+      for (const b of [2, 0, 2, 0]) {
+        await penHover(b);
+        await page.waitForTimeout(60);
+      }
+    };
+    // 도구 모음에서 형광펜일 때만 '― 직선', 펜일 때만 '△ 도형 펴기'가 보인다
+    const selected = async (name) => page.getByText(name.startsWith("🖍") ? "― 직선" : "△ 도형 펴기", { exact: true }).isVisible();
+    await doublePress();
+    await page.getByText("형광펜으로 바꿨어요").waitFor({ timeout: 3000 });
+    if (!(await selected("🖍 형광펜"))) fail("S펜 단추를 두 번 눌렀는데 형광펜이 골라지지 않음");
+    await page.waitForTimeout(600);
+    await doublePress();
+    await page.getByText("만년필로 돌아왔어요").waitFor({ timeout: 3000 });
+    if (!(await selected("✒️ 만년필"))) fail("다시 두 번 눌렀는데 원래 펜으로 돌아오지 않음");
+    // 한 번만 누르면(또는 천천히 두 번) 바뀌지 않는다
+    await page.waitForTimeout(600);
+    await penHover(2);
+    await page.waitForTimeout(60);
+    await penHover(0);
+    await page.waitForTimeout(700);
+    await penHover(2);
+    await page.waitForTimeout(60);
+    await penHover(0);
+    await page.waitForTimeout(300);
+    if (!(await selected("✒️ 만년필"))) fail("천천히 두 번 눌렀는데 도구가 바뀜");
+    console.log("✓ S펜 단추 두 번: 형광펜으로 바꾸고 다시 두 번이면 원래 펜으로 (천천히 누르면 그대로)");
     await page.getByText(/^⌫ /).click();
     await page.getByText(/^⌫ /).click();
     await page.getByLabel("지우개 설정", { exact: true }).getByLabel("획 지우개", { exact: true }).click();
@@ -268,7 +297,8 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     await canvas.waitFor({ timeout: 15000 });
     await canvas.getByText("메모 시험: 효소는 촉매").waitFor({ timeout: 10000 });
     await page.getByLabel("노트 목록으로").click();
-    if ((await page.getByLabel("시험 노트 열기").count()) < 2) fail("가져온 노트가 목록에 없음");
+    // 목록을 다 불러올 때까지 기다린다 (불러오는 중에 세면 0개)
+    await page.getByLabel("시험 노트 열기").nth(1).waitFor({ timeout: 10000 }).catch(() => fail("가져온 노트가 목록에 없음"));
     console.log("✓ 노트 파일(.pnote)로 내보내기 → 가져오기 (필기·글상자 그대로)");
 
     // ── 서버 설정 ──

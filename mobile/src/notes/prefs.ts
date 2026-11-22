@@ -1,5 +1,6 @@
 // 도구 설정(마지막에 쓴 펜·색·굵기, 손가락으로 쓰기)을 기억한다.
 import { HIGHLIGHT_COLORS, HIGHLIGHT_OPACITY, HIGHLIGHT_WIDTHS, PEN_COLORS, PEN_WIDTHS, type LineDash, type PenBrush } from "./model";
+import type { PenLook, SwapTarget } from "./editor-logic";
 import type { ToolName } from "./PageCanvas";
 import { deviceFs } from "./fs";
 
@@ -22,6 +23,8 @@ export type Prefs = {
   lassoPartial: boolean; // 조금이라도 걸친 것도 고르기
   textSize: number;
   fingerDraw: boolean; // 손가락으로 쓰기 (꺼지면 손가락은 화면 옮기기)
+  swapTool: SwapTarget; // S펜 옆 단추를 (펜을 띄운 채) 두 번 누르면 바꿀 도구
+  favorite: PenLook | null; // 즐겨찾는 펜 (두 번 누르기로 바꿀 펜 모양)
   stylusSeen: boolean;
 };
 
@@ -44,6 +47,8 @@ export const DEFAULT_PREFS: Prefs = {
   lassoPartial: false,
   textSize: 16,
   fingerDraw: true,
+  swapTool: "highlighter",
+  favorite: null,
   stylusSeen: false,
 };
 

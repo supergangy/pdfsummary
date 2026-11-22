@@ -125,7 +125,7 @@ docker run -p 8080:8080 -e PDFSUMMARY_ACCESS_CODE="길고-아무도-모를-접�
 | `PORT` | 받을 포트 (기본 8080, 클라우드가 정해 주면 그 값) |
 | `PDFSUMMARY_SYNC_DIR` | 필기 앱 **실시간 동기화** 기록을 둘 폴더 (기본 `~/.pdfsummary/sync`, Docker는 `/data/sync`). 요약용 파일과 달리 지우지 않으니 **디스크(볼륨)에 두세요** |
 | `PDFSUMMARY_SMTP_HOST` · `_PORT` · `_SECURITY` · `_USER` · `_PASSWORD` · `_FROM` | 필기 앱 **가입 확인·비밀번호 찾기 메일**을 보낼 메일 서버. `_SECURITY`는 `starttls`(기본, 587) · `ssl`(465) · `none`. Gmail이면 `smtp.gmail.com`, 아이디는 Gmail 주소, 비밀번호는 Google 계정의 '앱 비밀번호'. 없으면 가입할 때 이메일을 확인하지 않고, 비밀번호 찾기 메일도 꺼집니다 |
-| `PDFSUMMARY_AI_BACKEND` · `GEMINI_API_KEY` · `PDFSUMMARY_GEMINI_MODEL` | AI 설명에 쓸 AI. 정하지 않으면 Claude 키(`ANTHROPIC_API_KEY`)가 있으면 Claude, 없고 Gemini 키만 있으면 **Gemini**. `PDFSUMMARY_AI_BACKEND=gemini`로 Gemini를 고를 수 있음. Gemini 키는 `GEMINI_API_KEY` 또는 `~/.pdfsummary/gemini_key.txt` 파일(첫 줄), 모델은 기본 `gemini-3.8-flash` |
+| `PDFSUMMARY_AI_BACKEND` · `GEMINI_API_KEY` · `PDFSUMMARY_GEMINI_MODEL` | AI 설명에 쓸 AI. 정하지 않으면 Claude 키(`ANTHROPIC_API_KEY`)가 있으면 Claude, 없고 Gemini 키만 있으면 **Gemini**. `PDFSUMMARY_AI_BACKEND=gemini`로 Gemini를 고를 수 있음. Gemini 키는 `GEMINI_API_KEY` 또는 `~/.pdfsummary/gemini_key.txt` 파일(첫 줄), 모델은 기본 `gemini-3.6-flash`, 생각 수준 `PDFSUMMARY_GEMINI_THINKING`(기본 `low`, 기본값으로 두면 한 번에 1~2분) |
 | `PDFSUMMARY_AI_LIMITS` | 요금제마다 한 달에 **AI 기능**(나만의 노트의 'AI 설명')을 쓸 수 있는 횟수. 기본 `free=3,premium=100`. 0이면 그 요금제는 못 씀. AI 기능은 서버의 `ANTHROPIC_API_KEY`로 Claude를 부르므로 그 키가 있어야 켜집니다 |
 | `PDFSUMMARY_GOOGLE_WEB_CLIENT_ID` · `_IOS_CLIENT_ID` · `_ANDROID_CLIENT_ID` | 필기 앱 **Google 계정으로 로그인**. Google Cloud의 OAuth 클라이언트 ID (아래 '필기 앱 Google 로그인 준비'). 웹 클라이언트 ID가 없으면 Google 로그인이 꺼집니다 |
 

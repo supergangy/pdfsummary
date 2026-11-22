@@ -47,24 +47,40 @@ def test_gemini_answers_and_request_shape():
     b = body(req)
     assert b["generationConfig"]["responseMimeType"] == "application/json"
     assert b["generationConfig"]["responseJsonSchema"] == EXPLAIN_SCHEMA
+    assert b["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "low"}   # 기본 생각이 길면 1~2분
     assert "가상현실" in b["contents"][0]["parts"][0]["text"]
 
 
-def test_schema_field_rejected_then_json_mode():
+def test_rejected_fields_are_dropped_one_by_one():
+    # 생각 설정을 받지 않으면 그것만 빼고 다시
     fake = FakeOpen(400, reply(ANSWER))
-    r = GeminiReader(api_key="g", opener=fake)
-    out = explain_items("책", ITEMS, reader=r)
-    assert out[0]["id"] == "a"
+    assert explain_items("책", ITEMS, reader=GeminiReader(api_key="g", opener=fake))[0]["id"] == "a"
     second = body(fake.reqs[1])
-    assert "responseJsonSchema" not in second["generationConfig"]
-    assert "JSON 스키마" in second["contents"][0]["parts"][0]["text"]
+    assert "thinkingConfig" not in second["generationConfig"] and "responseJsonSchema" in second["generationConfig"]
+    # 스키마 칸도 받지 않으면 글로 모양을 알려 주고 JSON 모드로
+    fake = FakeOpen(400, 400, reply(ANSWER))
+    assert explain_items("책", ITEMS, reader=GeminiReader(api_key="g", opener=fake))[0]["id"] == "a"
+    third = body(fake.reqs[2])
+    assert "responseJsonSchema" not in third["generationConfig"]
+    assert "JSON 스키마" in third["contents"][0]["parts"][0]["text"]
+
+
+def test_thinking_level_can_be_changed_or_left_out(monkeypatch):
+    monkeypatch.setenv("PDFSUMMARY_GEMINI_THINKING", "")
+    fake = FakeOpen(reply(ANSWER))
+    explain_items("책", ITEMS, reader=GeminiReader(api_key="g", opener=fake))
+    assert "thinkingConfig" not in body(fake.reqs[0])["generationConfig"]
+    monkeypatch.setenv("PDFSUMMARY_GEMINI_THINKING", "medium")
+    fake = FakeOpen(reply(ANSWER))
+    explain_items("책", ITEMS, reader=GeminiReader(api_key="g", opener=fake))
+    assert body(fake.reqs[0])["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "medium"}
 
 
 def test_errors_are_readable():
     import pytest
     from pdfsummary.explain import ExplainError
 
-    for code, word in ((401, "키"), (404, "모델"), (429, "한도"), (500, "오류")):
+    for code, word in ((401, "키"), (404, "모델"), (429, "한도"), (500, "오류"), (503, "오류")):
         r = GeminiReader(api_key="g", opener=FakeOpen(code))
         with pytest.raises(ExplainError, match=word):
             explain_items("책", ITEMS, reader=r)

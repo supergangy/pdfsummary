@@ -266,10 +266,28 @@ _ACCOUNTS = None
 
 
 def ai_reader():
-    """AI 설명에 쓸 Claude (시험에서는 가짜로 바꾼다)"""
-    from .ai import AIReader
+    """AI 설명에 쓸 AI. PDFSUMMARY_AI_BACKEND=gemini 이면 Gemini, 정하지 않으면 Claude 키가 있으면 Claude,
+    Gemini 키만 있으면 Gemini (시험에서는 가짜로 바꾼다)"""
+    from .ai import AIReader, has_credentials
+    from .gemini import GeminiReader, gemini_key
 
+    backend = os.environ.get("PDFSUMMARY_AI_BACKEND", "").strip().lower()
+    if backend == "gemini" or (backend != "claude" and not has_credentials() and gemini_key()):
+        return GeminiReader()
     return AIReader()
+
+
+def explain_available() -> bool:
+    """이 서버가 AI 설명을 할 수 있는지 (Claude나 Gemini 키가 있는지)"""
+    from .ai import has_credentials
+    from .gemini import gemini_key
+
+    backend = os.environ.get("PDFSUMMARY_AI_BACKEND", "").strip().lower()
+    if backend == "gemini":
+        return bool(gemini_key())
+    if backend == "claude":
+        return has_credentials()
+    return has_credentials() or bool(gemini_key())
 
 
 def account_store():
@@ -381,6 +399,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"server": True, "version": __version__, "server_key": has_credentials(),
                                    "max_upload_mb": STATE.max_upload // (1024 * 1024),
                                    "keep_minutes": int(STATE.ttl // 60), "sync": True, "accounts": True,
+                                   "ai_explain": explain_available(),
                                    "mail": account_store().mailer.enabled,
                                    "google": account_store().google.public_ids()})
             return self._json(key_state())

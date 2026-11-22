@@ -1,6 +1,6 @@
 # 인수인계서 — 작업을 이어가는 사람을 위한 안내
 
-> 마지막 정리: **2026-11-22** · 브랜치 `claude/eager-galileo-06vzez` · 최신 APK는 **빌드 30** (나만의 노트의 **AI 설명(프리미엄)**: Claude가 설명·표·막대그래프·순서 그림, 계정 요금제 무료·프리미엄. 빌드 29: 나만의 노트 글 겹침 고침: 글상자 높이를 기기에서 재어 배치, 갤럭시탭에서 확인. 미리 보기의 손글씨 그림이 안 보이던 것 고침. 빌드 27: 안드로이드 아래 시스템 막대 숨기기. 빌드 26: 바로 요약을 다듬어 새 노트로 만드는 **나만의 노트**. 빌드 25: 모던 미니멀 디자인, S펜 단추 두 번으로 도구 바꾸기, 스크롤 관성·움직일 때 쪽 사진)
+> 마지막 정리: **2026-11-22** · 브랜치 `claude/eager-galileo-06vzez` · 최신 APK는 **빌드 31** (AI 설명을 Gemini로도: 서버가 Claude·Gemini 중 고름, 앱이 USB로 PC 서버(localhost http)에 붙을 수 있게. 빌드 30: 나만의 노트의 **AI 설명(프리미엄)**: Claude가 설명·표·막대그래프·순서 그림, 계정 요금제 무료·프리미엄. 빌드 29: 나만의 노트 글 겹침 고침: 글상자 높이를 기기에서 재어 배치, 갤럭시탭에서 확인. 미리 보기의 손글씨 그림이 안 보이던 것 고침. 빌드 27: 안드로이드 아래 시스템 막대 숨기기. 빌드 26: 바로 요약을 다듬어 새 노트로 만드는 **나만의 노트**. 빌드 25: 모던 미니멀 디자인, S펜 단추 두 번으로 도구 바꾸기, 스크롤 관성·움직일 때 쪽 사진)
 > 이 문서만 읽으면 VS Code에서 바로 이어서 작업할 수 있도록 썼습니다. 기능 설명서는 [README.md](README.md)(PC·서버)와 [mobile/README.md](mobile/README.md)(앱)에 있습니다.
 
 ---
@@ -13,7 +13,7 @@
 | 구성 | ① 파이썬 프로그램(`pdfsummary/`): 명령줄 · 끌어다 놓기 실행 화면 · 설치 앱(Windows/Mac) · **앱용 서버**(요약·동기화·계정) ② 필기 앱(`mobile/`, Expo): 아이패드·갤럭시탭·폰·웹 |
 | 브랜치 | 모든 작업은 `claude/eager-galileo-06vzez`에만 있음. **main에 합치지 않았고 PR도 없음** |
 | 자동 점검(CI) | 마지막 커밋 기준 **모두 통과**: 파이썬 시험, 앱 타입 검사·단위 시험(106개), 웹 e2e 2종, 안드로이드 APK 빌드, 에뮬레이터 실행 시험, iOS 빌드 |
-| 설치 파일 | 갤럭시탭용 APK (빌드 30): **https://github.com/supergangy/pdfsummary/releases/latest/download/pdfsummary.apk** (항상 최신, 로그인 없이) |
+| 설치 파일 | 갤럭시탭용 APK (빌드 31): **https://github.com/supergangy/pdfsummary/releases/latest/download/pdfsummary.apk** (항상 최신, 로그인 없이) |
 | 실제 기기 | 갤럭시탭 SM-X820(안드로이드 17)에서 확인 중 (2026-11-21, 무선 디버깅). 필기 사라짐·S펜 단추 지우개는 **빌드 19에서 고쳐진 것 확인**. 빌드 20·21에서 고친 것(손글씨 받침, 도구 설정 창 자리, 요약 글자, 에이전트 시험에서 나온 27가지)은 **웹판에서만 확인했고 실기기 확인은 아직** → §6 P0 표, §7 점검표 |
 | 서버 | 코드·Docker 이미지 정의는 완성. **아직 어디에도 배포하지 않음** |
 | 저장소 공개 | **공개(public)**. 첫 공개 커밋 2026-10-31 → 특허를 낼 거라면 기한이 있음 (§6 P1) |
@@ -169,6 +169,7 @@ pdfsummary-app                        # 끌어다 놓기 실행 화면 (브라�
 | `app.py` | 실행 화면 + **앱용 서버**(모든 HTTP 엔드포인트) |
 | `sync.py` | 실시간 동기화 저장소 (SQLite 작업 기록, 오래 기다리기, PDF 내용 주소) |
 | `accounts.py` | 계정·세션·가입 확인/비밀번호 찾기 메일 코드·Google 계정 잇기, **요금제(무료·프리미엄)와 달마다 AI 기능 횟수**(`use_ai`·`refund_ai`, `PDFSUMMARY_AI_LIMITS`), 관리자 명령(`python -m pdfsummary.accounts list·plan·reset-password·test-mail`) |
+| `gemini.py` | AI 설명을 **Gemini**로 (urllib만, `x-goog-api-key`, `responseJsonSchema` → 400이면 JSON 모드로 다시). 키는 `GEMINI_API_KEY` 또는 `~/.pdfsummary/gemini_key.txt`. 어느 AI를 쓸지는 `app.py`의 `ai_reader`·`explain_available` (`PDFSUMMARY_AI_BACKEND`) |
 | `explain.py` | 나만의 노트의 **AI 설명**: 칠한 항목 → Claude(구조화된 출력)가 설명 + 그림 하나(표·막대그래프·순서). 답 크기를 다듬어(`clean_answer`) 앱으로. 엔드포인트는 `app.py`의 `POST /api/ai/explain`(로그인·횟수 확인, 실패하면 횟수 돌려놓기)·`GET /api/account/ai` |
 | `mailer.py` | SMTP 메일 (`PDFSUMMARY_SMTP_*`, 시험용 `PDFSUMMARY_MAIL_DIR`) |
 | `google_auth.py` | Google ID 토큰 확인 (RS256 서명을 파이썬만으로, JWKS 기억) |

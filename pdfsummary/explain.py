@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-from .ai import AIReader
+from .ai import AIReader   # Gemini로 쓸 때는 gemini.GeminiReader (같은 ask_content 모양)
 
 MAX_ITEMS = 60          # 한 번에 설명할 항목 수 (앱이 이보다 많이 보내면 거절 — 앱이 미리 알려 준다)
 MAX_TEXT = 400
@@ -143,14 +143,15 @@ def clean_answer(raw: dict, ids: set[str]) -> list[dict]:
     return out
 
 
-def explain_items(book: str, items, reader: Optional[AIReader] = None) -> list[dict]:
+def explain_items(book: str, items, reader=None) -> list[dict]:
     """항목들 → [{id, explain, table?, chart?, steps?}] (설명이 필요 없는 항목은 빠짐). 실패하면 ExplainError."""
     req = clean_request(items)
     reader = reader or AIReader()
     if not reader.available:
-        raise ExplainError("서버에 AI(Claude) 설정이 없어요. 서버 관리자에게 알려 주세요.")
+        raise ExplainError(reader.disabled_reason or "서버에 AI 설정이 없어요. 서버 관리자에게 알려 주세요.")
     prompt = PROMPT.format(book=_s(book, 80) or "교재", items=json.dumps(req, ensure_ascii=False, indent=1))
     raw = reader.ask_content([{"type": "text", "text": prompt}], EXPLAIN_SCHEMA, max_tokens=32000, effort="medium", stream=True)
     if raw is None:
-        raise ExplainError(reader.disabled_reason or "AI가 답하지 못했어요. 잠시 뒤 다시 해 주세요.")
+        raise ExplainError(reader.disabled_reason or getattr(reader, "last_error", None)
+                           or "AI가 답하지 못했어요. 잠시 뒤 다시 해 주세요.")
     return clean_answer(raw, {it["id"] for it in req})

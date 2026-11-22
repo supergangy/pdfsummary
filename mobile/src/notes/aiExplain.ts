@@ -55,8 +55,9 @@ export async function aiAccess(c: AiConn | null, f: typeof fetch = fetch): Promi
   }
   if (!c.session) return { ok: false, why: "no-login", message: "AI 설명은 로그인한 계정으로 쓸 수 있어요. 동기화에서 로그인해 주세요." };
   try {
-    const st = await call<{ server_key?: boolean }>(c, "/api/state", null, f);
-    if (!st.server_key) return { ok: false, why: "no-ai", message: "이 서버는 AI가 꺼져 있어요 (서버에 Claude 키가 없어요)." };
+    // ai_explain: 서버에 Claude나 Gemini 키가 있는지 (예전 서버는 server_key만 알려 준다)
+    const st = await call<{ server_key?: boolean; ai_explain?: boolean }>(c, "/api/state", null, f);
+    if (!(st.ai_explain ?? st.server_key)) return { ok: false, why: "no-ai", message: "이 서버는 AI가 꺼져 있어요 (서버에 AI 키가 없어요)." };
     return { ok: true, plan: await call<AiPlan>(c, "/api/account/ai", null, f) };
   } catch (e) {
     const err = e as AiError;

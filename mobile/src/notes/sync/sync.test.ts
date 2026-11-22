@@ -328,3 +328,35 @@ test("silent server: short sync requests give up after a while; the long-poll pu
   stop.abort();
   await assert.rejects(pulled, (e: Error) => e.name === "AbortError" && !(e instanceof SyncHttpError));
 });
+
+test("pdf hash: the streaming function is used (file never read into JS); without it a huge PDF is skipped", async () => {
+  const { PDF_SYNC_MAX } = await import("./syncedStore.ts");
+  const server = new FakeServer();
+  const fs = memoryFs();
+  const seen: string[] = [];
+  // 메모리 파일 시스템: 가져온 PDF 내용은 그 uri 글자, 파일 주소는 "mem://" + 경로
+  const store = new SyncedStore(fs, async (uri) => {
+    seen.push(uri);
+    return sha256((await fs.readBytes(uri.replace(/^mem:\/\//, ""))) ?? new Uint8Array());
+  });
+  store.engine = new SyncEngine(fs, store, server.transport(), emptyState());
+  const pdf = new Uint8Array([37, 80, 68, 70, 1, 2, 3]);
+  const nb = pdfNotebook("큰 책", [{ w: 100, h: 100 }]);
+  await store.create(nb, { uri: "mem://x.pdf", blob: new Blob([pdf]) });
+  await store.engine.pushOnce();
+  assert.equal(seen.length, 1, "해시는 넣어 준 함수로 한 번");
+  assert.ok(seen[0].includes(nb.id));
+  assert.equal(store.engine.state.pdfSha[nb.id], sha256(new TextEncoder().encode("mem://x.pdf")));
+
+  // 해시 함수가 없으면: 한도보다 큰 PDF는 해시·올리기 없이 넘어간다 (메모리 보호)
+  const fs2 = memoryFs();
+  const store2 = new SyncedStore(fs2);
+  store2.pdfSyncMax = 4;   // 한도를 아주 작게 → "mem://y.pdf" 내용(11바이트)이 한도를 넘는 큰 파일인 셈
+  assert.ok(PDF_SYNC_MAX >= 100 * 1024 * 1024);
+  store2.engine = new SyncEngine(fs2, store2, server.transport(), emptyState());
+  const nb2 = pdfNotebook("더 큰 책", [{ w: 100, h: 100 }]);
+  await store2.create(nb2, { uri: "mem://y.pdf", blob: new Blob([pdf]) });
+  await store2.engine.pushOnce();
+  assert.equal(store2.engine.state.pdfSha[nb2.id], undefined);
+  assert.equal(await store2.pdfBytes(nb2.id), null, "엔진이 올릴 때도 null");
+});

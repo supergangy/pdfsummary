@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { backTarget, keepFolder, tooSoon } from "./app-nav.ts";
+import { backTarget, exitOnSecondBack, keepFolder, tooSoon } from "./app-nav.ts";
 
 type Scr = { name: string; id?: string; page?: number; backTo?: Scr };
 const LIB: Scr = { name: "library" };
@@ -30,4 +30,10 @@ test("고른 폴더가 지워졌으면 '전체'로, 있으면 그대로", () => 
   assert.equal(keepFolder("과학", ["수학"]), null);
   assert.equal(keepFolder("과학", []), null);
   assert.equal(keepFolder(null, ["수학"]), null);
+});
+
+test("library: the app closes only on a second back press within 2 seconds", () => {
+  assert.equal(exitOnSecondBack(null, 1000), false);
+  assert.equal(exitOnSecondBack(1000, 2500), true);
+  assert.equal(exitOnSecondBack(1000, 3500), false);
 });

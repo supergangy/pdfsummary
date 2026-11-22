@@ -4,6 +4,9 @@ import type { Notebook, Stroke } from "../model.ts";
 import { NoteStore, type Fs } from "../store.ts";
 import type { SyncEngine, SyncTarget } from "./engine.ts";
 import { sha256 } from "./sha256.ts";
+
+/** 동기화로 올리는 원본 PDF의 최대 크기. 이보다 크면 노트(필기)만 맞추고 PDF는 올리지 않는다 (통째로 읽으면 메모리가 모자람) */
+export const PDF_SYNC_MAX = 200 * 1024 * 1024;
 import { applyToInk, applyToNotebook, assignOrder, diffFolders, diffNotebook, diffPage, type Write } from "./writes.ts";
 
 export type StoreEvent =
@@ -17,8 +20,15 @@ export class SyncedStore extends NoteStore implements SyncTarget {
   private chain: Promise<unknown> = Promise.resolve();
   private listeners = new Set<(e: StoreEvent) => void>();
 
-  constructor(fs: Fs) {
+  /** 파일(file:// 주소)의 SHA-256을 조금씩 읽어 계산하는 함수. 기기에서는 App이 네이티브 모듈(pdf-pages의 shaAsync)을 넣어 준다.
+   *  없으면(웹·시험) JS로 통째로 읽되, PDF_SYNC_MAX보다 큰 PDF는 해시 없이 넘어간다 */
+  streamSha: ((uri: string) => Promise<string>) | null = null;
+  /** 동기화로 올릴 PDF 최대 크기 (시험에서 줄인다) */
+  pdfSyncMax = PDF_SYNC_MAX;
+
+  constructor(fs: Fs, streamSha?: (uri: string) => Promise<string>) {
     super(fs);
+    this.streamSha = streamSha ?? null;
   }
 
   subscribe(fn: (e: StoreEvent) => void): () => void {
@@ -43,13 +53,22 @@ export class SyncedStore extends NoteStore implements SyncTarget {
     return run;
   }
 
+  /** 원본 PDF의 내용 해시. 기기에서는 파일을 조금씩 읽어 계산한다 (수백 MB PDF를 통째로 읽으면 메모리가 모자라 가져오기가 실패했다).
+   *  웹처럼 그게 안 되면 JS로 읽되, 너무 큰 파일은 해시 없이(동기화에 PDF를 안 올림) 넘어간다 */
   private async pdfShaOf(nbId: string): Promise<string | undefined> {
     const eng = this.engine;
     if (!eng) return undefined;
     if (eng.state.pdfSha[nbId]) return eng.state.pdfSha[nbId];
-    const bytes = await super.pdfBytes(nbId);
-    if (!bytes) return undefined;
-    const sha = sha256(bytes);
+    let sha: string | undefined;
+    if (this.streamSha) {
+      if (!(await super.hasPdf(nbId))) return undefined;
+      sha = await this.streamSha(await super.pdfUri(nbId));
+    } else {
+      const bytes = await super.pdfBytes(nbId);
+      if (!bytes) return undefined;
+      if (bytes.length > this.pdfSyncMax) return undefined;
+      sha = sha256(bytes);
+    }
     eng.state.pdfSha[nbId] = sha;
     return sha;
   }
@@ -162,8 +181,16 @@ export class SyncedStore extends NoteStore implements SyncTarget {
     });
   }
 
+  /** 동기화 엔진이 올릴 PDF. 너무 크면 null (안 올림) — 크기는 먼저 보고, 읽다가 메모리가 모자라도 null */
   async pdfBytes(nb: string): Promise<Uint8Array | null> {
-    return super.pdfBytes(nb);
+    const size = await super.pdfSize(nb);
+    if (size !== null && size > this.pdfSyncMax) return null;
+    try {
+      const bytes = await super.pdfBytes(nb);
+      return bytes && bytes.length > this.pdfSyncMax ? null : bytes;   // 크기를 몰라 읽고 나서야 아는 경우
+    } catch {
+      return null;
+    }
   }
 
   async putPdf(nb: string, _sha: string, data: Uint8Array): Promise<void> {

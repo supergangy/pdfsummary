@@ -1,3 +1,4 @@
+import CryptoKit
 import ExpoModulesCore
 import PDFKit
 import UIKit
@@ -7,6 +8,20 @@ import Vision
 public class PdfPagesModule: Module {
   public func definition() -> ModuleDefinition {
     Name("PdfPages")
+
+    // 파일의 SHA-256 (16진수), 조금씩 읽어서 (큰 파일도 메모리를 안 쓴다)
+    AsyncFunction("shaAsync") { (uri: String) throws -> String in
+      let path = uri.hasPrefix("file://") ? (URL(string: uri)?.path ?? uri) : uri
+      guard let h = FileHandle(forReadingAtPath: path) else { throw Exception(name: "PdfOpenFailed", description: "파일을 열 수 없어요.", code: "ERR_OPEN") }
+      defer { try? h.close() }
+      var sha = SHA256()
+      while true {
+        let chunk = h.readData(ofLength: 1 << 20)
+        if chunk.isEmpty { break }
+        sha.update(data: chunk)
+      }
+      return sha.finalize().map { String(format: "%02x", $0) }.joined()
+    }
 
     // [{"w":…, "h":…}, …] (pt, 회전 반영)
     AsyncFunction("infoAsync") { (uri: String) throws -> String in

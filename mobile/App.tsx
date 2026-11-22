@@ -15,13 +15,14 @@ import {
 } from "./src/api";
 import * as DeviceAi from "./modules/device-ai";
 import { runDeviceTasks } from "./src/deviceRun";
-import { backTarget } from "./src/notes/app-nav";
+import { backTarget, exitOnSecondBack } from "./src/notes/app-nav";
 import { Editor } from "./src/notes/Editor";
 import { buildPdf } from "./src/notes/exportPdf";
 import { koreanFont } from "./src/notes/fontBytes";
 import { deviceFs } from "./src/notes/fs";
 import { importPdf } from "./src/notes/importPdf";
 import { Library } from "./src/notes/Library";
+import { canStreamSha, fileSha } from "./modules/pdf-pages";
 import { QuickScreen } from "./src/notes/QuickScreen";
 import type { Ink, Notebook } from "./src/notes/model";
 import { unpackNotebook } from "./src/notes/pack";
@@ -124,7 +125,8 @@ type Screen =
   | { name: "quick"; nb: Notebook; ink: Ink; backTo: Screen };
 
 function Root() {
-  const store = useMemo(() => new SyncedStore(deviceFs), []);
+  // 원본 PDF 해시는 네이티브가 조금씩 읽어 계산 (수백 MB PDF를 JS로 통째로 읽으면 메모리가 모자라 가져오기가 실패했다)
+  const store = useMemo(() => new SyncedStore(deviceFs, canStreamSha ? fileSha : undefined), []);
   const sync = useSync(store, deviceFs);
   const [syncOpen, setSyncOpen] = useState(false);
   const [screen, setScreen] = useState<Screen>({ name: "library" });
@@ -134,13 +136,25 @@ function Root() {
   const [folder, setFolder] = useState<string | null>(null);
 
   // 안드로이드 '뒤로': 요약 화면에서는 왔던 노트(없으면 목록)로 간다.
-  // 목록에서는 앱이 닫히고, 필기 화면은 Editor가 저장한 뒤 스스로 닫는다 (둘 다 여기서는 false)
+  // 목록에서는 실수로 나가지 않게 2초 안에 두 번 눌러야 닫힌다. 필기 화면은 Editor가 저장한 뒤 스스로 닫는다
   const screenRef = useRef(screen);
   screenRef.current = screen;
+  const lastBack = useRef<number | null>(null);
+  const [exitHint, setExitHint] = useState(false);
   useEffect(() => {
     if (Platform.OS !== "android") return; // 웹은 BackHandler가 없다는 오류 글을 남긴다
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
-      const to = backTarget<Screen>(screenRef.current, { name: "library" });
+      const cur = screenRef.current;
+      if (cur.name === "editor") return false;
+      if (cur.name === "library") {
+        const now = Date.now();
+        if (exitOnSecondBack(lastBack.current, now)) return false;
+        lastBack.current = now;
+        setExitHint(true);
+        setTimeout(() => setExitHint(false), 2000);
+        return true;
+      }
+      const to = backTarget<Screen>(cur, { name: "library" });
       if (!to) return false;
       setScreen(to);
       return true;
@@ -248,6 +262,7 @@ function Root() {
         }}
       />
       {!!shareErr && <ErrorToast text={shareErr} onClose={() => setShareErr("")} />}
+      {exitHint && <HintToast text="한 번 더 누르면 앱을 나가요" />}
     </>
   );
 }
@@ -864,6 +879,15 @@ function Toggle({ value, onValueChange, accessibilityLabel }: { value: boolean; 
 }
 
 /** 목록 화면 아래에 잠깐 뜨는 오류 알림 (누르면 닫힘) */
+function HintToast({ text }: { text: string }) {
+  const t = useTheme();
+  return (
+    <View pointerEvents="none" style={[s.toast, floating(t)]}>
+      <Text style={[type.body, s.grow, { color: t.ink }]}>{text}</Text>
+    </View>
+  );
+}
+
 function ErrorToast({ text, onClose }: { text: string; onClose: () => void }) {
   const t = useTheme();
   return (

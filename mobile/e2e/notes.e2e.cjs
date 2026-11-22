@@ -203,7 +203,8 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
       }
     };
     // 도구 모음에서 형광펜일 때만 '직선', 펜일 때만 '도형 펴기'가 보인다
-    const selected = async (name) => page.getByText(name === "형광펜" ? "직선" : "도형 펴기", { exact: true }).isVisible();
+    // 도구 모음이 아이콘이라 글이 없다 → 그 도구에만 보이는 단추의 이름표로 확인
+    const selected = async (name) => page.getByLabel(name === "형광펜" ? /^직선/ : /^도형 펴기/).isVisible();
     await doublePress();
     await page.getByText("형광펜으로 바꿨어요").waitFor({ timeout: 3000 });
     if (!(await selected("형광펜"))) fail("S펜 단추를 두 번 눌렀는데 형광펜이 골라지지 않음");

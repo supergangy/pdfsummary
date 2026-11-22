@@ -14,11 +14,20 @@ type Native = {
   ocrAsync?(uri: string, index: number, widthPx: number): Promise<string>;
   plainTextAsync?(uri: string, index: number): Promise<string | null>; // 안드로이드: 쪽의 글만 (상자 없이)
   renderAsync(uri: string, index: number, widthPx: number, outPath: string): Promise<string>;
+  shaAsync?(uri: string): Promise<string>; // 파일의 SHA-256 (조금씩 읽어서, 큰 파일도 메모리를 안 쓴다)
 };
 
 const N = requireOptionalNativeModule<Native>("PdfPages");
 
 export const available = !!N;
+
+/** 기기에서 파일 해시를 조금씩 읽어 계산할 수 있는지 (없으면 JS로 통째로 읽어야 해서 큰 파일은 피해야 한다) */
+export const canStreamSha = !!N?.shaAsync;
+
+export function fileSha(uri: string): Promise<string> {
+  if (!N?.shaAsync) throw new Error("이 앱에서는 파일 해시를 계산할 수 없어요.");
+  return N.shaAsync(uri);
+}
 
 export async function pdfInfo(uri: string): Promise<PageSize[]> {
   if (!N) throw new Error("이 앱에서는 PDF를 열 수 없어요 (개발용 빌드가 필요해요).");

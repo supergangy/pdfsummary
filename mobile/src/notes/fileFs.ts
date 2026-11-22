@@ -7,6 +7,7 @@ import type { Fs } from "./store.ts";
 export type FileLike = {
   readonly uri: string;
   readonly exists: boolean;
+  readonly size?: number | null; // 바이트 (expo File)
   readonly parentDirectory: DirLike;
   text(): Promise<string>;
   bytes(): Promise<Uint8Array>;
@@ -85,6 +86,11 @@ export function makeFileFs(api: FileApi): Fs {
       await queues.get(path);
       const f = file(path);
       return f.exists ? f.bytes() : null;
+    },
+    async fileSize(path) {
+      await queues.get(path);
+      const f = file(path);
+      return f.exists ? f.size ?? null : null;
     },
     writeBytes: (path, bytes) => atomicWrite(path, bytes),
     importFile: (from, path) =>

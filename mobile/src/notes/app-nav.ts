@@ -9,6 +9,11 @@ export function backTarget<S extends { name: string; backTo?: S }>(screen: S, li
   return screen.backTo ?? library;
 }
 
+/** 목록에서 '뒤로'를 두 번 눌러야 앱이 닫힌다: 첫 누름(또는 2초 넘게 지난 뒤의 누름)은 안내만. 닫아도 되면 true */
+export function exitOnSecondBack(lastPress: number | null, now: number, ms = 2000): boolean {
+  return lastPress !== null && now - lastPress < ms;
+}
+
 /** 화면이 뜬 지 얼마 안 됐는가 (단추를 빠르게 두 번 누를 때 두 번째 누름이 새 화면의 단추를 누르는 것을 막는다) */
 export function tooSoon(openedAt: number, now: number, ms = 400): boolean {
   return now - openedAt < ms;

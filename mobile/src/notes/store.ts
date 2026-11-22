@@ -6,6 +6,7 @@ export type Fs = {
   readText(path: string): Promise<string | null>;
   writeText(path: string, text: string): Promise<void>;
   readBytes(path: string): Promise<Uint8Array | null>;
+  fileSize?(path: string): Promise<number | null>; // 파일 크기 (읽지 않고)
   writeBytes(path: string, bytes: Uint8Array): Promise<void>;
   /** 고른 파일(기기: file:// 주소, 웹: Blob)을 저장소 안으로 복사 */
   importFile(from: { uri: string; blob?: Blob }, path: string): Promise<void>;
@@ -142,6 +143,11 @@ export class NoteStore {
 
   pdfBytes(nbId: string): Promise<Uint8Array | null> {
     return this.fs.readBytes(`${dir(nbId)}/source.pdf`);
+  }
+
+  /** 원본 PDF 크기 (바이트). 없거나 모르면 null */
+  pdfSize(nbId: string): Promise<number | null> {
+    return this.fs.fileSize ? this.fs.fileSize(`${dir(nbId)}/source.pdf`) : Promise.resolve(null);
   }
 }
 

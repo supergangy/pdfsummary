@@ -20,12 +20,28 @@ import expo.modules.kotlin.modules.ModuleDefinition
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.security.MessageDigest
 
 // PDF 쪽 크기를 읽고, 쪽을 그림(JPEG)으로 그린다 (안드로이드 기본 PdfRenderer).
 class PdfPagesModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("PdfPages")
+
+    // 파일의 SHA-256 (16진수). 조금씩 읽어서 큰 파일(수백 MB)도 메모리를 안 쓴다 — JS로 통째로 읽으면 OOM
+    AsyncFunction("shaAsync") { uri: String ->
+      val md = MessageDigest.getInstance("SHA-256")
+      FileInputStream(file(uri)).use { ins ->
+        val buf = ByteArray(1 shl 20)
+        while (true) {
+          val n = ins.read(buf)
+          if (n <= 0) break
+          md.update(buf, 0, n)
+        }
+      }
+      md.digest().joinToString("") { "%02x".format(it) }
+    }
 
     AsyncFunction("infoAsync") { uri: String ->
       open(uri) { r ->

@@ -1,14 +1,13 @@
 // '나만의 노트' 만들기 전 미리 보기: 넣을 항목 고르기, 차례 바꾸기, 메모 고치기, 형광펜 색의 뜻 정하기
-import { Canvas, Group, Picture } from "@shopify/react-native-skia";
+import { Canvas, Picture } from "@shopify/react-native-skia";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { BackHandler, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Button, Chip, Hint, radius, styles as ui, type, useTheme } from "../ui";
-import { bounds } from "./geometry";
 import type { Notebook, Stroke } from "./model";
 import {
-  boxesToMeasure, buildDraft, countOn, layoutNote, meaningOf, measureKey, moveEntry, patchEntry, tagOf, usedHighlightColors,
+  boxesToMeasure, buildDraft, countOn, layoutNote, meaningOf, measureKey, moveEntry, patchEntry, placeInk, tagOf, usedHighlightColors,
   type Meanings, type MyNoteDraft, type NoteEntry,
 } from "./myNote";
 import { loadMeanings, saveMeanings } from "./myNotePrefs";
@@ -272,20 +271,16 @@ function MoveBtn({ label, a11y, disabled, onPress }: { label: string; a11y: stri
 /** 글자로 못 읽은 손글씨: 흰 종이 위에 작게 (어두운 화면에서도 검은 펜이 보이게) */
 function InkPreview({ strokes }: { strokes: Stroke[] }) {
   const t = useTheme();
+  // 획 좌표 자체를 상자 안으로 옮겨 그린다. (Group의 옮기기+키우기는 적용 차례가 생각과 달라 그림이 상자 밖으로 나갔다)
   const view = useMemo(() => {
-    const bs = strokes.map(bounds);
-    const x0 = Math.min(...bs.map((b) => b[0])), y0 = Math.min(...bs.map((b) => b[1]));
-    const bw = Math.max(1, Math.max(...bs.map((b) => b[2])) - x0), bh = Math.max(1, Math.max(...bs.map((b) => b[3])) - y0);
-    const k = Math.min(1.5, 240 / bw, 72 / bh);
-    const w = Math.ceil(bw * k) + 8, h = Math.ceil(bh * k) + 8;
-    return { k, x0, y0, w, h, pic: inkPicture(strokes, new Set(), x0 + bw + 4, y0 + bh + 4, new WeakMap()) };
+    const placed = placeInk(strokes, 4, 4, 240, 72, 1.5);
+    const w = Math.ceil(placed.w) + 8, h = Math.ceil(placed.h) + 8;
+    return { w, h, pic: inkPicture(placed.ss, new Set(), w, h, new WeakMap()) };
   }, [strokes]);
   return (
     <View style={[s.inkBox, { width: view.w, height: view.h, borderColor: t.lineSoft }]}>
       <Canvas style={{ width: view.w, height: view.h }}>
-        <Group transform={[{ translateX: 4 - view.x0 * view.k }, { translateY: 4 - view.y0 * view.k }, { scale: view.k }]}>
-          <Picture picture={view.pic} />
-        </Group>
+        <Picture picture={view.pic} />
       </Canvas>
     </View>
   );

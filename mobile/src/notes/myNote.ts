@@ -237,19 +237,19 @@ function shift(ss: Stroke[], dy: number): Stroke[] {
   return ss.map((s) => ({ ...s, pts: s.pts.map((v, i) => (i % 3 === 1 ? v + dy : v)) }));
 }
 
-/** 손글씨 그림을 폭 w·높이 maxH 안에 (키우지는 않는다) */
-function placeInk(strokes: Stroke[], x: number, y: number, w: number, maxH = 140): { ss: Stroke[]; h: number } {
+/** 손글씨 그림을 (x, y)부터 폭 w·높이 maxH 안에 옮긴다 (maxK배보다 키우지는 않는다). 미리 보기 화면도 쓴다 */
+export function placeInk(strokes: Stroke[], x: number, y: number, w: number, maxH = 140, maxK = 1): { ss: Stroke[]; w: number; h: number } {
   const bs = strokes.map(bounds);
   const x0 = Math.min(...bs.map((b) => b[0])), y0 = Math.min(...bs.map((b) => b[1]));
   const bw = Math.max(1, Math.max(...bs.map((b) => b[2])) - x0), bh = Math.max(1, Math.max(...bs.map((b) => b[3])) - y0);
-  const k = Math.min(1, w / bw, maxH / bh);
+  const k = Math.min(maxK, w / bw, maxH / bh);
   const ss = strokes.map((s) => ({
     ...s,
     id: newId(),
     width: Math.max(0.6, s.width * k),
     pts: s.pts.map((v, i) => (i % 3 === 0 ? x + (v - x0) * k : i % 3 === 1 ? y + (v - y0) * k : v)),
   }));
-  return { ss, h: bh * k };
+  return { ss, w: bw * k, h: bh * k };
 }
 
 /** 항목 하나를 y=0에서부터 그린다 (쪽에 놓을 때 옮긴다) */

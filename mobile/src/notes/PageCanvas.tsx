@@ -6,7 +6,7 @@
 // - 손가락으로 밀고 놓으면 조금 더 미끄러진다 (관성)
 // - 필기가 많은 쪽은 화면이 움직이는 동안(끌기·확대·관성) 쪽 전체를 한 장의 사진으로 그리고, 멈추면 선명한 원본으로 돌아온다
 //   (삼성 노트처럼: 획 수백 개를 장면마다 다시 그리지 않게)
-import { Canvas, Circle, DashPathEffect, FilterMode, Group, Image, MipmapMode, Path, Picture, Rect, Skia, useImage, usePathValue, type SkImage, type SkPicture } from "@shopify/react-native-skia";
+import { Canvas, Circle, DashPathEffect, Fill, FilterMode, Group, Image, MipmapMode, Path, Picture, Rect, Skia, useImage, usePathValue, type SkImage, type SkPicture } from "@shopify/react-native-skia";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { PixelRatio, Platform, Text, View, type LayoutChangeEvent } from "react-native";
 import { GestureDetector, PointerType, usePanGesture, usePinchGesture, useSimultaneousGestures } from "react-native-gesture-handler";
@@ -542,7 +542,10 @@ export function PageCanvas(props: Props) {
     <StylusView style={{ flex: 1 }} onButton={onPenButton}>
     <GestureDetector gesture={gesture}>
       <View style={{ flex: 1, overflow: "hidden" }} onLayout={onLayout} testID="page-canvas">
-        <Canvas style={{ flex: 1, backgroundColor: theme.canvas }}>
+        {/* opaque: 안드로이드에서 SurfaceView로 그린다. 기본(TextureView)은 Skia가 120Hz로 그려도 창 합성이 60Hz라
+            스크롤이 삼성노트보다 끊겨 보였다 (atrace: Skia 8.3ms마다 vs 창 DrawFrames 16.6ms마다). 대신 바탕색은 Skia가 직접 칠한다 */}
+        <Canvas style={{ flex: 1, backgroundColor: theme.canvas }} opaque>
+          <Fill color={theme.canvas} />
           <Group transform={transform}>
             <Rect x={-0.5} y={-0.5} width={page.w + 1} height={page.h + 1} color={theme.dark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.10)"} />
             <Rect x={0} y={0} width={page.w} height={page.h} color="#FFFFFF" />

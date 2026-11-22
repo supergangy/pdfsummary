@@ -265,6 +265,13 @@ def sync_store():
 _ACCOUNTS = None
 
 
+def ai_reader():
+    """AI 설명에 쓸 Claude (시험에서는 가짜로 바꾼다)"""
+    from .ai import AIReader
+
+    return AIReader()
+
+
 def account_store():
     """계정·로그인 세션 (동기화 저장소와 같은 곳)"""
     global _ACCOUNTS
@@ -474,6 +481,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"code": sync_store().create_space()})
         if url.path.startswith("/api/account/"):
             return self._account(url.path, body)
+        if url.path == "/api/ai/explain":
+            return self._ai_explain(body)
         if url.path == "/api/sync/push":
             sid = self._sync_space()
             if not sid:
@@ -574,6 +583,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True})
             if path == "/api/account/me" and get:
                 return self._json(acc.me(token))
+            if path == "/api/account/ai" and get:   # 요금제와 이번 달 AI 기능 횟수
+                return self._json(acc.ai_status(token))
             if path == "/api/account/password" and not get:
                 acc.change_password(token, str(body.get("old") or ""), str(body.get("new") or ""))
                 return self._json({"ok": True})
@@ -588,6 +599,33 @@ class Handler(BaseHTTPRequestHandler):
         except AccountError as e:
             return self._err(str(e), e.status)
         return self._err("없는 주소입니다.", 404)
+
+    # ── AI 기능 (요금제마다 한 달 횟수) ──
+    def _ai_explain(self, body: dict):
+        """나만의 노트의 AI 설명: 로그인한 계정의 횟수를 하나 쓰고 Claude에게 묻는다. 실패하면 횟수를 돌려놓는다."""
+        from .accounts import AccountError
+        from .explain import ExplainError, clean_request, explain_items
+
+        if not STATE.server:
+            return self._err("없는 주소입니다.", 404)
+        try:
+            clean_request(body.get("items"))   # 모양부터 본다 (틀린 요청으로 횟수를 쓰지 않게)
+        except ExplainError as e:
+            return self._err(str(e))
+        acc = account_store()
+        try:
+            account = acc.use_ai(self.headers.get("X-Session") or "")
+        except AccountError as e:
+            return self._err(str(e), e.status)
+        try:
+            items = explain_items(str(body.get("book") or ""), body.get("items"), reader=ai_reader())
+        except ExplainError as e:
+            acc.refund_ai(account)
+            return self._err(str(e), 503)
+        except Exception:
+            acc.refund_ai(account)
+            return self._err("AI 설명을 만들다 문제가 생겼어요. 잠시 뒤 다시 해 주세요.", 500)
+        return self._json({"items": items, "ai": acc._ai_status(account)})
 
     def _sync_get(self, path: str, q: dict):
         sid = self._sync_space()

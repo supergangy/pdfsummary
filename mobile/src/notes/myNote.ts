@@ -41,7 +41,45 @@ export type NoteEntry = {
   memo: string; // 곁에 붙은 메모 (고칠 수 있음)
   strokes: Stroke[]; // ink: 손글씨 그림
   on: boolean; // 노트에 넣을지
+  explain?: Explain; // AI 설명 (프리미엄)
 };
+
+/** AI 설명: 쉬운 설명 + 그림 하나(표·막대그래프·순서). 서버 pdfsummary/explain.py가 만든다 */
+export type Explain = {
+  explain: string;
+  table?: { title: string; columns: string[]; rows: string[][] };
+  chart?: { title: string; labels: string[]; values: number[]; unit: string };
+  steps?: { title: string; items: string[] };
+};
+
+/** AI에게 보낼 항목 (켠 것 중 글이 있는 것: 칠한 말·용어·메모) */
+export function explainRequest(d: MyNoteDraft, meanings: Meanings): { id: string; tag: string; text: string; sentence: string; memo: string }[] {
+  const out = [];
+  for (const s of d.sections) {
+    for (const e of s.entries) {
+      if (!e.on || e.kind === "ink" || !e.text.trim()) continue;
+      out.push({ id: e.id, tag: tagOf(e, meanings), text: e.text, sentence: e.context, memo: e.memo });
+    }
+  }
+  return out;
+}
+
+/** AI 답을 항목에 붙인다 (답이 없는 항목은 그대로) */
+export function applyExplains(d: MyNoteDraft, answers: (Explain & { id: string })[]): MyNoteDraft {
+  const by = new Map(answers.map((a) => [a.id, a]));
+  return {
+    ...d,
+    sections: d.sections.map((s) => ({
+      ...s,
+      entries: s.entries.map((e) => {
+        const a = by.get(e.id);
+        if (!a) return e;
+        const { id: _id, ...ex } = a;
+        return { ...e, explain: ex };
+      }),
+    })),
+  };
+}
 
 export type NoteSection = { id: string; page: number; title: string; entries: NoteEntry[] };
 
@@ -278,8 +316,161 @@ function entryBlock(textBox: TextBoxFn, e: NoteEntry, meanings: Meanings, withCo
     ss.push(m);
     y = bottomOf(m);
   }
+  if (!glossary && e.explain) {
+    const ex = explainBlock(textBox, e.explain, x, y + 8, w);
+    ss.push(...ex.ss);
+    y = ex.bottom;
+  }
   const b = barColor(e);
   return { ss: [bar(b.color, LEFT + 3, 2, y - 2, b.opacity), ...ss], h: y };
+}
+
+// ── AI 설명 그리기: 설명 글, 표, 막대그래프, 순서 그림 ──
+const GRID = "#BDBDBD", HEAD_BG = "#E0E0E0", BAR_FILL = "#C9A7FF", STEP_LINE = "#9E9E9E";
+
+function line(color: string, width: number, pts: number[]): Stroke {
+  const p: number[] = [];
+  for (let i = 0; i < pts.length; i += 2) p.push(pts[i], pts[i + 1], 0.5);
+  return { id: newId(), tool: "pen", color, width, brush: "ballpoint", pts: p };
+}
+
+/** 네모: 변마다 따로 곧은 선 (한 획으로 이어 그리면 펜 다듬기가 모서리를 둥글게 비틀었다) */
+function rect(x0: number, y0: number, x1: number, y1: number, color: string, width = 0.8): Stroke[] {
+  return [line(color, width, [x0, y0, x1, y0]), line(color, width, [x1, y0, x1, y1]), line(color, width, [x1, y1, x0, y1]), line(color, width, [x0, y1, x0, y0])];
+}
+
+/** 화살표: 몸통과 머리 두 갈래를 각각 곧은 선으로 */
+function arrow(x0: number, y0: number, x1: number, y1: number, color: string): Stroke[] {
+  const a = Math.atan2(y1 - y0, x1 - x0), L = 5;
+  const h = (d: number) => [x1 - L * Math.cos(a + d), y1 - L * Math.sin(a + d), x1, y1];
+  return [line(color, 1, [x0, y0, x1, y1]), line(color, 1, h(0.6)), line(color, 1, h(-0.6))];
+}
+
+/** 칠한 판 (형광펜 한 줄을 굵게 그어 네모를 채운다) */
+function fill(x0: number, y0: number, x1: number, y1: number, color: string, opacity: number): Stroke {
+  const cy = (y0 + y1) / 2;
+  return { id: newId(), tool: "highlighter", color, width: Math.max(1, y1 - y0), opacity, pts: [x0, cy, 0.5, x1, cy, 0.5] };
+}
+
+function explainBlock(textBox: TextBoxFn, ex: Explain, x: number, y0: number, w: number): { ss: Stroke[]; bottom: number } {
+  const ss: Stroke[] = [];
+  let y = y0;
+  const label = textBox(x, y, "AI 설명", 10, ACCENT, w);
+  ss.push(label);
+  y = bottomOf(label) + 1;
+  if (ex.explain) {
+    const t = textBox(x, y, ex.explain, 12, SUB, w);
+    ss.push(t);
+    y = bottomOf(t);
+  }
+  const title = (s: string) => {
+    if (!s) return;
+    const t = textBox(x, y + 6, s, 11, INK, w);
+    ss.push(t);
+    y = bottomOf(t);
+  };
+  if (ex.table) {
+    title(ex.table.title);
+    const r = tableBlock(textBox, ex.table.columns, ex.table.rows, x, y + 6, w);
+    ss.push(...r.ss);
+    y = r.bottom;
+  } else if (ex.chart) {
+    title(ex.chart.title);
+    const r = chartBlock(textBox, ex.chart, x, y + 6, w);
+    ss.push(...r.ss);
+    y = r.bottom;
+  } else if (ex.steps) {
+    title(ex.steps.title);
+    const r = stepsBlock(textBox, ex.steps.items, x, y + 6, w);
+    ss.push(...r.ss);
+    y = r.bottom;
+  }
+  return { ss, bottom: y };
+}
+
+/** 표: 칸 폭은 글 길이에 맞춰 나누고, 줄 높이는 그 줄에서 가장 높은 칸에 맞춘다. 첫 줄(머리)은 회색 바탕 */
+function tableBlock(textBox: TextBoxFn, columns: string[], rows: string[][], x: number, y0: number, w: number): { ss: Stroke[]; bottom: number } {
+  const PAD = 5, SIZE = 11;
+  const n = columns.length;
+  const want = columns.map((c, i) => Math.max(textLineWidth(c, SIZE), ...rows.map((r) => textLineWidth(r[i] ?? "", SIZE))) + PAD * 2);
+  const minW = 56;
+  const total = want.reduce((a, b) => a + Math.max(minW, b), 0);
+  const widths = want.map((v) => (Math.max(minW, v) / total) * w);
+  const xs = [x];
+  for (const cw of widths) xs.push(xs[xs.length - 1] + cw);
+  const ss: Stroke[] = [];
+  const ys = [y0];
+  [columns, ...rows].forEach((cells, ri) => {
+    const top = ys[ys.length - 1];
+    const boxes = cells.slice(0, n).map((c, ci) => textBox(xs[ci] + PAD, top + PAD, c || " ", SIZE, ri === 0 ? INK : SUB, widths[ci] - PAD * 2));
+    const h = Math.max(SIZE * 1.4, ...boxes.map((b) => b.pts[4] - b.pts[1])) + PAD * 2;
+    if (ri === 0) ss.push(fill(x, top, x + w, top + h, HEAD_BG, 0.6));
+    ss.push(...boxes);
+    ys.push(top + h);
+  });
+  const bottom = ys[ys.length - 1];
+  for (const yy of ys) ss.push(line(GRID, 0.8, [x, yy, x + w, yy]));
+  for (const xx of xs) ss.push(line(GRID, 0.8, [xx, y0, xx, bottom]));
+  return { ss, bottom };
+}
+
+/** 가로 막대그래프: 이름 | 막대 | 값 */
+function chartBlock(textBox: TextBoxFn, c: NonNullable<Explain["chart"]>, x: number, y0: number, w: number): { ss: Stroke[]; bottom: number } {
+  const SIZE = 10;
+  const max = Math.max(...c.values, 1e-9);
+  const labelW = Math.min(w * 0.32, Math.max(...c.labels.map((l) => textLineWidth(l, SIZE))) + SIZE);
+  const valueW = 64;
+  const barX = x + labelW + 8, barMax = Math.max(40, w - labelW - 8 - valueW);
+  const fmt = (v: number) => `${Number.isInteger(v) ? v : Math.round(v * 100) / 100}${c.unit}`;
+  const ss: Stroke[] = [];
+  let y = y0;
+  c.labels.forEach((label, i) => {
+    const lb = textBox(x, y, label, SIZE, SUB, labelW);
+    const rowH = Math.max(16, lb.pts[4] - lb.pts[1]);
+    const len = Math.max(2, (c.values[i] / max) * barMax);
+    const cy = y + rowH / 2;
+    ss.push(lb, { id: newId(), tool: "highlighter", color: BAR_FILL, width: 11, opacity: 0.9, pts: [barX, cy, 0.5, barX + len, cy, 0.5] });
+    ss.push(textBox(barX + len + 6, y, fmt(c.values[i]), SIZE, INK, valueW));
+    y += rowH + 4;
+  });
+  ss.push(line(GRID, 0.8, [barX, y0 - 2, barX, y - 2]));
+  return { ss, bottom: y };
+}
+
+/** 순서 그림: 짧으면 가로로 네모 → 네모, 길거나 많으면 세로로 */
+function stepsBlock(textBox: TextBoxFn, items: string[], x: number, y0: number, w: number): { ss: Stroke[]; bottom: number } {
+  const SIZE = 11, PAD = 6, GAP = 22;
+  const ss: Stroke[] = [];
+  const n = items.length;
+  const boxW = (w - GAP * (n - 1)) / n;
+  const across = n <= 4 && boxW >= 70 && items.every((t) => textLineWidth(t, SIZE) <= (boxW - PAD * 2) * 2);
+  if (across) {
+    const boxes = items.map((t, i) => textBox(x + i * (boxW + GAP) + PAD, y0 + PAD, t, SIZE, INK, boxW - PAD * 2));
+    const h = Math.max(...boxes.map((b) => b.pts[4] - b.pts[1])) + PAD * 2;
+    items.forEach((_, i) => {
+      const bx = x + i * (boxW + GAP);
+      ss.push(...rect(bx, y0, bx + boxW, y0 + h, STEP_LINE));
+      if (i < n - 1) {
+        const cy = y0 + h / 2;
+        ss.push(...arrow(bx + boxW + 4, cy, bx + boxW + GAP - 4, cy, STEP_LINE));
+      }
+    });
+    ss.push(...boxes);
+    return { ss, bottom: y0 + h };
+  }
+  let y = y0;
+  const bw = Math.min(w, 360);
+  items.forEach((t, i) => {
+    const b = textBox(x + PAD, y + PAD, t, SIZE, INK, bw - PAD * 2);
+    const h = b.pts[4] - b.pts[1] + PAD * 2;
+    ss.push(...rect(x, y, x + bw, y + h, STEP_LINE), b);
+    y += h;
+    if (i < n - 1) {
+      ss.push(...arrow(x + 24, y + 3, x + 24, y + GAP - 4, STEP_LINE));
+      y += GAP;
+    }
+  });
+  return { ss, bottom: y };
 }
 
 function dateLabel(now: number): string {

@@ -10,6 +10,10 @@
 - Google 계정으로도 로그인할 수 있다 (google_auth.py가 ID 토큰을 확인). 같은 이메일의 계정이 있으면 그 계정에
   Google을 이어 붙이고, 없으면 비밀번호 없는 계정을 새로 만든다. 이메일 확인을 거치지 않은 계정에 이어 붙일 때는
   (남이 그 이메일로 먼저 가입해 두었을 수 있으니) 그 계정의 비밀번호와 로그인을 모두 없앤다.
+- 요금제(plan): 무료·프리미엄. Claude를 쓰는 AI 기능(나만의 노트의 'AI 설명')을 한 달에 몇 번 쓸 수 있는지가 다르다.
+  결제 연동은 아직 없어서, 서버 관리자가 바꿔 준다:
+    python -m pdfsummary.accounts plan 이메일 premium
+  한 달 횟수는 PDFSUMMARY_AI_LIMITS="free=3,premium=100" 처럼 바꿀 수 있다 (0이면 그 요금제는 못 씀).
 - 비밀번호를 잊으면: 메일로 6자리 코드를 받아 새 비밀번호를 정한다.
   코드는 15분 동안, 5번 틀리면 끝. 가입된 이메일인지 아닌지는 답에서 드러나지 않는다.
   메일 서버가 없으면 서버 관리자가 바꿔 준다:
@@ -20,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import re
 import secrets
 import threading
@@ -38,6 +43,24 @@ FAIL_WINDOW = 60.0
 FAIL_PER_EMAIL = 5
 FAIL_PER_IP = 30
 SCRYPT = {"n": 2 ** 14, "r": 8, "p": 1}
+
+# 요금제: 이름 → 화면에 보일 이름. AI 기능(Claude) 한 달 횟수가 다르다
+PLANS = {"free": "무료", "premium": "프리미엄"}
+DEFAULT_AI_LIMITS = {"free": 3, "premium": 100}
+
+
+def ai_limits() -> dict[str, int]:
+    """요금제마다 한 달에 AI 기능을 쓸 수 있는 횟수 (PDFSUMMARY_AI_LIMITS="free=3,premium=100"로 바꿈)"""
+    out = dict(DEFAULT_AI_LIMITS)
+    for part in os.environ.get("PDFSUMMARY_AI_LIMITS", "").split(","):
+        k, _, v = part.partition("=")
+        if k.strip() in PLANS and v.strip().isdigit():
+            out[k.strip()] = int(v.strip())
+    return out
+
+
+def this_month(now: Optional[float] = None) -> str:
+    return time.strftime("%Y-%m", time.localtime(time.time() if now is None else now))
 NO_PASSWORD = "!"            # Google로만 가입해 비밀번호가 없는 계정
 RESET_TTL = 15 * 60          # 메일 코드(가입 확인·비밀번호 찾기)가 살아 있는 시간
 RESET_TRIES = 5              # 코드를 이만큼 틀리면 끝
@@ -120,6 +143,10 @@ class AccountStore:
         if "google" not in cols:     # 이어 붙인 Google 계정 (Google의 사용자 번호 sub)
             self.db.execute("ALTER TABLE accounts ADD COLUMN google TEXT")
         self.db.execute("CREATE UNIQUE INDEX IF NOT EXISTS accounts_google ON accounts (google) WHERE google IS NOT NULL")
+        if "plan" not in cols:       # 요금제 (예전 계정은 무료)
+            self.db.execute("ALTER TABLE accounts ADD COLUMN plan TEXT NOT NULL DEFAULT 'free'")
+        self.db.execute("CREATE TABLE IF NOT EXISTS ai_usage (account TEXT NOT NULL, month TEXT NOT NULL, "
+                        "used INTEGER NOT NULL, PRIMARY KEY (account, month))")
         self.sent: dict[str, list[float]] = {}
         self.fails: dict[str, list[float]] = {}
         self.fail_lock = threading.Lock()
@@ -306,7 +333,56 @@ class AccountStore:
             n = self.db.execute("SELECT COUNT(*) FROM sessions WHERE account = ?", (s["account"],)).fetchone()[0]
             pw, google = self.db.execute("SELECT pw, google FROM accounts WHERE id = ?", (s["account"],)).fetchone()
         return {"email": s["email"], "created": s["created"], "devices": n,
-                "has_password": pw != NO_PASSWORD, "google": bool(google)}
+                "has_password": pw != NO_PASSWORD, "google": bool(google), "ai": self._ai_status(s["account"])}
+
+    # ── 요금제·AI 기능 횟수 ──
+    def _ai_status(self, account: str) -> dict:
+        limits = ai_limits()
+        with self.lock:
+            row = self.db.execute("SELECT plan FROM accounts WHERE id = ?", (account,)).fetchone()
+            used = self.db.execute("SELECT used FROM ai_usage WHERE account = ? AND month = ?",
+                                   (account, this_month())).fetchone()
+        plan = row[0] if row and row[0] in PLANS else "free"
+        return {"plan": plan, "label": PLANS[plan], "used": used[0] if used else 0, "limit": limits.get(plan, 0)}
+
+    def ai_status(self, token: str) -> dict:
+        """{plan, label(화면 이름), used(이번 달 쓴 횟수), limit(한 달 횟수)}"""
+        return self._ai_status(self._need(token)["account"])
+
+    def use_ai(self, token: str) -> str:
+        """AI 기능을 한 번 쓴다: 횟수를 먼저 잡아 두고 계정 번호를 돌려준다 (실패하면 refund_ai로 돌려놓는다).
+        못 쓰면 AccountError — 무료로 못 쓰는 기능이면 402, 이번 달 횟수를 다 썼으면 429."""
+        account = self._need(token)["account"]
+        limits = ai_limits()
+        month = this_month()
+        with self.lock:
+            row = self.db.execute("SELECT plan FROM accounts WHERE id = ?", (account,)).fetchone()
+            plan = row[0] if row and row[0] in PLANS else "free"
+            limit = limits.get(plan, 0)
+            r = self.db.execute("SELECT used FROM ai_usage WHERE account = ? AND month = ?", (account, month)).fetchone()
+            used = r[0] if r else 0
+            if limit <= 0:
+                raise AccountError("AI 설명은 프리미엄 기능이에요.", 402)
+            if used >= limit:
+                more = " 프리미엄으로 바꾸면 더 쓸 수 있어요." if plan == "free" else ""
+                raise AccountError(f"이번 달 AI 설명을 다 썼어요 ({limit}번). 다음 달 1일에 다시 채워져요.{more}", 429)
+            self.db.execute("INSERT INTO ai_usage (account, month, used) VALUES (?, ?, 1) "
+                            "ON CONFLICT (account, month) DO UPDATE SET used = used + 1", (account, month))
+        return account
+
+    def refund_ai(self, account: str) -> None:
+        """AI가 답하지 못했을 때 잡아 둔 한 번을 돌려놓는다"""
+        with self.lock:
+            self.db.execute("UPDATE ai_usage SET used = MAX(0, used - 1) WHERE account = ? AND month = ?",
+                            (account, this_month()))
+
+    def set_plan(self, email: str, plan: str) -> None:
+        if plan not in PLANS:
+            raise AccountError(f"요금제는 {', '.join(PLANS)} 중 하나예요.")
+        with self.lock:
+            cur = self.db.execute("UPDATE accounts SET plan = ? WHERE email = ?", (plan, normalize_email(email)))
+        if cur.rowcount == 0:
+            raise AccountError("그런 계정이 없어요.", 404)
 
     def change_password(self, token: str, old: str, new: str) -> None:
         """비밀번호 바꾸기 (Google로만 가입한 계정은 새로 만들기). 이 기기 말고 다른 기기는 모두 로그아웃된다."""
@@ -466,6 +542,9 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("reset-password", help="비밀번호를 잊은 사람의 비밀번호를 새로 정하기 (모든 기기 로그아웃)")
     r.add_argument("email")
     sub.add_parser("list", help="가입한 계정 목록")
+    pl = sub.add_parser("plan", help="요금제 바꾸기 (free·premium). AI 기능을 한 달에 쓸 수 있는 횟수가 달라진다")
+    pl.add_argument("email")
+    pl.add_argument("plan", choices=sorted(PLANS))
     t = sub.add_parser("test-mail", help="메일 서버 설정 확인: 시험 메일 보내기")
     t.add_argument("to")
     a = p.parse_args(argv)
@@ -486,11 +565,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if a.cmd == "list":
             with store.lock:
-                rows = store.db.execute("SELECT email, created, verified, google, pw FROM accounts ORDER BY created").fetchall()
-            for email, created, verified, google, pw in rows:
+                rows = store.db.execute(
+                    "SELECT email, created, verified, google, pw, plan FROM accounts ORDER BY created").fetchall()
+            for email, created, verified, google, pw, plan in rows:
                 how = "+".join(x for x, on in (("비밀번호", pw != NO_PASSWORD), ("Google", bool(google))) if on)
                 print(f"{email}\t{time.strftime('%Y-%m-%d', time.localtime(created))}\t"
-                      f"{'이메일 확인됨' if verified else '이메일 확인 안 됨'}\t{how}")
+                      f"{'이메일 확인됨' if verified else '이메일 확인 안 됨'}\t{how}\t{PLANS.get(plan, plan)}")
+            return 0
+        if a.cmd == "plan":
+            store.set_plan(a.email, a.plan)
+            print(f"{a.email} 의 요금제를 '{PLANS[a.plan]}'(으)로 바꿨어요. AI 기능은 한 달 {ai_limits()[a.plan]}번.")
             return 0
         new = os.environ.get("PDFSUMMARY_NEW_PASSWORD") or getpass.getpass("새 비밀번호: ")
         store.reset_password(a.email, new)

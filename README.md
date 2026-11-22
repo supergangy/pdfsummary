@@ -125,6 +125,7 @@ docker run -p 8080:8080 -e PDFSUMMARY_ACCESS_CODE="길고-아무도-모를-접�
 | `PORT` | 받을 포트 (기본 8080, 클라우드가 정해 주면 그 값) |
 | `PDFSUMMARY_SYNC_DIR` | 필기 앱 **실시간 동기화** 기록을 둘 폴더 (기본 `~/.pdfsummary/sync`, Docker는 `/data/sync`). 요약용 파일과 달리 지우지 않으니 **디스크(볼륨)에 두세요** |
 | `PDFSUMMARY_SMTP_HOST` · `_PORT` · `_SECURITY` · `_USER` · `_PASSWORD` · `_FROM` | 필기 앱 **가입 확인·비밀번호 찾기 메일**을 보낼 메일 서버. `_SECURITY`는 `starttls`(기본, 587) · `ssl`(465) · `none`. Gmail이면 `smtp.gmail.com`, 아이디는 Gmail 주소, 비밀번호는 Google 계정의 '앱 비밀번호'. 없으면 가입할 때 이메일을 확인하지 않고, 비밀번호 찾기 메일도 꺼집니다 |
+| `PDFSUMMARY_AI_LIMITS` | 요금제마다 한 달에 **AI 기능**(나만의 노트의 'AI 설명')을 쓸 수 있는 횟수. 기본 `free=3,premium=100`. 0이면 그 요금제는 못 씀. AI 기능은 서버의 `ANTHROPIC_API_KEY`로 Claude를 부르므로 그 키가 있어야 켜집니다 |
 | `PDFSUMMARY_GOOGLE_WEB_CLIENT_ID` · `_IOS_CLIENT_ID` · `_ANDROID_CLIENT_ID` | 필기 앱 **Google 계정으로 로그인**. Google Cloud의 OAuth 클라이언트 ID (아래 '필기 앱 Google 로그인 준비'). 웹 클라이언트 ID가 없으면 Google 로그인이 꺼집니다 |
 
 - 아이폰·아이패드 앱은 **https** 주소만 붙을 수 있습니다. Render · Fly.io · Google Cloud Run 같은 곳에 Docker 이미지를 올리면 https 주소를 줍니다.
@@ -136,6 +137,8 @@ docker run -p 8080:8080 -e PDFSUMMARY_ACCESS_CODE="길고-아무도-모를-접�
   - 메일 서버를 정해 두면 가입할 때 그 이메일로 6자리 확인 코드를 보내, 받은 사람만 가입할 수 있습니다 (오타 난 이메일·남의 이메일로 가입 방지). `python -m pdfsummary.accounts list`에 계정마다 이메일 확인 여부가 나옵니다.
   - 비밀번호를 잊은 사람: 메일 서버(위 `PDFSUMMARY_SMTP_*`)를 정해 두면 앱의 **비밀번호를 잊었어요**에서 6자리 코드를 메일로 받아 스스로 새 비밀번호를 정합니다 (코드는 15분, 5번 틀리면 끝, 같은 이메일로 1분에 한 번·한 시간에 5번까지, 가입되지 않은 이메일이어도 같은 답). 설정 확인: `python -m pdfsummary.accounts test-mail 받을주소`.
     메일 서버가 없으면 서버에서 `python -m pdfsummary.accounts reset-password 이메일` (그 계정의 모든 기기가 로그아웃됨). 가입한 계정 보기: `python -m pdfsummary.accounts list`. Docker라면 `docker exec -it <컨테이너> python -m pdfsummary.accounts …`.
+- **요금제 (무료·프리미엄)**: Claude를 쓰는 AI 기능은 계정의 요금제마다 한 달 횟수가 다릅니다 (`PDFSUMMARY_AI_LIMITS`, 매달 1일에 다시 채워짐). 결제 연동은 아직 없어서 서버 관리자가 바꿉니다: `python -m pdfsummary.accounts plan 이메일 premium` (되돌리기는 `free`). `list`에 요금제가 같이 나옵니다.
+  - **AI 설명** (`POST /api/ai/explain`, 로그인 필요): 필기 앱의 나만의 노트가 칠한 항목(최대 60개)을 보내면, Claude(`claude-opus-5-5`)가 설명이 필요한 항목에만 쉬운 설명과 그림 하나(표·막대그래프·순서)를 만들어 줍니다. 숫자 그래프는 교재에 실제 숫자가 있을 때만. 요청 하나가 횟수 하나이고, AI가 답하지 못하면 횟수를 돌려놓습니다. 교재 글은 서버 로그에 남기지 않습니다.
 
 ### 필기 앱 Google 로그인 준비
 

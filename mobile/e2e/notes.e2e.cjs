@@ -405,6 +405,8 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     await page.getByRole("button", { name: "나만의 노트", exact: true }).click({ timeout: 30000 });
     await page.getByLabel("노트로 만들기").waitFor({ timeout: 10000 });
     await page.getByText("경쟁적 저해제", { exact: true }).waitFor({ timeout: 5000 });
+    // AI 설명(프리미엄)은 로그인해야 쓸 수 있다고 알려 준다 (이 시험 서버에는 로그인하지 않았다)
+    await page.getByText(/AI 설명은 로그인한 계정으로 쓸 수 있어요/).waitFor({ timeout: 10000 });
     const meaning = page.getByLabel(/형광펜의 뜻$/).first();
     if (!(await meaning.inputValue()).trim()) fail("형광펜 색의 뜻이 비어 있음");
     await meaning.fill("개념");

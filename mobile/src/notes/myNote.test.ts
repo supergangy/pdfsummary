@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { boxesToMeasure, buildDraft, countOn, layoutNote, meaningOf, measureKey, moveEntry, patchEntry, tagOf, usedHighlightColors, wholeWords, type MyNoteDraft } from "./myNote.ts";
+import { applyExplains, boxesToMeasure, buildDraft, countOn, explainRequest, layoutNote, meaningOf, measureKey, moveEntry, patchEntry, tagOf, usedHighlightColors, wholeWords, type MyNoteDraft } from "./myNote.ts";
 import { A4, type Stroke } from "./model.ts";
 import type { QuickItem, QuickSummary } from "./quick.ts";
 
@@ -202,4 +202,65 @@ test("layout uses the heights measured on the device: a title that wraps more pu
   const meta = ss[1];
   assert.ok(meta.pts[1] >= title.pts[4], "제목 아래에 붙는 줄이 제목과 겹침");
   for (const p of nb.pages) assert.deepEqual(overlaps(ink[p.id]), []);
+});
+
+test("AI explanations: request only the entries that are on and have words, then attach the answers", () => {
+  let d = buildDraft(sample());
+  const [first, second] = d.sections[0].entries;
+  d = patchEntry(d, second.id, { on: false });
+  const req = explainRequest(d, {});
+  assert.ok(req.some((r) => r.id === first.id && r.tag === "핵심" && r.text === "경쟁적 저해제" && r.sentence.includes("활성 부위")));
+  assert.ok(!req.some((r) => r.id === second.id)); // 끈 항목
+  assert.ok(!req.some((r) => d.sections[0].entries.find((e) => e.id === r.id)?.kind === "ink")); // 그림 항목
+  const withEx = applyExplains(d, [{ id: first.id, explain: "기질과 경쟁해요." }]);
+  assert.equal(withEx.sections[0].entries[0].explain?.explain, "기질과 경쟁해요.");
+  assert.equal(withEx.sections[0].entries[2].explain, undefined);
+});
+
+test("AI explanations are drawn under the entry: text, a gridded table, a bar chart and step boxes, inside the page", () => {
+  let d = buildDraft(sample());
+  const ids = d.sections[0].entries.map((e) => e.id);
+  d = applyExplains(d, [
+    { id: ids[0], explain: "경쟁적 저해제는 기질 대신 활성 부위에 붙어요.", table: { title: "저해제 비교", columns: ["종류", "붙는 곳", "기질을 늘리면"], rows: [["경쟁적", "활성 부위", "저해가 줄어듦"], ["비경쟁적", "다른 부위", "그대로"]] } },
+    { id: ids[1], explain: "", chart: { title: "반응 속도", labels: ["기질 적음", "기질 많음"], values: [2, 8], unit: "배" } },
+    { id: ids[2], explain: "조절 과정", steps: { title: "", items: ["신호 분자 결합", "모양 바뀜", "활성 변화"] } },
+  ]);
+  const { nb, ink } = layoutNote(d, {});
+  const all = Object.values(ink).flat();
+  const texts = all.filter((s) => s.tool === "text").map((s) => s.text);
+  for (const t of ["AI 설명", "경쟁적 저해제는 기질 대신 활성 부위에 붙어요.", "저해제 비교", "종류", "붙는 곳", "비경쟁적", "그대로", "반응 속도", "기질 많음", "8배", "2배", "신호 분자 결합", "활성 변화"]) {
+    assert.ok(texts.includes(t), `없음: ${t}`);
+  }
+  // 막대 길이는 값에 비례
+  const bars = all.filter((s) => s.tool === "highlighter" && s.color === "#C9A7FF" && s.width === 11);
+  assert.equal(bars.length, 2);
+  const len = (s: Stroke) => s.pts[3] - s.pts[0];
+  assert.ok(Math.abs(len(bars[1]) / len(bars[0]) - 4) < 0.01);
+  // 표의 칸 선, 순서 그림의 네모
+  assert.ok(all.filter((s) => s.tool === "pen" && s.color === "#BDBDBD").length >= 4 + 3);
+  // 순서 그림: 네모 3개(변 4개씩) + 화살표 2개(선 3개씩), 모두 두 점짜리 곧은 선
+  const stepLines = all.filter((s) => s.tool === "pen" && s.color === "#9E9E9E");
+  assert.equal(stepLines.length, 3 * 4 + 2 * 3);
+  assert.ok(stepLines.every((s) => s.pts.length === 6));
+  for (const p of nb.pages) {
+    assert.deepEqual(overlaps(ink[p.id]), []);
+    for (const s of ink[p.id]) for (let i = 0; i < s.pts.length; i += 3) assert.ok(s.pts[i] <= A4.w && s.pts[i + 1] <= A4.h, `쪽 밖: ${s.text ?? s.tool}`);
+  }
+  // 표 칸의 글은 칸 폭 안에서 잰다 (기기에서 잰 높이와 맞도록)
+  const keys = boxesToMeasure(d, {}).map((b) => b.text);
+  assert.ok(keys.includes("저해가 줄어듦") && keys.includes("신호 분자 결합"));
+});
+
+test("long or many steps are stacked downwards instead of across", () => {
+  let d = buildDraft(sample());
+  const id = d.sections[0].entries[0].id;
+  d = applyExplains(d, [{ id, explain: "", steps: { title: "", items: ["하나", "둘", "셋", "넷", "다섯"] } }]);
+  const { nb, ink } = layoutNote(d, {});
+  const ss = ink[nb.pages[0].id];
+  assert.equal(ss.filter((s) => s.tool === "pen" && s.color === "#9E9E9E").length, 5 * 4 + 4 * 3);
+  const words = ss.filter((s) => s.tool === "text" && ["하나", "둘", "셋", "넷", "다섯"].includes(s.text!));
+  assert.equal(words.length, 5);
+  assert.ok(words.every((b) => b.pts[0] === words[0].pts[0])); // 모두 같은 왼쪽 → 세로로 쌓임
+  assert.ok(words.every((b, i) => i === 0 || b.pts[1] > words[i - 1].pts[4]));
+  assert.deepEqual(overlaps(ss), []);
 });

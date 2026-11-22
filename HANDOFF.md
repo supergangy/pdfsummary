@@ -1,6 +1,6 @@
 # 인수인계서 — 작업을 이어가는 사람을 위한 안내
 
-> 마지막 정리: **2026-11-22** · 브랜치 `claude/eager-galileo-06vzez` · 최신 APK는 **빌드 29** (나만의 노트 글 겹침 고침: 글상자 높이를 기기에서 재어 배치, 갤럭시탭에서 확인. 미리 보기의 손글씨 그림이 안 보이던 것 고침. 빌드 27: 안드로이드 아래 시스템 막대 숨기기. 빌드 26: 바로 요약을 다듬어 새 노트로 만드는 **나만의 노트**. 빌드 25: 모던 미니멀 디자인, S펜 단추 두 번으로 도구 바꾸기, 스크롤 관성·움직일 때 쪽 사진)
+> 마지막 정리: **2026-11-22** · 브랜치 `claude/eager-galileo-06vzez` · 최신 APK는 **빌드 30** (나만의 노트의 **AI 설명(프리미엄)**: Claude가 설명·표·막대그래프·순서 그림, 계정 요금제 무료·프리미엄. 빌드 29: 나만의 노트 글 겹침 고침: 글상자 높이를 기기에서 재어 배치, 갤럭시탭에서 확인. 미리 보기의 손글씨 그림이 안 보이던 것 고침. 빌드 27: 안드로이드 아래 시스템 막대 숨기기. 빌드 26: 바로 요약을 다듬어 새 노트로 만드는 **나만의 노트**. 빌드 25: 모던 미니멀 디자인, S펜 단추 두 번으로 도구 바꾸기, 스크롤 관성·움직일 때 쪽 사진)
 > 이 문서만 읽으면 VS Code에서 바로 이어서 작업할 수 있도록 썼습니다. 기능 설명서는 [README.md](README.md)(PC·서버)와 [mobile/README.md](mobile/README.md)(앱)에 있습니다.
 
 ---
@@ -13,7 +13,7 @@
 | 구성 | ① 파이썬 프로그램(`pdfsummary/`): 명령줄 · 끌어다 놓기 실행 화면 · 설치 앱(Windows/Mac) · **앱용 서버**(요약·동기화·계정) ② 필기 앱(`mobile/`, Expo): 아이패드·갤럭시탭·폰·웹 |
 | 브랜치 | 모든 작업은 `claude/eager-galileo-06vzez`에만 있음. **main에 합치지 않았고 PR도 없음** |
 | 자동 점검(CI) | 마지막 커밋 기준 **모두 통과**: 파이썬 시험, 앱 타입 검사·단위 시험(106개), 웹 e2e 2종, 안드로이드 APK 빌드, 에뮬레이터 실행 시험, iOS 빌드 |
-| 설치 파일 | 갤럭시탭용 APK (빌드 29): **https://github.com/supergangy/pdfsummary/releases/latest/download/pdfsummary.apk** (항상 최신, 로그인 없이) |
+| 설치 파일 | 갤럭시탭용 APK (빌드 30): **https://github.com/supergangy/pdfsummary/releases/latest/download/pdfsummary.apk** (항상 최신, 로그인 없이) |
 | 실제 기기 | 갤럭시탭 SM-X820(안드로이드 17)에서 확인 중 (2026-11-21, 무선 디버깅). 필기 사라짐·S펜 단추 지우개는 **빌드 19에서 고쳐진 것 확인**. 빌드 20·21에서 고친 것(손글씨 받침, 도구 설정 창 자리, 요약 글자, 에이전트 시험에서 나온 27가지)은 **웹판에서만 확인했고 실기기 확인은 아직** → §6 P0 표, §7 점검표 |
 | 서버 | 코드·Docker 이미지 정의는 완성. **아직 어디에도 배포하지 않음** |
 | 저장소 공개 | **공개(public)**. 첫 공개 커밋 2026-10-31 → 특허를 낼 거라면 기한이 있음 (§6 P1) |
@@ -168,7 +168,8 @@ pdfsummary-app                        # 끌어다 놓기 실행 화면 (브라�
 | `ai.py` · `local_ai.py` | Claude / 내 컴퓨터 AI(Ollama) |
 | `app.py` | 실행 화면 + **앱용 서버**(모든 HTTP 엔드포인트) |
 | `sync.py` | 실시간 동기화 저장소 (SQLite 작업 기록, 오래 기다리기, PDF 내용 주소) |
-| `accounts.py` | 계정·세션·가입 확인/비밀번호 찾기 메일 코드·Google 계정 잇기, 관리자 명령(`python -m pdfsummary.accounts …`) |
+| `accounts.py` | 계정·세션·가입 확인/비밀번호 찾기 메일 코드·Google 계정 잇기, **요금제(무료·프리미엄)와 달마다 AI 기능 횟수**(`use_ai`·`refund_ai`, `PDFSUMMARY_AI_LIMITS`), 관리자 명령(`python -m pdfsummary.accounts list·plan·reset-password·test-mail`) |
+| `explain.py` | 나만의 노트의 **AI 설명**: 칠한 항목 → Claude(구조화된 출력)가 설명 + 그림 하나(표·막대그래프·순서). 답 크기를 다듬어(`clean_answer`) 앱으로. 엔드포인트는 `app.py`의 `POST /api/ai/explain`(로그인·횟수 확인, 실패하면 횟수 돌려놓기)·`GET /api/account/ai` |
 | `mailer.py` | SMTP 메일 (`PDFSUMMARY_SMTP_*`, 시험용 `PDFSUMMARY_MAIL_DIR`) |
 | `google_auth.py` | Google ID 토큰 확인 (RS256 서명을 파이썬만으로, JWKS 기억) |
 | `notes.py` · `device_ai.py` | 앱 노트 → 요약용 PDF, 기기 안 AI 일감 |
@@ -188,6 +189,7 @@ pdfsummary-app                        # 끌어다 놓기 실행 화면 (브라�
 | `src/notes/fileFs.ts` · `fs.ts` | **기기 파일 저장** (§5-1 교훈) |
 | `src/notes/quick.ts` · `QuickScreen.tsx` | 바로 요약 (형광펜/밑줄/동그라미/손글씨/메모/표시, 손글씨 줄 나누기·받침 붙이기 `sameLine`, 문제·보기 번호에서 문장 끊기 `itemMarker`) |
 | `src/notes/myNote.ts` · `MyNoteMaker.tsx` · `myNotePrefs.ts` | **나만의 노트**: 바로 요약 → 새 노트. `buildDraft`(쪽 순서로 묶기, 같은 문장의 같은 색은 한 항목, 40pt 안의 메모는 붙이기, 못 읽은 손글씨는 그림), `layoutNote`(A4 빈 쪽에 제목·색 뜻 풀이·쪽 묶음·용어 모음을 글상자와 형광펜 막대로, 넘치면 다음 쪽). 미리 보기 화면에서 빼기·차례·메모·색 뜻. 색 뜻은 `mynote.json`에 기억 |
+| `src/notes/aiExplain.ts` | AI 설명 요청: 쓸 수 있는지(`aiAccess`: 서버 연결·로그인·서버 Claude 키·요금제) → `requestExplain`. 받은 답은 `myNote.ts`의 `applyExplains`가 항목에 붙이고, `explainBlock`(표 `tableBlock`·막대 `chartBlock`·순서 `stepsBlock`)이 글상자와 곧은 선으로 그린다 |
 | `src/notes/textLayer.ts` | **안드로이드**: 글자 인식(OCR)이 준 자리에 PDF 글자 층의 글자를 입힘 (`repairWithTextLayer`, ①→0 같은 오독 바로잡기). `modules/pdf-pages/index.ts`의 `pageText`가 부름 |
 | `src/notes/editor-logic.ts` · `app-nav.ts` · `objects-grid.ts` · `net-errors.ts` | 화면 없이 시험할 수 있게 뺀 작은 계산들: 쪽 바탕 그림 고르기·되돌린 쪽 찾기·버릴 획 / 뒤로 단추가 갈 곳·폴더 유지 / 쪽 모아보기 줄 계산 / 서버 시간 제한·오류 글 |
 | `src/notes/sync/*` | 동기화 엔진·계정·Google 버튼·동기화 화면 |
@@ -288,7 +290,8 @@ pdfsummary-app                        # 끌어다 놓기 실행 화면 (브라�
    - 가까운 선행 특허: US7712028(표시한 부분만 뽑아 요약, 만료 추정), 제록스 형광펜 검출 계열(US5048109·5272764·5619592, 만료 추정), **US8494280(스캔본 형광펜 영역 추출, 살아 있을 수 있음)**, **US12008332(형광펜·주석 + LLM 요약, 2024 등록·유효)**, US20250378101(출원 중), KR101443404.
    - "표시 부분 추출 + AI 요약" 아이디어 자체는 특허받기 어려울 가능성. 차별 후보는 **책 인쇄 색 vs 내 형광펜 구분(원본 비교·색 지정)**, 표시 종류별 정리 + 앞뒤 문장 묶기, 글줄 맞춤 보정, 기기 안 요약 흐름.
    - **변리사 상담 + 출시 전 FTO(침해 여부) 검토** 필요. 저장소 비공개 전환도 고려.
-8. **개인정보 처리 안내·약관**: 스토어 심사와 계정 기능에 필요 (PDF를 사용자가 정한 서버로 보냄, 이메일 저장, Google 로그인).
+8. **프리미엄(AI 기능) 결제·요금 정하기**: 요금제 틀(무료 한 달 3번·프리미엄 100번, `PDFSUMMARY_AI_LIMITS`)과 서버 쪽 횟수 세기는 됐지만 **결제 연동은 없음** — 지금은 서버 관리자가 `python -m pdfsummary.accounts plan 이메일 premium`으로 바꿈. 정할 것: 프리미엄 값, 결제 방법(안드로이드는 Play 결제 정책상 앱 안 디지털 상품은 Google Play 결제가 원칙), 요금제 이름·횟수. 비용 감: AI 설명 한 번(항목 20개쯤)이 Claude Opus 5.5로 대략 200~500원. **AI 설명을 실제로 쓰려면 서버 배포(위 1) + 서버의 `ANTHROPIC_API_KEY`가 먼저** (실기기에서는 아직 진짜 Claude로 시험하지 않음 — 웹판에서 가짜 AI 서버로만 화면 확인)
+9. **개인정보 처리 안내·약관**: 스토어 심사와 계정 기능에 필요 (PDF를 사용자가 정한 서버로 보냄, 이메일 저장, Google 로그인).
 
 ### P2 — 기능 다듬기 (삼성노트·굿노트와 비교해 아직 없는 것)
 

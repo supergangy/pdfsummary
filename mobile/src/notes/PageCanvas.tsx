@@ -211,8 +211,10 @@ export function PageCanvas(props: Props) {
       }
       if (c.paper) cv.drawPicture(c.paper);
       cv.drawPicture(c.ink);
-      surface.flush();
       const img = surface.makeImageSnapshot();
+      // 화면 밖 그림판(남이 만든 텍스처를 감싼 것)의 사진은 Skia가 GPU 복사로 만드는데, 그 복사는 다음 flush로 미뤄진다.
+      // 사진을 찍은 뒤에 flush해야 그 복사도 지금(쉬는 동안) 끝난다 (전에는 첫 끌기 때 30ms 멈칫했다)
+      surface.flush();
       surface.dispose();
       // 두 번 전 사진은 이제 어디서도 그리지 않는다 → 바로 놓아준다 (큰 그림이라 GC를 기다리지 않게)
       const old = snapPrev.value;

@@ -10,7 +10,7 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "test": "node --test src/*.test.ts src/notes/*.test.ts src/notes/sync/*.test.ts",
-    "postinstall": "node scripts/copy-pdfjs.mjs && setup-skia-web public"
+    "postinstall": "patch-package && node scripts/copy-pdfjs.mjs && setup-skia-web public"
   },
   "dependencies": {
     "@expo/metro-runtime": "~58.0.16",
@@ -46,6 +46,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.3.0",
+    "patch-package": "^8.0.1",
     "typescript": "~6.0.3"
   }
 }

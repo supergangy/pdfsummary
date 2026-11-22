@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { PixelRatio, Platform, Text, View, type LayoutChangeEvent } from "react-native";
 import { GestureDetector, PointerType, usePanGesture, usePinchGesture, useSimultaneousGestures } from "react-native-gesture-handler";
 import Animated, { cancelAnimation, useAnimatedStyle, useDerivedValue, useSharedValue, withDecay, type SharedValue } from "react-native-reanimated";
-import { scheduleOnRN } from "react-native-worklets";
+import { scheduleOnRN, scheduleOnUI } from "react-native-worklets";
 
 import { StylusView } from "../../modules/stylus";
 import type { LineDash, Page, Stroke } from "./model";
@@ -82,6 +82,7 @@ export function PageCanvas(props: Props) {
   // 움직이는 동안 쓸 쪽 사진의 pt당 픽셀 (맞춤 보기의 화면 픽셀만큼, 너무 크지 않게)
   const snapK = useSharedValue(1);
   const snapVer = useSharedValue(-1); // 사진을 만든 때의 내용 번호 (-1 = 사진 없음·낡음)
+  const requestSnap = useRef(() => {}); // 잠시 뒤 쪽 사진을 만들어 두라고 부탁 (아래에서 채운다)
 
   const fit = useCallback((W: number = vw.value, H: number = vh.value) => {
     if (!W || !H) return;
@@ -93,6 +94,7 @@ export function PageCanvas(props: Props) {
     ty.value = MARGIN;
     snapK.value = Math.max(0.5, Math.min(SNAP_MAX / page.w, 4096 / page.h, s * PixelRatio.get()));
     snapVer.value = -1;
+    requestSnap.current();
     emitScale(s);
   }, [page.w, page.h, vw, vh, minS, maxS, scale, tx, ty, snapK, snapVer, emitScale]);
 
@@ -177,13 +179,19 @@ export function PageCanvas(props: Props) {
   const content = useSharedValue<SnapContent | null>(null); // 사진에 담을 것 (바뀔 때마다 ver가 오른다)
   const snap = useSharedValue<SkImage | null>(null);
   const snapPrev = useSharedValue<SkImage | null>(null);
+  const snapWanted = useSharedValue(false); // 움직이거나 쓰는 중이라 못 만든 사진이 있다
 
   /** 필기가 많은 쪽이면 쪽 사진(바탕 그림 + 속지 + 필기를 한 장으로)을 만든다. 내용이 그대로면 있던 사진을 쓴다.
-   *  UI 스레드에서 GPU로 그려 몇 ms면 된다. 못 만들면 사진 없이 원본으로 그린다. */
+   *  UI 스레드에서 GPU로 그리지만 획 300개 쪽에서 30ms쯤 걸린다 (갤럭시탭에서 잼) → 끌기를 시작할 때가 아니라
+   *  손을 쉬고 있을 때 미리 만든다 (requestSnap). 움직이거나 쓰는 중이면 미뤘다가 끝나면 다시 만든다. */
   const makeSnap = () => {
     "worklet";
     const c = content.value;
     if (!c || !heavy.value || snapVer.value === c.ver) return;
+    if (moving.value || mode.value !== 0) {
+      snapWanted.value = true;
+      return;
+    }
     try {
       const k = snapK.value;
       const surface = SNAP_GPU
@@ -213,6 +221,17 @@ export function PageCanvas(props: Props) {
     }
   };
 
+  const wantSnap = useCallback(() => requestSnap.current(), []);
+  /** 화면이 멈췄다. 움직이는 동안 미룬 쪽 사진이 있으면 이제 만들라고 부탁한다 */
+  const stopMoving = () => {
+    "worklet";
+    moving.value = false;
+    if (snapWanted.value) {
+      snapWanted.value = false;
+      scheduleOnRN(wantSnap);
+    }
+  };
+
   /** 손가락을 놓을 때의 속도로 조금 더 미끄러진다 (쪽 가장자리에서 멈춤) */
   const startFling = (vx: number, vy: number) => {
     "worklet";
@@ -224,13 +243,13 @@ export function PageCanvas(props: Props) {
     const canY = yHi > yLo && Math.abs(vy) > 80;
     flings.value = (canX ? 1 : 0) + (canY ? 1 : 0);
     if (!flings.value) {
-      moving.value = false;
+      stopMoving();
       return;
     }
     const done = () => {
       "worklet";
       flings.value = Math.max(0, flings.value - 1);
-      if (!flings.value && !pinching.value && mode.value !== 2) moving.value = false;
+      if (!flings.value && !pinching.value && mode.value !== 2) stopMoving();
     };
     // 아이폰 기본(0.998)보다 조금 덜 미끄럽게, 너무 세게 튀지 않게
     const v = (n: number) => Math.max(-6000, Math.min(6000, n));
@@ -260,7 +279,6 @@ export function PageCanvas(props: Props) {
         sy.value = ty.value;
         lastMove.value = { at: Date.now(), x: 0, y: 0 };
         moving.value = true;
-        makeSnap();
         return;
       }
       moving.value = pinching.value;
@@ -303,7 +321,6 @@ export function PageCanvas(props: Props) {
           sy.value = ty.value;
           lastMove.value = { at: Date.now(), x: 0, y: 0 };
           moving.value = true;
-          makeSnap();
         } else {
           mode.value = 4;
         }
@@ -408,7 +425,7 @@ export function PageCanvas(props: Props) {
         live.value = [];
         scheduleOnRN(emitLasso, pts);
       } else if (mode.value === 2 && !flings.value && !pinching.value) {
-        moving.value = false; // 미끄러지지 않고 그대로 멈췄다
+        stopMoving(); // 미끄러지지 않고 그대로 멈췄다
       }
       mode.value = 0;
     },
@@ -423,7 +440,6 @@ export function PageCanvas(props: Props) {
       stopFling();
       pinching.value = true;
       moving.value = true;
-      makeSnap();
       // 두 번째 손가락이 바로 닿았으면 방금 시작한 획은 확대하려던 것
       if (mode.value === 1 && Date.now() - started.value < 350) {
         mode.value = 4;
@@ -445,7 +461,7 @@ export function PageCanvas(props: Props) {
       "worklet";
       if (pinching.value) {
         pinching.value = false;
-        if (!flings.value && mode.value !== 2) moving.value = false;
+        if (!flings.value && mode.value !== 2) stopMoving();
       }
       scheduleOnRN(emitScale, scale.value);
     },
@@ -488,7 +504,17 @@ export function PageCanvas(props: Props) {
   useEffect(() => {
     ver.current += 1;
     content.value = { ver: ver.current, bg: image ?? null, paper: paper ?? null, ink: picture };
+    requestSnap.current();
   }, [image, paper, picture, content]);
+  // 내용이 바뀌고 0.7초 손을 쉬면 쪽 사진을 미리 만들어 둔다 (그 사이 끌면 사진 없이 원본으로 그린다)
+  const snapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  requestSnap.current = () => {
+    if (snapTimer.current) clearTimeout(snapTimer.current);
+    snapTimer.current = setTimeout(() => scheduleOnUI(makeSnap), 700);
+  };
+  useEffect(() => () => {
+    if (snapTimer.current) clearTimeout(snapTimer.current);
+  }, []);
   const inkCount = useMemo(() => strokes.reduce((n, s) => n + (s.tool === "text" ? 0 : 1), 0), [strokes]);
   useEffect(() => {
     heavy.value = inkCount >= HEAVY_STROKES;

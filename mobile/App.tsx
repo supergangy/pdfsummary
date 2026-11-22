@@ -1,5 +1,6 @@
 import * as DocumentPicker from "expo-document-picker";
 import { StatusBar } from "expo-status-bar";
+import { NavigationBar } from "expo-navigation-bar";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator, Alert, BackHandler, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, useColorScheme,
@@ -102,6 +103,9 @@ export default function App() {
         <ThemeModeContext.Provider value={themeMode}>
           <ThemeContext.Provider value={theme}>
             <StatusBar style={dark ? "light" : "dark"} />
+            {/* 안드로이드 아래 시스템 막대(제스처 줄·단추)는 숨긴다: 쪽 아래를 가리지 않게.
+                아래 끝에서 위로 쓸면 잠깐 나타났다가 저절로 다시 숨는다. 나타날 때도 회색 바탕 없이 (app.json enforceContrast) */}
+            <NavigationBar hidden style={dark ? "light" : "dark"} />
             <Root />
           </ThemeContext.Provider>
         </ThemeModeContext.Provider>

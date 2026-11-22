@@ -36,6 +36,13 @@
       ],
       "expo-secure-store",
       [
+        "expo-navigation-bar",
+        {
+          "enforceContrast": false,
+          "hidden": true
+        }
+      ],
+      [
         "expo-share-intent",
         {
           "iosActivationRules": "SUBQUERY (extensionItems, $extensionItem, SUBQUERY ($extensionItem.attachments, $attachment, ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO \"com.adobe.pdf\").@count == 1).@count == 1",

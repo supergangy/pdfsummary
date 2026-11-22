@@ -395,6 +395,40 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     }
     if (!found) fail("요약 결과에 칠한 글자가 없음");
     console.log("✓ PDF 노트: 형광펜 → 요약 결과에 '경쟁적 저해제'");
+
+    // ── 나만의 노트: 기기 요약을 다듬어 새 노트로 ──
+    await page.getByText("노트로", { exact: true }).click();
+    await canvas.waitFor({ timeout: 20000 });
+    await page.waitForTimeout(800);
+    await page.getByLabel("요약 만들기").click();
+    // 요약을 다 만들 때까지 꺼져 있다 (click이 켜질 때까지 기다린다)
+    await page.getByRole("button", { name: "나만의 노트", exact: true }).click({ timeout: 30000 });
+    await page.getByLabel("노트로 만들기").waitFor({ timeout: 10000 });
+    await page.getByText("경쟁적 저해제", { exact: true }).waitFor({ timeout: 5000 });
+    const meaning = page.getByLabel(/형광펜의 뜻$/).first();
+    if (!(await meaning.inputValue()).trim()) fail("형광펜 색의 뜻이 비어 있음");
+    await meaning.fill("개념");
+    await page.getByLabel("경쟁적 저해제에 메모 더하기").click();
+    await page.getByLabel("경쟁적 저해제 메모").fill("시험에 꼭 나옴");
+    await page.getByLabel("나만의 노트 이름").fill("효소 정리 노트");
+    if (process.env.E2E_SHOTS) await page.screenshot({ path: path.join(process.env.E2E_SHOTS, "mynote-maker.png") }); // 화면 확인용 (선택)
+    await page.getByLabel("노트로 만들기").click();
+    await canvas.waitFor({ timeout: 20000 });
+    await page.waitForTimeout(1500);
+    const files = await idb(page);
+    const made = Object.entries(files).find(([k, v]) => /notebook\.json$/.test(k) && v && JSON.parse(v).title === "효소 정리 노트");
+    if (!made) fail("나만의 노트가 저장되지 않음");
+    const dir = made[0].replace(/notebook\.json$/, "");
+    const texts = Object.entries(files)
+      .filter(([k, v]) => k.startsWith(dir + "ink/") && v)
+      .flatMap(([, v]) => JSON.parse(v))
+      .filter((st) => st.tool === "text")
+      .map((st) => st.text);
+    for (const want of ["효소 정리 노트", "1쪽", "경쟁적 저해제", "개념", "메모: 시험에 꼭 나옴"]) {
+      if (!texts.includes(want)) fail(`나만의 노트에 '${want}'가 없음: ${JSON.stringify(texts)}`);
+    }
+    if (!texts.some((x) => x.includes("기질과 구조가 비슷하여"))) fail("나만의 노트에 칠한 문장이 없음");
+    console.log("✓ 나만의 노트: 고르고 색 뜻·메모를 고쳐 새 노트로 (제목·쪽·칠한 글·문장·메모)");
     if (errors.length) fail("페이지 오류: " + errors.join(" | "));
   } catch (e) {
     await page.screenshot({ path: path.join(TMP, "failure.png") }).catch(() => {});

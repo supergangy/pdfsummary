@@ -10,13 +10,14 @@ import { ResultView } from "../platform/ResultView";
 import { Bar, Button, Hint, type, useTheme } from "../ui";
 import { tooSoon } from "./app-nav";
 import type { Ink, Notebook } from "./model";
+import { MyNoteMaker } from "./MyNoteMaker";
 import { overviewPrompt, quickHtml, quickSummary, type QuickSummary, splitInkLines } from "./quick";
 import { shareFile } from "./shareFile";
 import type { NoteStore } from "./store";
 
-type Props = { nb: Notebook; ink: Ink; store: NoteStore; onBack: () => void; onServerSummary: () => void };
+type Props = { nb: Notebook; ink: Ink; store: NoteStore; onBack: () => void; onServerSummary: () => void; onOpenNote: (id: string) => void };
 
-export function QuickScreen({ nb, ink, store, onBack, onServerSummary }: Props) {
+export function QuickScreen({ nb, ink, store, onBack, onServerSummary, onOpenNote }: Props) {
   const t = useTheme();
   const [q, setQ] = useState<QuickSummary | null>(null);
   const [prog, setProg] = useState<{ label: string; ratio: number } | null>({ label: "필기한 쪽을 읽는 중…", ratio: 0 });
@@ -24,6 +25,7 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary }: Props) 
   const [ink2, setInk2] = useState<string>("checking"); // 손글씨 인식 상태
   const [ai, setAi] = useState<DeviceAi.DeviceAiStatus | null>(null);
   const [note, setNote] = useState("");
+  const [making, setMaking] = useState(false); // '나만의 노트' 만들기 화면
   const alive = useRef(true);
   // 노트의 '요약' 단추를 빠르게 두 번 누르면 두 번째 누름이 같은 자리에 뜨는 '서버로 자세히'를 눌렀다 → 막 떴을 때의 누름은 넘긴다
   const openedAt = useRef(Date.now());
@@ -114,6 +116,8 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary }: Props) 
   const wide = width >= 700;
   const pad = { paddingHorizontal: wide ? 24 : 16 };
 
+  if (making && q) return <MyNoteMaker source={nb} summary={q} store={store} onCancel={() => setMaking(false)} onMade={onOpenNote} />;
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }} edges={["top", "left", "right"]}>
       {/* 맨 위 줄: 왼쪽에 돌아가기와 제목, 오른쪽에 조용한 단추들 (폰에서는 제목을 빼고 요약 안의 큰 제목을 쓴다) */}
@@ -137,6 +141,8 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary }: Props) 
           )}
           <Button small label="공유 (HTML)" onPress={() => void shareFile(html, `${nb.title} 요약.html`, "text/html")} disabled={!q} />
           <Button small label="서버로 자세히" onPress={serverSummary} />
+          {/* 손글씨를 다 읽은 뒤에 (읽는 중에 만들면 메모가 빠진다) */}
+          <Button small kind="primary" label="나만의 노트" onPress={() => setMaking(true)} disabled={!q || !!prog} />
         </View>
       </View>
       {prog && (

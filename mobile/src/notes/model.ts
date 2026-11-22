@@ -166,7 +166,7 @@ export function textBoxHeight(text: string, size: number, w: number): number {
 }
 
 /** 글 한 줄의 폭 어림. 넉넉하게 잡는다 (상자가 글보다 좁으면 화면에서 줄이 바뀌어 버린다) */
-function textLineWidth(line: string, size: number): number {
+export function textLineWidth(line: string, size: number): number {
   let width = 0;
   for (const c of line) width += c.charCodeAt(0) >= 0x1100 ? size * 1.1 : /[A-Z@%&mw]/.test(c) ? size * 0.95 : size * 0.65;
   return width;

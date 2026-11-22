@@ -201,6 +201,10 @@ function Root() {
         store={store}
         onBack={() => setScreen(backTo)}
         onServerSummary={() => setScreen({ name: "summary", note: { nb, ink, pdf: pdfOf(nb) }, backTo })}
+        onOpenNote={(id) => {
+          setRefresh((x) => x + 1);
+          setScreen({ name: "editor", id });
+        }}
       />
     );
   }

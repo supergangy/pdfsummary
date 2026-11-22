@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildDraft, countOn, layoutNote, meaningOf, moveEntry, patchEntry, tagOf, usedHighlightColors, type MyNoteDraft } from "./myNote.ts";
+import { boxesToMeasure, buildDraft, countOn, layoutNote, meaningOf, measureKey, moveEntry, patchEntry, tagOf, usedHighlightColors, wholeWords, type MyNoteDraft } from "./myNote.ts";
 import { A4, type Stroke } from "./model.ts";
 import type { QuickItem, QuickSummary } from "./quick.ts";
 
@@ -160,4 +160,46 @@ test("layout: big handwriting is shrunk to fit the column", () => {
   const w = s.pts[3] - s.pts[0];
   assert.ok(w <= A4.w - 112 && w > 100, `폭 ${w}`);
   assert.ok(s.width < 2);
+});
+
+test("a highlight cut in the middle of a word is widened to the whole word, but not over a particle", () => {
+  assert.equal(
+    wholeWords(sent("1. 사용자", "가 언제 어디서나 필요한 컴퓨팅 자", "원(하드웨어/소프트웨어)에 접근하여")),
+    "사용자가 언제 어디서나 필요한 컴퓨팅 자원(하드웨어/소프트웨어)에",
+  );
+  assert.equal(wholeWords(sent("", "경쟁적 저해제", "는 결합한다.")), "경쟁적 저해제"); // 조사는 붙이지 않는다
+  assert.equal(wholeWords(sent("효소는 ", "활성화 에너지", "를 낮춘다.")), "활성화 에너지");
+  assert.equal(wholeWords(sent("② ", "가상현실", "")), "가상현실");
+  assert.equal(wholeWords(sent("", "결합한", "다.")), "결합한다.");
+  assert.equal(wholeWords(sent("", "아닌 것은", "?")), "아닌 것은"); // 문장 부호만이면 그대로
+  const d = buildDraft({ title: "t", pages: [{ page: 0, items: [item({ kind: "highlight", text: "가 언제", sentence: sent("1. 사용자", "가 언제", " 어디서나"), box: [50, 100, 90, 112] })] }] });
+  assert.equal(d.sections[0].entries[0].text, "사용자가 언제");
+});
+
+test("handwriting read as a lone symbol stays a drawing; file-name titles read nicely", () => {
+  const d = buildDraft({
+    title: "2025_9급_국가직_컴퓨터일반(나)",
+    pages: [{ page: 0, items: [item({ kind: "handwriting", color: "#1A1A1A", text: "~", box: [60, 700, 160, 760], strokes: [pen("w", [60, 700, 0.5, 160, 760, 0.5])] })] }],
+  });
+  assert.equal(d.sections[0].entries[0].kind, "ink");
+  assert.equal(d.title, "2025 9급 국가직 컴퓨터일반(나) 정리");
+  assert.equal(d.source, "2025 9급 국가직 컴퓨터일반(나)");
+});
+
+test("layout uses the heights measured on the device: a title that wraps more pushes everything down", () => {
+  const d = buildDraft(sample());
+  const boxes = boxesToMeasure(d, {});
+  const keys = new Set(boxes.map((b) => b.key));
+  assert.equal(keys.size, boxes.length); // 같은 글상자는 한 번만 잰다
+  assert.ok(boxes.some((b) => b.text === "생물 교재 정리" && b.size === 24));
+  // 기기에서는 제목이 3줄, 나머지는 어림과 같다고 치자
+  const titleKey = boxes.find((b) => b.size === 24)!;
+  const tall = 24 * 1.4 * 3;
+  const { nb, ink } = layoutNote(d, {}, 0, (text, size, w) => (measureKey(text, size, w) === titleKey.key ? tall : undefined));
+  const ss = ink[nb.pages[0].id].filter((s) => s.tool === "text");
+  const title = ss.find((s) => s.text === "생물 교재 정리")!;
+  assert.equal(title.pts[4] - title.pts[1], tall);
+  const meta = ss[1];
+  assert.ok(meta.pts[1] >= title.pts[4], "제목 아래에 붙는 줄이 제목과 겹침");
+  for (const p of nb.pages) assert.deepEqual(overlaps(ink[p.id]), []);
 });

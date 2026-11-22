@@ -72,6 +72,30 @@ function vgap(a: Box, b: Box): number {
 /** 메모를 이 거리(pt) 안의 칠한 곳에 붙인다 */
 export const ATTACH_GAP = 40;
 
+/** 칠한 끝 뒤에 붙은 것이 조사뿐이면 낱말을 넓히지 않는다 ("경쟁적 저해제" + "는") */
+const PARTICLE = /^(은|는|이|가|을|를|의|에|에서|에게|께|도|와|과|로|으로|만|까지|부터|처럼|보다|이다|이며|이고|이나|나|라고|이라고|란|이란|라는|이라는|랑|이랑|하고|요)$/;
+
+/**
+ * 낱말 가운데서 시작하거나 끝난 칠하기를 낱말 끝까지 넓힌다.
+ * "1. 사용자[가 언제 … 컴퓨팅 자]원(…)에" → "사용자가 언제 … 컴퓨팅 자원(…)에"
+ */
+export function wholeWords(s: { before: string; mark: string; after: string }): string {
+  const m = flat(s.mark);
+  if (!m) return "";
+  let head = /^\S/.test(s.mark) ? (/\S+$/.exec(s.before)?.[0] ?? "") : "";
+  let tail = /\S$/.test(s.mark) ? (/^\S+/.exec(s.after)?.[0] ?? "") : "";
+  if (head.length > 20) head = "";
+  const bare = tail.replace(/[.,?!:;)\]}"'’”]+$/, "");
+  if (!bare || tail.length > 20 || PARTICLE.test(bare)) tail = "";
+  return head + m + tail;
+}
+
+/** 글자나 숫자가 하나도 없는 인식 결과("~", "-")는 글로 쓰지 않고 그림으로 둔다 */
+const HAS_WORD = /[\p{L}\p{N}]/u;
+
+/** 파일 이름 같은 제목을 읽기 좋게 ("2025_9급_국가직" → "2025 9급 국가직") */
+const pretty = (t: string) => flat(t.replace(/_+/g, " "));
+
 /** 요약 → 고르기 전의 초안 (교재 쪽마다 위에서 아래 차례) */
 export function buildDraft(q: QuickSummary): MyNoteDraft {
   const sections: NoteSection[] = [];
@@ -80,7 +104,7 @@ export function buildDraft(q: QuickSummary): MyNoteDraft {
     const marks: Placed[] = [];
     for (const it of p.items) {
       if (it.kind !== "highlight" && it.kind !== "underline" && it.kind !== "circle") continue;
-      const text = flat(it.text);
+      const text = (it.sentence && wholeWords(it.sentence)) || flat(it.text);
       if (!text) continue; // 글자 없는 곳에 칠한 것 (빈 속지·글자층 없는 스캔)
       const ctx = it.sentence ? flat(it.sentence.before + it.sentence.mark + it.sentence.after) : "";
       const prev = marks[marks.length - 1];
@@ -101,8 +125,8 @@ export function buildDraft(q: QuickSummary): MyNoteDraft {
     const loose: Placed[] = [];
     for (const it of p.items) {
       const text = flat(it.text);
-      if ((it.kind === "handwriting" && text) || it.kind === "memo") {
-        if (!text) continue;
+      const readable = it.kind === "memo" ? !!text : it.kind === "handwriting" && HAS_WORD.test(text);
+      if (readable) {
         let best: Placed | null = null;
         let score = Infinity;
         for (const m of marks) {
@@ -123,7 +147,7 @@ export function buildDraft(q: QuickSummary): MyNoteDraft {
     const all = [...marks, ...loose].sort((a, b) => (Math.abs(a.box[1] - b.box[1]) < 6 ? a.box[0] - b.box[0] : a.box[1] - b.box[1]));
     if (all.length) sections.push({ id: newId(), page: p.page, title: `${p.page + 1}쪽`, entries: all.map((x) => x.e) });
   }
-  return { title: `${q.title} 정리`, source: q.title, sections, withContext: true, glossary: sections.some((s) => s.entries.some((e) => e.kind === "term")) };
+  return { title: `${pretty(q.title)} 정리`, source: pretty(q.title), sections, withContext: true, glossary: sections.some((s) => s.entries.some((e) => e.kind === "term")) };
 }
 
 /** 고른 항목 수 / 전체 */
@@ -171,14 +195,26 @@ const INDENT = 14; // 색 막대 오른쪽부터 글
 const INK = "#212121", SUB = "#616161", MUTED = "#9E9E9E", RULE = "#E0E0E0", ACCENT = "#6A3DF5";
 const MEMO_BAR = "#C9A7FF", INK_BAR = "#BDBDBD";
 
-/** 글에 맞춘 폭(많아야 maxW)의 글상자. 높이는 실제 줄바꿈(낱말 단위)보다 넉넉하게 어림한다 */
-function textBox(x: number, y: number, text: string, size: number, color: string, maxW: number): Stroke {
+/**
+ * 기기가 실제로 그린 글상자 높이 (글, 글자 크기, 상자 폭 → 높이). 모르면 undefined.
+ * 줄바꿈은 기기마다 다르다: 갤럭시탭은 낱말 단위로 줄을 바꾸고 줄 길이를 고르게 맞춰서,
+ * 글자 수로 어림한 높이보다 줄이 늘어 아래 글과 겹쳤다 → 만들기 전에 화면에서 재어 넘겨준다 (MyNoteMaker)
+ */
+export type HeightOf = (text: string, size: number, w: number) => number | undefined;
+
+export const measureKey = (text: string, size: number, w: number) => `${size}|${w}|${text}`;
+
+/** 글에 맞춘 폭(많아야 maxW)의 글상자. 높이는 잰 값, 없으면 넉넉하게 어림한 값 */
+function boxOf(x: number, y: number, text: string, size: number, color: string, maxW: number, heightOf?: HeightOf): Stroke {
   let need = size * 2;
   for (const line of text.split("\n")) need = Math.max(need, textLineWidth(line, size) + size * 0.6);
   const w = Math.min(maxW, Math.ceil(need));
-  const h = w < maxW ? textBoxHeight(text, size, w) : textBoxHeight(text, size, w * 0.88);
+  const guess = w < maxW ? textBoxHeight(text, size, w) : textBoxHeight(text, size, w * 0.88);
+  const h = Math.max(size * 1.4, heightOf?.(text, size, w) ?? guess);
   return { id: newId(), tool: "text", color, width: size, pts: [x, y, 0, x + w, y + h, 0], text };
 }
+
+type TextBoxFn = (x: number, y: number, text: string, size: number, color: string, maxW: number) => Stroke;
 
 const bottomOf = (s: Stroke) => s.pts[4];
 
@@ -217,7 +253,7 @@ function placeInk(strokes: Stroke[], x: number, y: number, w: number, maxH = 140
 }
 
 /** 항목 하나를 y=0에서부터 그린다 (쪽에 놓을 때 옮긴다) */
-function entryBlock(e: NoteEntry, meanings: Meanings, withContext: boolean, glossary = false): { ss: Stroke[]; h: number } {
+function entryBlock(textBox: TextBoxFn, e: NoteEntry, meanings: Meanings, withContext: boolean, glossary = false): { ss: Stroke[]; h: number } {
   const x = LEFT + INDENT, w = CW - INDENT;
   const ss: Stroke[] = [];
   const tag = textBox(x, 0, glossary ? `${e.page + 1}쪽` : `${tagOf(e, meanings)} · ${e.page + 1}쪽`, 10, MUTED, w);
@@ -251,8 +287,9 @@ function dateLabel(now: number): string {
   return `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}.`;
 }
 
-/** 초안 → 새 노트 (빈 A4 쪽들에 글상자·색 막대·구분선) */
-export function layoutNote(d: MyNoteDraft, meanings: Meanings, now = Date.now()): { nb: Notebook; ink: Ink } {
+/** 초안 → 새 노트 (빈 A4 쪽들에 글상자·색 막대·구분선). heightOf: 기기에서 잰 글상자 높이 */
+export function layoutNote(d: MyNoteDraft, meanings: Meanings, now = Date.now(), heightOf?: HeightOf): { nb: Notebook; ink: Ink } {
+  const textBox: TextBoxFn = (x, y, text, size, color, maxW) => boxOf(x, y, text, size, color, maxW, heightOf);
   const pages: Page[] = [];
   const ink: Ink = {};
   let y = TOP;
@@ -324,7 +361,7 @@ export function layoutNote(d: MyNoteDraft, meanings: Meanings, now = Date.now())
 
   sections.forEach((s, si) => {
     if (si > 0) y += 10;
-    const blocks = s.entries.map((e) => entryBlock(e, meanings, d.withContext));
+    const blocks = s.entries.map((e) => entryBlock(textBox, e, meanings, d.withContext));
     heading(s.title.trim() || `${s.page + 1}쪽`, blocks[0].h);
     blocks.forEach(place);
   });
@@ -332,7 +369,7 @@ export function layoutNote(d: MyNoteDraft, meanings: Meanings, now = Date.now())
   const terms = all.filter((e) => e.kind === "term");
   if (d.glossary && terms.length) {
     y += 10;
-    const blocks = terms.map((e) => entryBlock(e, meanings, d.withContext, true));
+    const blocks = terms.map((e) => entryBlock(textBox, e, meanings, d.withContext, true));
     heading("용어 모음", blocks[0].h);
     blocks.forEach(place);
   }
@@ -341,4 +378,18 @@ export function layoutNote(d: MyNoteDraft, meanings: Meanings, now = Date.now())
     nb: { v: 1, id: newId(), title: d.title.trim() || "나만의 노트", created: now, updated: now, hasPdf: false, pages },
     ink,
   };
+}
+
+/** 재어야 할 글상자들 (글·글자 크기·폭이 같으면 한 번만). 폭은 높이와 상관없이 정해지므로 어림 배치에서 뽑는다 */
+export function boxesToMeasure(d: MyNoteDraft, meanings: Meanings): { key: string; text: string; size: number; w: number }[] {
+  const out = new Map<string, { key: string; text: string; size: number; w: number }>();
+  for (const ss of Object.values(layoutNote(d, meanings, 0).ink)) {
+    for (const s of ss) {
+      if (s.tool !== "text" || !s.text) continue;
+      const w = s.pts[3] - s.pts[0];
+      const key = measureKey(s.text, s.width, w);
+      if (!out.has(key)) out.set(key, { key, text: s.text, size: s.width, w });
+    }
+  }
+  return [...out.values()];
 }

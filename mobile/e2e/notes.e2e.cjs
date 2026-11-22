@@ -410,21 +410,42 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     await meaning.fill("개념");
     await page.getByLabel("경쟁적 저해제에 메모 더하기").click();
     await page.getByLabel("경쟁적 저해제 메모").fill("시험에 꼭 나옴");
-    await page.getByLabel("나만의 노트 이름").fill("효소 정리 노트");
+    // 띄어쓰기 없는 긴 제목 (갤럭시탭에서 이런 제목이 어림보다 줄이 늘어 아래 글과 겹쳤다)
+    const myTitle = "2025_9급_국가직_컴퓨터일반(나)_2025년_04월_05일_효소_단원_정리_노트";
+    await page.getByLabel("나만의 노트 이름").fill(myTitle);
     if (process.env.E2E_SHOTS) await page.screenshot({ path: path.join(process.env.E2E_SHOTS, "mynote-maker.png") }); // 화면 확인용 (선택)
     await page.getByLabel("노트로 만들기").click();
     await canvas.waitFor({ timeout: 20000 });
     await page.waitForTimeout(1500);
     const files = await idb(page);
-    const made = Object.entries(files).find(([k, v]) => /notebook\.json$/.test(k) && v && JSON.parse(v).title === "효소 정리 노트");
+    const made = Object.entries(files).find(([k, v]) => /notebook\.json$/.test(k) && v && JSON.parse(v).title === myTitle);
     if (!made) fail("나만의 노트가 저장되지 않음");
     const dir = made[0].replace(/notebook\.json$/, "");
-    const texts = Object.entries(files)
+    const boxes = Object.entries(files)
       .filter(([k, v]) => k.startsWith(dir + "ink/") && v)
       .flatMap(([, v]) => JSON.parse(v))
-      .filter((st) => st.tool === "text")
-      .map((st) => st.text);
-    for (const want of ["효소 정리 노트", "1쪽", "경쟁적 저해제", "개념", "메모: 시험에 꼭 나옴"]) {
+      .filter((st) => st.tool === "text");
+    const texts = boxes.map((st) => st.text);
+    // 화면에 실제로 그려진 글 높이가 저장된 상자 높이 안에 드는지 (넘치면 아래 글과 겹친다)
+    const spill = await page.evaluate((bs) => {
+      const out = [];
+      const divs = [...document.querySelectorAll("div")];
+      for (const b of bs) {
+        const w = b.pts[3] - b.pts[0];
+        const el = divs.find((d) => d.textContent === b.text && Math.abs(parseFloat(d.style.width) - w) < 0.01);
+        if (!el) {
+          out.push(`${b.text}: 화면에 없음`);
+          continue;
+        }
+        const r = el.getBoundingClientRect();
+        const k = r.width / w; // 화면 배율
+        const h = r.height / k;
+        if (h > b.pts[4] - b.pts[1] + 0.5) out.push(`${b.text}: 그린 높이 ${h.toFixed(1)} > 상자 ${(b.pts[4] - b.pts[1]).toFixed(1)}`);
+      }
+      return out;
+    }, boxes);
+    if (spill.length) fail("나만의 노트 글이 상자를 넘침: " + spill.join(" | "));
+    for (const want of [myTitle, "1쪽", "경쟁적 저해제", "개념", "메모: 시험에 꼭 나옴"]) {
       if (!texts.includes(want)) fail(`나만의 노트에 '${want}'가 없음: ${JSON.stringify(texts)}`);
     }
     if (!texts.some((x) => x.includes("기질과 구조가 비슷하여"))) fail("나만의 노트에 칠한 문장이 없음");

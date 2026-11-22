@@ -7,7 +7,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Button, Chip, Hint, radius, styles as ui, type, useTheme } from "../ui";
 import { bounds } from "./geometry";
 import type { Notebook, Stroke } from "./model";
-import { buildDraft, countOn, layoutNote, meaningOf, moveEntry, patchEntry, tagOf, usedHighlightColors, type Meanings, type MyNoteDraft, type NoteEntry } from "./myNote";
+import {
+  boxesToMeasure, buildDraft, countOn, layoutNote, meaningOf, measureKey, moveEntry, patchEntry, tagOf, usedHighlightColors,
+  type Meanings, type MyNoteDraft, type NoteEntry,
+} from "./myNote";
 import { loadMeanings, saveMeanings } from "./myNotePrefs";
 import type { QuickSummary } from "./quick";
 import { inkPicture } from "./render";
@@ -21,6 +24,9 @@ export function MyNoteMaker({ source, summary, store, onCancel, onMade }: Props)
   const [meanings, setMeanings] = useState<Meanings>({});
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // 만들기 직전에 글상자들을 보이지 않게 그려 실제 높이를 잰다 (기기마다 줄바꿈이 달라 어림하면 겹친다)
+  const [measuring, setMeasuring] = useState<ReturnType<typeof boxesToMeasure> | null>(null);
+  const measured = useRef<{ map: Map<string, number>; need: number; done: () => void } | null>(null);
   const { width } = useWindowDimensions();
   const wide = width >= 700;
   const pad = wide ? 24 : 16;
@@ -51,7 +57,16 @@ export function MyNoteMaker({ source, summary, store, onCancel, onMade }: Props)
     setErr("");
     try {
       void saveMeanings(meanings);
-      const { nb, ink } = layoutNote(draft, meanings);
+      const boxes = boxesToMeasure(draft, meanings);
+      const heights = new Map<string, number>();
+      await new Promise<void>((resolve) => {
+        measured.current = { map: heights, need: boxes.length, done: resolve };
+        setMeasuring(boxes);
+        setTimeout(resolve, 4000); // 다 못 재면 어림값으로
+      });
+      measured.current = null;
+      setMeasuring(null);
+      const { nb, ink } = layoutNote(draft, meanings, Date.now(), (text, size, w) => heights.get(measureKey(text, size, w)));
       await store.importUnpacked({ nb: source.folder ? { ...nb, folder: source.folder } : nb, ink, pdf: null });
       onMade(nb.id);
     } catch (e) {
@@ -60,8 +75,29 @@ export function MyNoteMaker({ source, summary, store, onCancel, onMade }: Props)
     }
   }
 
+  const onMeasured = (key: string, h: number) => {
+    const m = measured.current;
+    if (!m || m.map.has(key)) return;
+    m.map.set(key, h);
+    if (m.map.size >= m.need) m.done();
+  };
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }} edges={["top", "left", "right"]}>
+      {measuring && (
+        <View pointerEvents="none" importantForAccessibility="no-hide-descendants" aria-hidden style={s.measure}>
+          {measuring.map((b) => (
+            <Text
+              key={b.key}
+              allowFontScaling={false} // 노트의 글상자(TextLayer)와 똑같이
+              onLayout={(e) => onMeasured(b.key, e.nativeEvent.layout.height)}
+              style={{ position: "absolute", left: 0, top: 0, width: b.w, fontSize: b.size, lineHeight: b.size * 1.4 }}
+            >
+              {b.text}
+            </Text>
+          ))}
+        </View>
+      )}
       <View style={[s.bar, { paddingHorizontal: pad, borderColor: t.lineSoft }]}>
         <View style={s.lead}>
           <Button kind="link" label="‹ 요약으로" onPress={onCancel} />
@@ -278,5 +314,6 @@ const s = StyleSheet.create({
   memo: { marginTop: 8, borderWidth: 1, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 8 },
   moves: { gap: 2 },
   move: { width: 32, height: 32, borderRadius: radius.sm, alignItems: "center", justifyContent: "center" },
+  measure: { position: "absolute", left: 0, top: 0, width: 1, height: 1, opacity: 0, overflow: "hidden" },
   inkBox: { marginTop: 6, borderWidth: 1, borderRadius: radius.sm, backgroundColor: "#FFFFFF", overflow: "hidden" },
 });

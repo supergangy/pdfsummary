@@ -4,18 +4,23 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, BackHandler, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { pageText } from "../../modules/pdf-pages";
+
 import { loadSettings } from "../platform/storage";
 import { Button, Chip, Hint, radius, styles as ui, type, useTheme } from "../ui";
-import { AI_MAX_ITEMS, aiAccess, planText, requestExplain, type AiAccess, type AiConn } from "./aiExplain";
+import {
+  AI_MAX_ITEMS, STUDY_MAX_PAGES, aiAccess, planText, requestExplain, requestStudyNote, type AiAccess, type AiConn, type StudyPage,
+} from "./aiExplain";
 import type { Notebook, Stroke } from "./model";
 import {
-  applyExplains, boxesToMeasure, buildDraft, countOn, explainRequest, layoutNote, meaningOf, measureKey, moveEntry, patchEntry, placeInk, tagOf,
+  applyExplains, barColor, boxesToMeasure, buildDraft, countOn, explainRequest, layoutNote, meaningOf, measureKey, moveEntry, patchEntry, placeInk, tagOf,
   usedHighlightColors, type Explain, type Meanings, type MyNoteDraft, type NoteEntry,
 } from "./myNote";
 import { loadMeanings, saveMeanings } from "./myNotePrefs";
 import type { QuickSummary } from "./quick";
 import { inkPicture } from "./render";
 import type { NoteStore } from "./store";
+import { charsToText, layoutStudyNote, studyBoxesToMeasure, type MarkLook } from "./studyNote";
 import { loadSyncConfig } from "./sync/config";
 
 type Props = { source: Notebook; summary: QuickSummary; store: NoteStore; onCancel: () => void; onMade: (id: string) => void };
@@ -34,6 +39,7 @@ export function MyNoteMaker({ source, summary, store, onCancel, onMade }: Props)
   const [ai, setAi] = useState<AiAccess | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
   const [aiNote, setAiNote] = useState("");
+  const [aiStage, setAiStage] = useState(""); // AI 정리 노트를 만드는 단계 글
   const { width } = useWindowDimensions();
   const wide = width >= 700;
   const pad = wide ? 24 : 16;
@@ -87,21 +93,73 @@ export function MyNoteMaker({ source, summary, store, onCancel, onMade }: Props)
 
   const edit = (id: string, patch: Partial<NoteEntry>) => setDraft((d) => patchEntry(d, id, patch));
 
+  /** 글상자들을 안 보이게 그려 실제 높이를 잰다 (다 못 재면 4초 뒤 어림값으로) */
+  async function measure(boxes: ReturnType<typeof boxesToMeasure>) {
+    const heights = new Map<string, number>();
+    await new Promise<void>((resolve) => {
+      measured.current = { map: heights, need: boxes.length, done: resolve };
+      setMeasuring(boxes);
+      setTimeout(resolve, 4000);
+    });
+    measured.current = null;
+    setMeasuring(null);
+    return (text: string, size: number, w: number) => heights.get(measureKey(text, size, w));
+  }
+
+  /** AI 정리 노트: 표시한 쪽의 교재 글을 읽어 서버에 보내고, 받은 정리를 새 노트로 */
+  async function makeStudyNote() {
+    if (!conn.current) return;
+    setAiBusy(true);
+    setAiNote("");
+    try {
+      void saveMeanings(meanings);
+      const uri = source.hasPdf ? await store.pdfUri(source.id) : null;
+      const pages: StudyPage[] = [];
+      const looks = new Map<string, MarkLook>();
+      const secs = draft.sections.filter((x) => x.entries.some((e) => e.on));
+      for (const [i, sec] of secs.entries()) {
+        setAiStage(`교재 글을 읽는 중… ${i + 1}/${secs.length}`);
+        const pdf = source.pages[sec.page]?.pdf;
+        let text = "";
+        if (uri && pdf !== undefined) {
+          try {
+            text = charsToText(await pageText(uri, pdf));
+          } catch {
+            // 글을 못 읽은 쪽은 표시만 보낸다
+          }
+        }
+        const marks = sec.entries.filter((e) => e.on && e.kind !== "ink" && e.text.trim());
+        for (const e of marks) looks.set(e.id, { ...barColor(e), label: tagOf(e, meanings) });
+        pages.push({ page: sec.page + 1, text, marks: marks.map((e) => ({ id: e.id, tag: tagOf(e, meanings), text: e.text, sentence: e.context, memo: e.memo })) });
+      }
+      if (!pages.length) return setAiNote("정리할 쪽이 없어요 (표시를 하나 이상 켜 주세요).");
+      if (pages.length > STUDY_MAX_PAGES) setAiNote(`쪽이 많아 앞의 ${STUDY_MAX_PAGES}쪽만 정리해요.`);
+      setAiStage("AI가 정리 노트를 쓰는 중… (1~3분)");
+      const r = await requestStudyNote(conn.current, draft.source, pages);
+      if (r.plan) setAi({ ok: true, plan: r.plan });
+      if (!r.sections.length) return setAiNote("AI가 정리할 내용을 찾지 못했어요.");
+      setAiStage("노트를 만드는 중…");
+      const title = draft.title.trim() || `${draft.source} 정리`;
+      const heightOf = await measure(studyBoxesToMeasure(title, draft.source, r.sections, looks));
+      const { nb, ink } = layoutStudyNote(title, draft.source, r.sections, looks, Date.now(), heightOf);
+      await store.importUnpacked({ nb: source.folder ? { ...nb, folder: source.folder } : nb, ink, pdf: null });
+      onMade(nb.id);
+    } catch (e) {
+      setAiNote((e as Error).message);
+      if ((e as { status?: number }).status === 401) setAi(await aiAccess(conn.current));
+    } finally {
+      setAiBusy(false);
+      setAiStage("");
+    }
+  }
+
   async function make() {
     setBusy(true);
     setErr("");
     try {
       void saveMeanings(meanings);
-      const boxes = boxesToMeasure(draft, meanings);
-      const heights = new Map<string, number>();
-      await new Promise<void>((resolve) => {
-        measured.current = { map: heights, need: boxes.length, done: resolve };
-        setMeasuring(boxes);
-        setTimeout(resolve, 4000); // 다 못 재면 어림값으로
-      });
-      measured.current = null;
-      setMeasuring(null);
-      const { nb, ink } = layoutNote(draft, meanings, Date.now(), (text, size, w) => heights.get(measureKey(text, size, w)));
+      const heightOf = await measure(boxesToMeasure(draft, meanings));
+      const { nb, ink } = layoutNote(draft, meanings, Date.now(), heightOf);
       await store.importUnpacked({ nb: source.folder ? { ...nb, folder: source.folder } : nb, ink, pdf: null });
       onMade(nb.id);
     } catch (e) {
@@ -193,32 +251,42 @@ export function MyNoteMaker({ source, summary, store, onCancel, onMade }: Props)
           {all > 0 && (
             <View style={[s.aiBox, { borderColor: t.line, backgroundColor: t.card }]}>
               <View style={s.aiHead}>
-                <Text style={[type.label, { color: t.ink }]}>AI 설명</Text>
+                <Text style={[type.label, { color: t.ink }]}>AI 정리</Text>
                 <View style={[s.badge, { backgroundColor: t.soft }]}>
                   <Text style={[type.small, { color: t.accent, fontWeight: "600" }]}>프리미엄</Text>
                 </View>
               </View>
               <Text style={[type.caption, { color: t.sub }]}>
-                칠한 문장마다 AI가 필요한 곳에만 쉬운 설명과 표·그래프·순서 그림을 붙여요. 받은 설명은 아래 항목에서 보고 뺄 수 있어요.
+                AI 정리 노트: 표시한 쪽의 교재 글로 개념·구조 표·명령어·예시 문제·시험 포인트까지 정리한 새 노트를 만들어요. 내가 표시한 곳은 색 막대로 보여요.
+                {"\n"}칠한 곳마다 설명: 아래 항목마다 필요한 곳에만 설명과 표·그래프·순서 그림을 붙여요.
               </Text>
               {ai === null ? (
                 <ActivityIndicator color={t.muted} style={{ alignSelf: "flex-start", marginTop: 10 }} />
               ) : ai.ok ? (
                 <View style={s.aiRow}>
                   <Text style={[type.small, { color: t.muted, flexShrink: 1 }]}>{planText(ai.plan)}</Text>
-                  <Button
-                    small
-                    kind="dark"
-                    label={aiBusy ? "AI가 설명을 쓰는 중… (1~2분)" : draft.sections.some((x) => x.entries.some((e) => e.explain)) ? "AI 설명 다시 받기" : "AI 설명 받기"}
-                    onPress={() => void getExplains()}
-                    busy={aiBusy}
-                    disabled={busy || ai.plan.used >= ai.plan.limit}
-                    accessibilityLabel="AI 설명 받기"
-                  />
+                  <View style={s.aiBtns}>
+                    <Button
+                      small
+                      label={draft.sections.some((x) => x.entries.some((e) => e.explain)) ? "설명 다시 받기" : "칠한 곳마다 설명"}
+                      onPress={() => void getExplains()}
+                      disabled={busy || aiBusy || ai.plan.used >= ai.plan.limit}
+                      accessibilityLabel="AI 설명 받기"
+                    />
+                    <Button
+                      small
+                      kind="dark"
+                      label="AI 정리 노트 만들기"
+                      onPress={() => void makeStudyNote()}
+                      busy={aiBusy}
+                      disabled={busy || aiBusy || ai.plan.used >= ai.plan.limit}
+                    />
+                  </View>
                 </View>
               ) : (
                 <Text style={[type.small, { color: t.muted, marginTop: 10 }]}>{ai.message}</Text>
               )}
+              {!!aiStage && <Text style={[type.small, { color: t.accent, marginTop: 8 }]}>{aiStage}</Text>}
               {!!aiNote && <Text style={[type.small, { color: t.sub, marginTop: 8 }]}>{aiNote}</Text>}
             </View>
           )}
@@ -429,6 +497,7 @@ const s = StyleSheet.create({
   aiBox: { marginTop: 24, borderWidth: 1, borderRadius: radius.lg, padding: 16, gap: 6 },
   aiHead: { flexDirection: "row", alignItems: "center", gap: 8 },
   badge: { borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 2 },
+  aiBtns: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   aiRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginTop: 10 },
   exBox: { marginTop: 10, borderRadius: radius.md, padding: 12, gap: 4 },
   exHead: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },

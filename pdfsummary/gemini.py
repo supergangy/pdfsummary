@@ -60,9 +60,9 @@ class GeminiReader:
     def available(self) -> bool:
         return bool(self.api_key) and self.disabled_reason is None
 
-    def _post(self, body: dict) -> dict:
+    def _post(self, body: dict, model: Optional[str] = None) -> dict:
         req = urllib.request.Request(
-            ENDPOINT.format(model=self.model),
+            ENDPOINT.format(model=model or self.model),
             data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
             headers={"Content-Type": "application/json", "x-goog-api-key": self.api_key},
             method="POST",
@@ -91,7 +91,7 @@ class GeminiReader:
             try:
                 for i, (prompt, cfg) in enumerate(tries):
                     try:
-                        data = self._post({"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": cfg})
+                        data = self._post({"contents": [{"role": "user", "parts": [{"text": prompt}]}], "generationConfig": cfg}, model)
                         break
                     except urllib.error.HTTPError as e:
                         if e.code != 400 or i == len(tries) - 1:

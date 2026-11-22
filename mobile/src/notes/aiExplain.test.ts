@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AI_MAX_ITEMS, aiAccess, planText, requestExplain, type AiConn } from "./aiExplain.ts";
+import { AI_MAX_ITEMS, STUDY_MAX_PAGES, STUDY_PAGE_TEXT, aiAccess, planText, requestExplain, requestStudyNote, type AiConn } from "./aiExplain.ts";
 
 const C: AiConn = { serverUrl: "srv.example.com/", accessCode: "code-123", session: "sess-1" };
 
@@ -61,4 +61,17 @@ test("asking for explanations sends the items and passes the server's reason on 
   const premium = fakeFetch({ "/api/ai/explain": { status: 402, body: { error: "AI 설명은 프리미엄 기능이에요." } } });
   await assert.rejects(requestExplain(C, "교재", items.slice(0, 1), premium.f), /프리미엄/);
   await assert.rejects(requestExplain(C, "교재", items.slice(0, 1), fakeFetch({}).f), /닿지 않아요/);
+});
+
+test("study note request sends the marked pages (text trimmed to what the server takes)", async () => {
+  const pages = Array.from({ length: STUDY_MAX_PAGES + 3 }, (_, i) => ({ page: i + 1, text: "가".repeat(STUDY_PAGE_TEXT + 50), marks: [] }));
+  const ok = fakeFetch({ "/api/ai/studynote": { body: { sections: [{ title: "S01", intro: "", blocks: [], points: [], strategy: "" }], ai: { plan: "premium", label: "프리미엄", used: 3, limit: 100 } } } });
+  const r = await requestStudyNote(C, "정보기실기", pages, ok.f);
+  assert.equal(r.sections[0].title, "S01");
+  assert.equal(r.plan.used, 3);
+  const sent = JSON.parse(String(ok.calls[0].init.body));
+  assert.equal(sent.pages.length, STUDY_MAX_PAGES);
+  assert.equal(sent.pages[0].text.length, STUDY_PAGE_TEXT);
+  const busy = fakeFetch({ "/api/ai/studynote": { status: 503, body: { error: "Gemini 오류 (503). 잠시 뒤 다시 해 주세요." } } });
+  await assert.rejects(requestStudyNote(C, "책", pages.slice(0, 1), busy.f), /503/);
 });

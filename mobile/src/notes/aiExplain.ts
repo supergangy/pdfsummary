@@ -1,6 +1,7 @@
 // 나만의 노트의 'AI 설명' (프리미엄): 서버(/api/ai/explain)에 칠한 항목을 보내 Claude의 설명·표·그래프·순서 그림을 받는다.
 // 로그인한 계정의 요금제(무료·프리미엄)마다 한 달에 쓸 수 있는 횟수가 다르다 (서버 accounts.py).
 import type { Explain } from "./myNote";
+import type { StudySection } from "./studyNote";
 
 export type AiPlan = { plan: string; label: string; used: number; limit: number };
 
@@ -73,6 +74,20 @@ export function planText(p: AiPlan): string {
 
 /** 서버가 한 번에 받는 항목 수 (pdfsummary/explain.py의 MAX_ITEMS와 같게) */
 export const AI_MAX_ITEMS = 60;
+
+/** 정리 노트에 보내는 쪽 하나: 교재 쪽 번호, 그 쪽 글, 그 쪽의 표시들 */
+export type StudyPage = { page: number; text: string; marks: { id: string; tag: string; text: string; sentence: string; memo: string }[] };
+
+/** 서버가 한 번에 받는 쪽 수와 쪽마다 글 길이 (pdfsummary/studynote.py와 같게) */
+export const STUDY_MAX_PAGES = 80;
+export const STUDY_PAGE_TEXT = 6000;
+
+/** AI 정리 노트: 표시한 쪽의 교재 글로 '핵심 정리' 섹션들을 받는다 (한 번 만들기가 횟수 하나) */
+export async function requestStudyNote(c: AiConn, book: string, pages: StudyPage[], f: typeof fetch = fetch): Promise<{ sections: StudySection[]; plan: AiPlan }> {
+  const body = { book, pages: pages.slice(0, STUDY_MAX_PAGES).map((p) => ({ ...p, text: p.text.slice(0, STUDY_PAGE_TEXT) })) };
+  const r = await call<{ sections: StudySection[]; ai: AiPlan }>(c, "/api/ai/studynote", body, f);
+  return { sections: Array.isArray(r.sections) ? r.sections : [], plan: r.ai };
+}
 
 /** 항목들을 보내 설명을 받는다. 설명이 필요 없다고 본 항목은 답에 없다 */
 export async function requestExplain(

@@ -494,7 +494,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authed(parse_qs(url.query)):
             return self._err("권한이 없습니다.", 403)
         # 필기 앱 노트(획 데이터)·동기화 작업은 클 수 있다
-        limit = NOTE_LIMIT if url.path == "/api/notes" else SYNC_PUSH_LIMIT if url.path == "/api/sync/push" else 1_000_000
+        limit = (NOTE_LIMIT if url.path == "/api/notes" else SYNC_PUSH_LIMIT if url.path == "/api/sync/push"
+                 else 4_000_000 if url.path == "/api/ai/studynote" else 1_000_000)   # 정리 노트는 교재 글이 들어 있다
         body = self._body_json(limit)
         if url.path == "/api/sync/space":
             return self._json({"code": sync_store().create_space()})
@@ -502,6 +503,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._account(url.path, body)
         if url.path == "/api/ai/explain":
             return self._ai_explain(body)
+        if url.path == "/api/ai/studynote":
+            return self._ai_studynote(body)
         if url.path == "/api/sync/push":
             sid = self._sync_space()
             if not sid:
@@ -645,6 +648,33 @@ class Handler(BaseHTTPRequestHandler):
             acc.refund_ai(account)
             return self._err("AI 설명을 만들다 문제가 생겼어요. 잠시 뒤 다시 해 주세요.", 500)
         return self._json({"items": items, "ai": acc._ai_status(account)})
+
+    def _ai_studynote(self, body: dict):
+        """AI 정리 노트: 표시한 쪽의 교재 글로 시험 대비 정리 문서를 만든다. 한 번 만들기가 횟수 하나."""
+        from .accounts import AccountError
+        from .explain import ExplainError
+        from .studynote import clean_pages, study_note
+
+        if not STATE.server:
+            return self._err("없는 주소입니다.", 404)
+        try:
+            clean_pages(body.get("pages"))
+        except ExplainError as e:
+            return self._err(str(e))
+        acc = account_store()
+        try:
+            account = acc.use_ai(self.headers.get("X-Session") or "")
+        except AccountError as e:
+            return self._err(str(e), e.status)
+        try:
+            sections = study_note(str(body.get("book") or ""), body.get("pages"), ai_reader())
+        except ExplainError as e:
+            acc.refund_ai(account)
+            return self._err(str(e), 503)
+        except Exception:
+            acc.refund_ai(account)
+            return self._err("AI 정리 노트를 만들다 문제가 생겼어요. 잠시 뒤 다시 해 주세요.", 500)
+        return self._json({"sections": sections, "ai": acc._ai_status(account)})
 
     def _sync_get(self, path: str, q: dict):
         sid = self._sync_space()

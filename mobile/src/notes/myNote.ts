@@ -243,7 +243,7 @@ export type HeightOf = (text: string, size: number, w: number) => number | undef
 export const measureKey = (text: string, size: number, w: number) => `${size}|${w}|${text}`;
 
 /** 글에 맞춘 폭(많아야 maxW)의 글상자. 높이는 잰 값, 없으면 넉넉하게 어림한 값 */
-function boxOf(x: number, y: number, text: string, size: number, color: string, maxW: number, heightOf?: HeightOf): Stroke {
+export function boxOf(x: number, y: number, text: string, size: number, color: string, maxW: number, heightOf?: HeightOf): Stroke {
   let need = size * 2;
   for (const line of text.split("\n")) need = Math.max(need, textLineWidth(line, size) + size * 0.6);
   const w = Math.min(maxW, Math.ceil(need));
@@ -252,26 +252,26 @@ function boxOf(x: number, y: number, text: string, size: number, color: string, 
   return { id: newId(), tool: "text", color, width: size, pts: [x, y, 0, x + w, y + h, 0], text };
 }
 
-type TextBoxFn = (x: number, y: number, text: string, size: number, color: string, maxW: number) => Stroke;
+export type TextBoxFn = (x: number, y: number, text: string, size: number, color: string, maxW: number) => Stroke;
 
-const bottomOf = (s: Stroke) => s.pts[4];
+export const bottomOf = (s: Stroke) => s.pts[4];
 
-function rule(x0: number, x1: number, y: number): Stroke {
+export function rule(x0: number, x1: number, y: number): Stroke {
   return { id: newId(), tool: "pen", color: RULE, width: 0.8, brush: "ballpoint", pts: [x0, y, 0.5, x1, y, 0.5] };
 }
 
-function bar(color: string, x: number, y0: number, y1: number, opacity: number): Stroke {
+export function bar(color: string, x: number, y0: number, y1: number, opacity: number): Stroke {
   return { id: newId(), tool: "highlighter", color, width: 4, opacity, pts: [x, y0, 0.5, x, Math.max(y0 + 1, y1), 0.5] };
 }
 
-function barColor(e: NoteEntry): { color: string; opacity: number } {
+export function barColor(e: NoteEntry): { color: string; opacity: number } {
   if (e.kind === "memo") return { color: MEMO_BAR, opacity: 0.7 };
   if (e.kind === "ink") return { color: INK_BAR, opacity: 0.7 };
   if (e.source === "highlight") return { color: e.color, opacity: 0.75 };
   return { color: e.color, opacity: 0.3 }; // 펜으로 친 밑줄·동그라미는 펜 색을 옅게
 }
 
-function shift(ss: Stroke[], dy: number): Stroke[] {
+export function shift(ss: Stroke[], dy: number): Stroke[] {
   return ss.map((s) => ({ ...s, pts: s.pts.map((v, i) => (i % 3 === 1 ? v + dy : v)) }));
 }
 
@@ -328,14 +328,14 @@ function entryBlock(textBox: TextBoxFn, e: NoteEntry, meanings: Meanings, withCo
 // ── AI 설명 그리기: 설명 글, 표, 막대그래프, 순서 그림 ──
 const GRID = "#BDBDBD", HEAD_BG = "#E0E0E0", BAR_FILL = "#C9A7FF", STEP_LINE = "#9E9E9E";
 
-function line(color: string, width: number, pts: number[]): Stroke {
+export function line(color: string, width: number, pts: number[]): Stroke {
   const p: number[] = [];
   for (let i = 0; i < pts.length; i += 2) p.push(pts[i], pts[i + 1], 0.5);
   return { id: newId(), tool: "pen", color, width, brush: "ballpoint", pts: p };
 }
 
 /** 네모: 변마다 따로 곧은 선 (한 획으로 이어 그리면 펜 다듬기가 모서리를 둥글게 비틀었다) */
-function rect(x0: number, y0: number, x1: number, y1: number, color: string, width = 0.8): Stroke[] {
+export function rect(x0: number, y0: number, x1: number, y1: number, color: string, width = 0.8): Stroke[] {
   return [line(color, width, [x0, y0, x1, y0]), line(color, width, [x1, y0, x1, y1]), line(color, width, [x1, y1, x0, y1]), line(color, width, [x0, y1, x0, y0])];
 }
 
@@ -347,7 +347,7 @@ function arrow(x0: number, y0: number, x1: number, y1: number, color: string): S
 }
 
 /** 칠한 판 (형광펜 한 줄을 굵게 그어 네모를 채운다) */
-function fill(x0: number, y0: number, x1: number, y1: number, color: string, opacity: number): Stroke {
+export function fill(x0: number, y0: number, x1: number, y1: number, color: string, opacity: number): Stroke {
   const cy = (y0 + y1) / 2;
   return { id: newId(), tool: "highlighter", color, width: Math.max(1, y1 - y0), opacity, pts: [x0, cy, 0.5, x1, cy, 0.5] };
 }
@@ -389,29 +389,73 @@ function explainBlock(textBox: TextBoxFn, ex: Explain, x: number, y0: number, w:
 }
 
 /** 표: 칸 폭은 글 길이에 맞춰 나누고, 줄 높이는 그 줄에서 가장 높은 칸에 맞춘다. 첫 줄(머리)은 회색 바탕 */
-function tableBlock(textBox: TextBoxFn, columns: string[], rows: string[][], x: number, y0: number, w: number): { ss: Stroke[]; bottom: number } {
-  const PAD = 5, SIZE = 11;
+/**
+ * 표 칸 폭. 글이 짧은 칸은 글 폭만큼 먼저 주고, 남는 폭을 긴 칸들이 글 길이에 비례해 나눠 갖는다.
+ * 그래도 가장 긴 낱말보다 좁은 칸은 가장 넓은 칸에서 덜어 준다 ("passwd"가 "passw / d"로 끊기지 않게).
+ */
+export function columnWidths(columns: string[], rows: string[][], w: number, size: number, pad: number): number[] {
   const n = columns.length;
-  const want = columns.map((c, i) => Math.max(textLineWidth(c, SIZE), ...rows.map((r) => textLineWidth(r[i] ?? "", SIZE))) + PAD * 2);
-  const minW = 56;
-  const total = want.reduce((a, b) => a + Math.max(minW, b), 0);
-  const widths = want.map((v) => (Math.max(minW, v) / total) * w);
+  const cellsOf = (i: number) => [columns[i] ?? "", ...rows.map((r) => r[i] ?? "")];
+  const natural = columns.map((_, i) => Math.max(...cellsOf(i).map((t) => textLineWidth(t, size))) + pad * 2 + 2);
+  const sum = natural.reduce((a, b) => a + b, 0);
+  if (sum <= w) return natural.map((v) => (v / sum) * w);
+  const widths = new Array<number>(n).fill(0);
+  const fixed = new Set<number>();
+  let left = w;
+  for (let changed = true; changed; ) {
+    changed = false;
+    const share = left / Math.max(1, n - fixed.size);
+    for (let i = 0; i < n; i++) {
+      if (!fixed.has(i) && natural[i] <= share) {
+        widths[i] = natural[i];
+        fixed.add(i);
+        left -= natural[i];
+        changed = true;
+      }
+    }
+  }
+  const rest = natural.reduce((a, v, i) => a + (fixed.has(i) ? 0 : v), 0);
+  for (let i = 0; i < n; i++) if (!fixed.has(i)) widths[i] = (natural[i] / rest) * left;
+  const word = columns.map((_, i) => Math.min(w / n * 1.5, 140, Math.max(36, ...cellsOf(i).flatMap((t) => t.split(/\s+/)).map((x) => textLineWidth(x, size) + pad * 2 + 2))));
+  for (let i = 0; i < n; i++) {
+    const need = word[i] - widths[i];
+    if (need <= 0) continue;
+    const j = widths.indexOf(Math.max(...widths));
+    if (j === i || widths[j] - need < word[j]) continue;
+    widths[i] += need;
+    widths[j] -= need;
+  }
+  return widths;
+}
+
+/** 표를 머리 줄과 줄마다의 조각으로 (각 조각은 y=0부터). 긴 표를 쪽마다 나눠 놓을 수 있게 */
+export function tableParts(textBox: TextBoxFn, columns: string[], rows: string[][], x: number, w: number, SIZE = 11): { header: { ss: Stroke[]; h: number }; rows: { ss: Stroke[]; h: number }[] } {
+  const PAD = 5;
+  const n = columns.length;
+  const widths = columnWidths(columns, rows, w, SIZE, PAD);
   const xs = [x];
   for (const cw of widths) xs.push(xs[xs.length - 1] + cw);
-  const ss: Stroke[] = [];
-  const ys = [y0];
-  [columns, ...rows].forEach((cells, ri) => {
-    const top = ys[ys.length - 1];
-    const boxes = cells.slice(0, n).map((c, ci) => textBox(xs[ci] + PAD, top + PAD, c || " ", SIZE, ri === 0 ? INK : SUB, widths[ci] - PAD * 2));
+  const part = (cells: string[], head: boolean) => {
+    const boxes = cells.slice(0, n).map((c, ci) => textBox(xs[ci] + PAD, PAD, c || " ", SIZE, head ? INK : SUB, widths[ci] - PAD * 2));
     const h = Math.max(SIZE * 1.4, ...boxes.map((b) => b.pts[4] - b.pts[1])) + PAD * 2;
-    if (ri === 0) ss.push(fill(x, top, x + w, top + h, HEAD_BG, 0.6));
-    ss.push(...boxes);
-    ys.push(top + h);
-  });
-  const bottom = ys[ys.length - 1];
-  for (const yy of ys) ss.push(line(GRID, 0.8, [x, yy, x + w, yy]));
-  for (const xx of xs) ss.push(line(GRID, 0.8, [xx, y0, xx, bottom]));
-  return { ss, bottom };
+    const ss: Stroke[] = [];
+    if (head) ss.push(fill(x, 0, x + w, h, HEAD_BG, 0.6), line(GRID, 0.8, [x, 0, x + w, 0]));
+    ss.push(...boxes, line(GRID, 0.8, [x, h, x + w, h]));
+    for (const xx of xs) ss.push(line(GRID, 0.8, [xx, 0, xx, h]));
+    return { ss, h };
+  };
+  return { header: part(columns, true), rows: rows.map((r) => part(r, false)) };
+}
+
+export function tableBlock(textBox: TextBoxFn, columns: string[], rows: string[][], x: number, y0: number, w: number, SIZE = 11): { ss: Stroke[]; bottom: number } {
+  const t = tableParts(textBox, columns, rows, x, w, SIZE);
+  const ss: Stroke[] = [];
+  let y = y0;
+  for (const p of [t.header, ...t.rows]) {
+    ss.push(...shift(p.ss, y));
+    y += p.h;
+  }
+  return { ss, bottom: y };
 }
 
 /** 가로 막대그래프: 이름 | 막대 | 값 */
@@ -438,7 +482,7 @@ function chartBlock(textBox: TextBoxFn, c: NonNullable<Explain["chart"]>, x: num
 }
 
 /** 순서 그림: 짧으면 가로로 네모 → 네모, 길거나 많으면 세로로 */
-function stepsBlock(textBox: TextBoxFn, items: string[], x: number, y0: number, w: number): { ss: Stroke[]; bottom: number } {
+export function stepsBlock(textBox: TextBoxFn, items: string[], x: number, y0: number, w: number): { ss: Stroke[]; bottom: number } {
   const SIZE = 11, PAD = 6, GAP = 22;
   const ss: Stroke[] = [];
   const n = items.length;
@@ -473,7 +517,7 @@ function stepsBlock(textBox: TextBoxFn, items: string[], x: number, y0: number, 
   return { ss, bottom: y };
 }
 
-function dateLabel(now: number): string {
+export function dateLabel(now: number): string {
   const d = new Date(now);
   return `${d.getFullYear()}. ${d.getMonth() + 1}. ${d.getDate()}.`;
 }

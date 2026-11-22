@@ -1,6 +1,6 @@
 # 인수인계서 — 작업을 이어가는 사람을 위한 안내
 
-> 마지막 정리: **2026-11-22** · 브랜치 `claude/eager-galileo-06vzez` · 최신 APK는 **빌드 31** (AI 설명을 Gemini로도: 서버가 Claude·Gemini 중 고름, 앱이 USB로 PC 서버(localhost http)에 붙을 수 있게. 빌드 30: 나만의 노트의 **AI 설명(프리미엄)**: Claude가 설명·표·막대그래프·순서 그림, 계정 요금제 무료·프리미엄. 빌드 29: 나만의 노트 글 겹침 고침: 글상자 높이를 기기에서 재어 배치, 갤럭시탭에서 확인. 미리 보기의 손글씨 그림이 안 보이던 것 고침. 빌드 27: 안드로이드 아래 시스템 막대 숨기기. 빌드 26: 바로 요약을 다듬어 새 노트로 만드는 **나만의 노트**. 빌드 25: 모던 미니멀 디자인, S펜 단추 두 번으로 도구 바꾸기, 스크롤 관성·움직일 때 쪽 사진)
+> 마지막 정리: **2026-11-22** · 브랜치 `claude/eager-galileo-06vzez` · 최신 APK는 **빌드 32** (**AI 정리 노트**: 표시한 쪽의 교재 글로 개념·구조 표·명령어·예시 문제·시험 포인트까지 정리한 새 노트, 갤럭시탭+PC 서버(Gemini)로 실제 확인. 빌드 31: AI 설명을 Gemini로도: 서버가 Claude·Gemini 중 고름, 앱이 USB로 PC 서버(localhost http)에 붙을 수 있게. 빌드 30: 나만의 노트의 **AI 설명(프리미엄)**: Claude가 설명·표·막대그래프·순서 그림, 계정 요금제 무료·프리미엄. 빌드 29: 나만의 노트 글 겹침 고침: 글상자 높이를 기기에서 재어 배치, 갤럭시탭에서 확인. 미리 보기의 손글씨 그림이 안 보이던 것 고침. 빌드 27: 안드로이드 아래 시스템 막대 숨기기. 빌드 26: 바로 요약을 다듬어 새 노트로 만드는 **나만의 노트**. 빌드 25: 모던 미니멀 디자인, S펜 단추 두 번으로 도구 바꾸기, 스크롤 관성·움직일 때 쪽 사진)
 > 이 문서만 읽으면 VS Code에서 바로 이어서 작업할 수 있도록 썼습니다. 기능 설명서는 [README.md](README.md)(PC·서버)와 [mobile/README.md](mobile/README.md)(앱)에 있습니다.
 
 ---
@@ -13,7 +13,7 @@
 | 구성 | ① 파이썬 프로그램(`pdfsummary/`): 명령줄 · 끌어다 놓기 실행 화면 · 설치 앱(Windows/Mac) · **앱용 서버**(요약·동기화·계정) ② 필기 앱(`mobile/`, Expo): 아이패드·갤럭시탭·폰·웹 |
 | 브랜치 | 모든 작업은 `claude/eager-galileo-06vzez`에만 있음. **main에 합치지 않았고 PR도 없음** |
 | 자동 점검(CI) | 마지막 커밋 기준 **모두 통과**: 파이썬 시험, 앱 타입 검사·단위 시험(106개), 웹 e2e 2종, 안드로이드 APK 빌드, 에뮬레이터 실행 시험, iOS 빌드 |
-| 설치 파일 | 갤럭시탭용 APK (빌드 31): **https://github.com/supergangy/pdfsummary/releases/latest/download/pdfsummary.apk** (항상 최신, 로그인 없이) |
+| 설치 파일 | 갤럭시탭용 APK (빌드 32): **https://github.com/supergangy/pdfsummary/releases/latest/download/pdfsummary.apk** (항상 최신, 로그인 없이) |
 | 실제 기기 | 갤럭시탭 SM-X820(안드로이드 17)에서 확인 중 (2026-11-21, 무선 디버깅). 필기 사라짐·S펜 단추 지우개는 **빌드 19에서 고쳐진 것 확인**. 빌드 20·21에서 고친 것(손글씨 받침, 도구 설정 창 자리, 요약 글자, 에이전트 시험에서 나온 27가지)은 **웹판에서만 확인했고 실기기 확인은 아직** → §6 P0 표, §7 점검표 |
 | 서버 | 코드·Docker 이미지 정의는 완성. **아직 어디에도 배포하지 않음** |
 | 저장소 공개 | **공개(public)**. 첫 공개 커밋 2026-10-31 → 특허를 낼 거라면 기한이 있음 (§6 P1) |
@@ -169,6 +169,7 @@ pdfsummary-app                        # 끌어다 놓기 실행 화면 (브라�
 | `app.py` | 실행 화면 + **앱용 서버**(모든 HTTP 엔드포인트) |
 | `sync.py` | 실시간 동기화 저장소 (SQLite 작업 기록, 오래 기다리기, PDF 내용 주소) |
 | `accounts.py` | 계정·세션·가입 확인/비밀번호 찾기 메일 코드·Google 계정 잇기, **요금제(무료·프리미엄)와 달마다 AI 기능 횟수**(`use_ai`·`refund_ai`, `PDFSUMMARY_AI_LIMITS`), 관리자 명령(`python -m pdfsummary.accounts list·plan·reset-password·test-mail`) |
+| `studynote.py` | **AI 정리 노트**: 표시한 쪽의 교재 글+표시 → 섹션마다 개념/구조(소제목·표·목록·순서·명령어·핵심 메모)/예시 문제와 답/시험 포인트(중요도 별)/고득점 전략. 쪽이 많으면 묶음(14,000자·8쪽)마다 따로 묻고 이어 붙임. `POST /api/ai/studynote`(한 번이 횟수 하나) |
 | `gemini.py` | AI 설명을 **Gemini**로 (urllib만, `x-goog-api-key`, `responseJsonSchema` → 400이면 JSON 모드로 다시). 키는 `GEMINI_API_KEY` 또는 `~/.pdfsummary/gemini_key.txt`. 어느 AI를 쓸지는 `app.py`의 `ai_reader`·`explain_available` (`PDFSUMMARY_AI_BACKEND`) |
 | `explain.py` | 나만의 노트의 **AI 설명**: 칠한 항목 → Claude(구조화된 출력)가 설명 + 그림 하나(표·막대그래프·순서). 답 크기를 다듬어(`clean_answer`) 앱으로. 엔드포인트는 `app.py`의 `POST /api/ai/explain`(로그인·횟수 확인, 실패하면 횟수 돌려놓기)·`GET /api/account/ai` |
 | `mailer.py` | SMTP 메일 (`PDFSUMMARY_SMTP_*`, 시험용 `PDFSUMMARY_MAIL_DIR`) |
@@ -190,6 +191,7 @@ pdfsummary-app                        # 끌어다 놓기 실행 화면 (브라�
 | `src/notes/fileFs.ts` · `fs.ts` | **기기 파일 저장** (§5-1 교훈) |
 | `src/notes/quick.ts` · `QuickScreen.tsx` | 바로 요약 (형광펜/밑줄/동그라미/손글씨/메모/표시, 손글씨 줄 나누기·받침 붙이기 `sameLine`, 문제·보기 번호에서 문장 끊기 `itemMarker`) |
 | `src/notes/myNote.ts` · `MyNoteMaker.tsx` · `myNotePrefs.ts` | **나만의 노트**: 바로 요약 → 새 노트. `buildDraft`(쪽 순서로 묶기, 같은 문장의 같은 색은 한 항목, 40pt 안의 메모는 붙이기, 못 읽은 손글씨는 그림), `layoutNote`(A4 빈 쪽에 제목·색 뜻 풀이·쪽 묶음·용어 모음을 글상자와 형광펜 막대로, 넘치면 다음 쪽). 미리 보기 화면에서 빼기·차례·메모·색 뜻. 색 뜻은 `mynote.json`에 기억 |
+| `src/notes/studyNote.ts` | AI 정리 노트를 A4 쪽에 그림: 섹션 제목·소개, 제목(1·2단계), 문단, 목록, 순서 그림, 표(`myNote.ts`의 `tableParts`: 칸 폭은 낱말이 안 끊기게, 긴 표는 쪽마다 머리 줄 다시), 명령어 회색 판, 핵심 메모 보라 판, 문제와 답, 시험 포인트 표(별 노란색). 표시한 곳과 관련된 블록은 왼쪽 여백에 그 표시 색 막대 |
 | `src/notes/aiExplain.ts` | AI 설명 요청: 쓸 수 있는지(`aiAccess`: 서버 연결·로그인·서버 Claude 키·요금제) → `requestExplain`. 받은 답은 `myNote.ts`의 `applyExplains`가 항목에 붙이고, `explainBlock`(표 `tableBlock`·막대 `chartBlock`·순서 `stepsBlock`)이 글상자와 곧은 선으로 그린다 |
 | `src/notes/textLayer.ts` | **안드로이드**: 글자 인식(OCR)이 준 자리에 PDF 글자 층의 글자를 입힘 (`repairWithTextLayer`, ①→0 같은 오독 바로잡기). `modules/pdf-pages/index.ts`의 `pageText`가 부름 |
 | `src/notes/editor-logic.ts` · `app-nav.ts` · `objects-grid.ts` · `net-errors.ts` | 화면 없이 시험할 수 있게 뺀 작은 계산들: 쪽 바탕 그림 고르기·되돌린 쪽 찾기·버릴 획 / 뒤로 단추가 갈 곳·폴더 유지 / 쪽 모아보기 줄 계산 / 서버 시간 제한·오류 글 |

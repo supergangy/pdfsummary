@@ -1,45 +1,57 @@
 diff --git a/node_modules/@shopify/react-native-skia/android/src/main/java/com/reactnative/skia/PlatformContext.java b/node_modules/@shopify/react-native-skia/android/src/main/java/com/reactnative/skia/PlatformContext.java
-index 2ae917f..194ddb7 100644
+index 2ae917f..730d410 100644
 --- a/node_modules/@shopify/react-native-skia/android/src/main/java/com/reactnative/skia/PlatformContext.java
 +++ b/node_modules/@shopify/react-native-skia/android/src/main/java/com/reactnative/skia/PlatformContext.java
-@@ -2,6 +2,7 @@ package com.reactnative.skia;
+@@ -2,6 +2,8 @@ package com.reactnative.skia;
  
  import android.os.Handler;
  import android.os.Looper;
++import android.os.Message;
 +import android.view.Choreographer;
  
  import com.facebook.jni.HybridData;
  import com.facebook.proguard.annotations.DoNotStrip;
-@@ -115,12 +116,41 @@ public class PlatformContext {
+@@ -115,12 +117,52 @@ public class PlatformContext {
          });
      }
  
-+    // pdfsummary patch: run queued main-thread work (redraws) once on the next vsync instead of
-+    // immediately. Before, a shared-value update during touch dispatch drew the canvas right away and
-+    // the Reanimated frame drew it again, so the second swap blocked in dequeueBuffer (~7ms) and frames
-+    // were dropped on 120Hz screens. The fallback timer covers the case where no vsync arrives.
-+    private final Choreographer.FrameCallback drainOnFrame = new Choreographer.FrameCallback() {
++    // pdfsummary patch: run queued main-thread work (redraws) at most once per vsync, right after the
++    // current frame. Before, a shared-value update during touch dispatch drew the canvas at once and the
++    // Reanimated frame drew it again, so the second swap blocked in dequeueBuffer (~7ms) and frames were
++    // dropped on 120Hz screens. Deferring everything to the next Choreographer frame instead halved the
++    // rate of Reanimated-driven updates (fling), so: drain after this frame (async message, not held by
++    // sync barriers), unless we already drew less than MIN_GAP ago; then wait for the next frame.
++    private static final long MIN_GAP_NANOS = 6_000_000L;
++    private long lastDrainNanos = 0;
++
++    private final Runnable drainNow = new Runnable() {
 +        @Override
-+        public void doFrame(long frameTimeNanos) {
-+            mainHandler.removeCallbacks(drainFallback);
++        public void run() {
++            mainHandler.removeCallbacks(drainNow);
++            Choreographer.getInstance().removeFrameCallback(drainOnFrame);
++            lastDrainNanos = System.nanoTime();
 +            notifyTaskReadyNative();
 +        }
 +    };
 +
-+    private final Runnable drainFallback = new Runnable() {
++    private final Choreographer.FrameCallback drainOnFrame = new Choreographer.FrameCallback() {
 +        @Override
-+        public void run() {
-+            Choreographer.getInstance().removeFrameCallback(drainOnFrame);
-+            notifyTaskReadyNative();
++        public void doFrame(long frameTimeNanos) {
++            drainNow.run();
 +        }
 +    };
 +
 +    private final Runnable scheduleDrain = new Runnable() {
 +        @Override
 +        public void run() {
-+            Choreographer.getInstance().postFrameCallback(drainOnFrame);
-+            mainHandler.removeCallbacks(drainFallback);
-+            mainHandler.postDelayed(drainFallback, 100);
++            if (System.nanoTime() - lastDrainNanos >= MIN_GAP_NANOS) {
++                Message m = Message.obtain(mainHandler, drainNow);
++                m.setAsynchronous(true);
++                mainHandler.sendMessage(m);
++            } else {
++                Choreographer.getInstance().postFrameCallback(drainOnFrame);
++                mainHandler.postDelayed(drainNow, 100); // no vsync coming (screen off etc.)
++            }
 +        }
 +    };
 +

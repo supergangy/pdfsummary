@@ -13,7 +13,7 @@ import {
   type Ink, type Notebook, type Paper, type Stroke,
 } from "./model";
 import { pageImage } from "./pageImage";
-import { PageCanvas, type Selection, type ToolName, type ZoomCmd } from "./PageCanvas";
+import { PageCanvas, type JumpCmd, type Selection, type ToolName, type ZoomCmd } from "./PageCanvas";
 import { PageGrid } from "./PageGrid";
 import { loadPrefs, savePrefs, type Prefs } from "./prefs";
 import { lassoSelect, moved, snapShape } from "./shapes";
@@ -54,7 +54,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const toolRefs = useRef<Partial<Record<ToolName, HostInstance | null>>>({}); // 도구 단추들
   const [grid, setGrid] = useState(false);
   const [selection, setSelection] = useState<Selection>(null);
-  const [textEdit, setTextEdit] = useState<{ x: number; y: number; stroke?: Stroke } | null>(null);
+  const [textEdit, setTextEdit] = useState<{ page: string; x: number; y: number; stroke?: Stroke } | null>(null);
+  const [jump, setJump] = useState<JumpCmd>({ id: "", n: 0 }); // 이 쪽이 보이게 화면을 옮기라는 부탁
   const [toast, setToast] = useState("");
   const [busy, setBusy] = useState("");
   const [loadErr, setLoadErr] = useState("");
@@ -176,36 +177,62 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
 
   // ── 쪽 바탕 그림 (PDF) ──────────────────────────────────
   const page = nb?.pages[Math.min(pi, (nb?.pages.length ?? 1) - 1)];
-  const wantPx = useRef(0);
+  const bgRef = useRef(bg);
+  bgRef.current = bg;
   const loadBg = useCallback((index: number, px: number) => {
     const n = nbRef.current;
     const pg = n?.pages[index];
     if (!n || !pdfUri || !pg || pg.pdf === undefined) return;
     // 쪽 번호가 아니라 쪽 id로 기억한다 (쪽을 끼우거나 지워도 그림이 다른 쪽으로 밀리지 않게)
     const key = pg.id;
-    const have = bg[key]?.w ?? 0;
+    const have = bgRef.current[key]?.w ?? 0;
     if (have >= px * 0.9) return;
     pageImage(n.id, pdfUri, pg.pdf, px)
       .then((uri) => setBg((b) => ((b[key]?.w ?? 0) >= px ? b : { ...b, [key]: { uri, w: px } })))
       .catch(() => setToast("이 쪽의 PDF를 그리지 못했어요."));
-  }, [pdfUri, bg]);
+  }, [pdfUri]);
 
+  // 화면 근처에 있는 쪽(위아래로 이어 볼 때·두 쪽씩 볼 때는 여러 쪽)과 그다음 쪽까지 미리
+  const [near, setNear] = useState<[number, number]>([pi, pi]);
+  const onVisible = useCallback((first: number, last: number) => setNear([first, last]), []);
+  const [wantPx, setWantPx] = useState(0);
   useEffect(() => {
-    if (!page) return;
-    const px = Math.min(4096, Math.max(1024, wantPx.current || 1400));
+    if (!nb) return;
+    const px = Math.min(4096, Math.max(1024, wantPx || 1400));
     loadBg(pi, px);
-    // 다음 쪽도 미리
-    if (nb && pi + 1 < nb.pages.length) loadBg(pi + 1, px);
+    const last = Math.min(nb.pages.length - 1, Math.max(near[1], pi) + 1);
+    for (let i = Math.max(0, Math.min(near[0], pi)); i <= last; i++) loadBg(i, px);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pi, page?.id, pdfUri]);
+  }, [pi, near, wantPx, nb?.pages, pdfUri]);
 
   const viewPx = useRef(0); // 쪽이 화면에서 차지하는 폭 (펜 견본을 같은 배율로 보여 주려고)
   const onViewWidth = useCallback((pagePx: number) => {
     viewPx.current = pagePx;
-    const px = Math.min(4096, Math.ceil(pagePx * PixelRatio.get() / 256) * 256);
-    wantPx.current = px;
-    loadBg(pi, px);
-  }, [loadBg, pi]);
+    setWantPx(Math.min(4096, Math.ceil(pagePx * PixelRatio.get() / 256) * 256));
+  }, []);
+
+  /** 이 쪽을 지금 쪽으로 (도구 모음의 쪽 번호). jump면 화면도 그 쪽으로 옮긴다 */
+  const showPage = (i: number, pages = nbRef.current?.pages ?? []) => {
+    const k = Math.max(0, Math.min(pages.length - 1, i));
+    setPi(k);
+    if (pages[k]) setJump((j) => ({ id: pages[k].id, n: j.n + 1 }));
+  };
+  /** 손이 닿은 쪽을 지금 쪽으로 (화면은 그대로). 그 쪽 정보를 돌려준다 */
+  const activate = (pageId: string) => {
+    const pages = nbRef.current?.pages ?? [];
+    const i = pages.findIndex((x) => x.id === pageId);
+    if (i < 0) return undefined;
+    if (i !== piRef.current) {
+      piRef.current = i;
+      setPi(i);
+    }
+    return pages[i];
+  };
+  /** 화면을 옮겨 가운데 쪽이 바뀜 */
+  const onShown = useCallback((pageId: string) => {
+    const i = (nbRef.current?.pages ?? []).findIndex((x) => x.id === pageId);
+    if (i >= 0 && i !== piRef.current) setPi(i);
+  }, []);
 
   // ── 도구 ────────────────────────────────────────────────
   const setP = (patch: Partial<Prefs>) => {
@@ -244,9 +271,10 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   /** 저장하지 않을 획: 화면에 남은 '방금 그은 선'만 지운다 (PageCanvas는 strokes가 바뀔 때 지운다) */
   const dropLive = (pageId: string) => setInk((k) => ({ ...k, [pageId]: [...(k[pageId] ?? [])] }));
 
-  const onStroke = useCallback((pts: number[], stylus: boolean) => {
+  const onStroke = useCallback((pts: number[], stylus: boolean, pageId: string) => {
     const n = nbRef.current;
     const p = prefs;
+    const page = activate(pageId);
     if (!n || !p || !page) return;
     // 메뉴가 닫힌 바로 뒤에 끝난 획(둘째 누름이 찍은 점)과, 형광펜으로 톡 누르기만 한 안 보이는 획은 남기지 않는다
     if (justAfter(Date.now(), menuClosedAt.current) || (p.tool === "highlighter" && isHighlighterTap(pts))) return dropLive(page.id);
@@ -258,10 +286,16 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     const hl = p.tool === "highlighter";
     let clean = thin(pts, 0.35);
     let w = hl ? p.hlWidth : p.penWidth;
-    if (hl && p.straight) clean = straighten(clean);
-    if (hl && p.hlFit && chars.current.page === page.id && chars.current.chars) {
+    if (hl && p.straight) {
+      // 긋는 동안 화면에 보인 곧은 선과 똑같게 (처음 점들 그대로 곧게 편다)
+      const st = straighten(pts);
+      if (st.length === 6) clean = st;
+    }
+    // 이 쪽 글자 상자 (방금 다른 쪽으로 옮겨 와 쓴 획이면 전에 읽어 둔 것)
+    const pageChars = chars.current.page === page.id ? chars.current.chars : charCache.current.get(page.id) ?? null;
+    if (hl && p.hlFit && pageChars) {
       // 글자 크기에 맞춰: 칠한 글줄의 높이·글자 끝에 맞춘다
-      const f = fitHighlight(clean, w, chars.current.chars);
+      const f = fitHighlight(clean, w, pageChars);
       if (f) {
         clean = f.pts;
         w = f.width;
@@ -282,7 +316,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     touch(page.id);
     bump((x) => x + 1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prefs, page, touch]);
+  }, [prefs, touch]);
 
   // 지우개
   //  - 획 지우개: 문지르는 동안 닿은 획을 감췄다가, 손을 떼면 한 번의 작업으로 지운다
@@ -290,7 +324,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const erased = useRef(new Set<string>());
   const lastErase = useRef<[number, number] | null>(null);
   const area = useRef<{ start: Ink; at: Map<string, number>; orig: Map<string, Stroke>; root: Map<string, string> } | null>(null);
-  const onErase = useCallback((phase: 0 | 1 | 2, x: number, y: number, r: number) => {
+  const onErase = useCallback((phase: 0 | 1 | 2, x: number, y: number, r: number, pageId: string) => {
+    const page = phase === 0 ? activate(pageId) : nbRef.current?.pages.find((q) => q.id === pageId);
     if (!page || !prefs) return;
     const canErase = (s: Stroke) => !prefs.eraserHlOnly || s.tool === "highlighter";
     if (phase === 0) {
@@ -361,7 +396,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     }
     erased.current = new Set();
     setHidden(new Set());
-  }, [page, prefs, touch]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefs, touch]);
 
   // 이 쪽 손글씨 모두 지우기 (글상자 포함, 되돌리기 가능)
   const clearPage = () => {
@@ -412,53 +448,63 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     const bs = strokes.map(bounds);
     return [Math.min(...bs.map((b) => b[0])), Math.min(...bs.map((b) => b[1])), Math.max(...bs.map((b) => b[2])), Math.max(...bs.map((b) => b[3]))];
   };
-  const onLasso = useCallback((pts: number[]) => {
+  const onLasso = useCallback((pts: number[], pageId: string) => {
+    const page = activate(pageId);
     if (!page) return;
     const cur = inkRef.current[page.id] ?? [];
     const ids = lassoSelect(cur, pts, prefs?.lassoPartial ?? false);
     if (!ids.size) return setSelection(null);
-    setSelection({ ids, box: selBox(cur.filter((s) => ids.has(s.id))) });
-  }, [page, prefs?.lassoPartial]);
+    setSelection({ page: page.id, ids, box: selBox(cur.filter((s) => ids.has(s.id))) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefs?.lassoPartial]);
+  // 고른 것은 고른 쪽에 있다 (위아래로 이어 볼 때는 지금 쪽 번호가 바뀌어도 그대로 둔다)
   const replaceSelected = (fn: (s: Stroke) => Stroke) => {
-    if (!page || !selection) return;
-    const before = (inkRef.current[page.id] ?? []).filter((s) => selection.ids.has(s.id));
+    if (!selection) return;
+    const pid = selection.page;
+    const before = (inkRef.current[pid] ?? []).filter((s) => selection.ids.has(s.id));
     if (!before.length) return;
     const after = before.map(fn);
-    setInk((k) => hist.current.run(k, { kind: "replace", page: page.id, before, after }));
-    setSelection({ ids: selection.ids, box: selBox(after) });
-    touch(page.id);
+    setInk((k) => hist.current.run(k, { kind: "replace", page: pid, before, after }));
+    setSelection({ page: pid, ids: selection.ids, box: selBox(after) });
+    touch(pid);
     bump((x) => x + 1);
   };
   const onMoveSelection = useCallback((dx: number, dy: number) => {
     if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
     replaceSelected((s) => moved(s, dx, dy));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, selection]);
+  }, [selection]);
   const deleteSelected = () => {
-    if (!page || !selection) return;
-    const op = removal(inkRef.current, page.id, selection.ids);
+    if (!selection) return;
+    const op = removal(inkRef.current, selection.page, selection.ids);
     if (op) {
       setInk((k) => hist.current.run(k, op));
-      touch(page.id);
+      touch(selection.page);
       bump((x) => x + 1);
     }
     setSelection(null);
   };
   useEffect(() => {
     if (prefs?.tool !== "lasso") setSelection(null);
-  }, [prefs?.tool, pi]);
-  // 다른 쪽으로 넘어가면 올가미를 든 채여도 고른 것을 푼다 (빈 선택 상자가 다른 쪽에 남지 않게)
-  useEffect(() => setSelection(null), [page?.id]);
+  }, [prefs?.tool]);
+  // 고른 쪽이 지워졌으면 고른 것도 푼다
+  useEffect(() => {
+    setSelection((cur) => (cur && !nb?.pages.some((x) => x.id === cur.page) ? null : cur));
+  }, [nb?.pages]);
 
   // ── 글상자 ──────────────────────────────────────────────
-  const onTextTap = useCallback((x: number, y: number) => {
-    if (!page || justAfter(Date.now(), menuClosedAt.current)) return; // 메뉴를 두 번 누른 둘째 누름은 넘긴다
+  const onTextTap = useCallback((x: number, y: number, pageId: string) => {
+    if (justAfter(Date.now(), menuClosedAt.current)) return; // 메뉴를 두 번 누른 둘째 누름은 넘긴다
+    const page = activate(pageId);
+    if (!page) return;
     const hit = [...(inkRef.current[page.id] ?? [])].reverse().find((s) => s.tool === "text" && hitAlong([s], x, y, x, y, 2).length);
-    setTextEdit(hit ? { x: hit.pts[0], y: hit.pts[1], stroke: hit } : { x, y });
-  }, [page]);
+    setTextEdit(hit ? { page: page.id, x: hit.pts[0], y: hit.pts[1], stroke: hit } : { page: page.id, x, y });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const saveText = (text: string, size: number) => {
     const ed = textEdit;
     setTextEdit(null);
+    const page = ed ? nbRef.current?.pages.find((x) => x.id === ed.page) : undefined;
     if (!ed || !page || !prefs) return;
     if (size !== prefs.textSize) setP({ textSize: size });
     const color = ed.stroke?.color ?? prefs.penColor;
@@ -482,7 +528,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const showChanged = (pageId: string | undefined, what: string) => {
     const i = otherPage(nbRef.current?.pages ?? [], page?.id, pageId);
     if (i < 0) return;
-    setPi(i);
+    showPage(i);
     say(`${what} 필기가 ${i + 1}쪽에 있어서 그 쪽으로 넘겼어요.`);
   };
   const undo = () => {
@@ -505,7 +551,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   // ── 쪽 ──────────────────────────────────────────────────
   const go = (i: number) => {
     if (!nb) return;
-    setPi(Math.max(0, Math.min(nb.pages.length - 1, i)));
+    showPage(i, nb.pages);
   };
   const addPage = (paper?: Paper) => {
     if (!nb) return;
@@ -513,7 +559,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     setNb(next);
     nbRef.current = next;
     touch();
-    setPi(pi + 1);
+    showPage(pi + 1, next.pages);
     setMenu(false);
   };
   const deletePage = () => {
@@ -531,7 +577,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
       dirty.current.add(page.id);
       touch();
       setBg({});
-      setPi(Math.min(pi, next.pages.length - 1));
+      showPage(Math.min(pi, next.pages.length - 1), next.pages);
       setMenu(false);
     };
     if (Platform.OS === "web") {
@@ -620,7 +666,6 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   }, []);
 
   piRef.current = pi;
-  const strokes = useMemo(() => (page ? ink[page.id] ?? [] : []), [ink, page]);
 
   if (loadErr) {
     return (
@@ -744,9 +789,13 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
       </View>
 
       <PageCanvas
-        page={page}
-        background={pageBg(bg, page)}
-        strokes={strokes}
+        pages={nb.pages}
+        ink={ink}
+        bgOf={(p) => pageBg(bg, p)}
+        active={page.id}
+        jump={jump}
+        flow={prefs.flow}
+        two={prefs.twoPages}
         hidden={hidden}
         tool={tool}
         color={color}
@@ -756,6 +805,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         eraserPx={prefs.eraserSize}
         lassoRect={prefs.lassoMode === "rect"}
         fingerDraw={prefs.fingerDraw}
+        straight={prefs.straight}
         zoom={zoom}
         onStroke={onStroke}
         onErase={onErase}
@@ -765,6 +815,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         onMoveSelection={onMoveSelection}
         onTextTap={onTextTap}
         onPenDouble={onPenDouble}
+        onShown={onShown}
+        onVisible={onVisible}
       />
 
       {/* 올가미로 고른 것: 아래에 떠 있는 작은 막대 (색 바꾸기·지우기·끝내기) */}
@@ -808,6 +860,10 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
               <MenuSep />
               <MenuItem label="쪽 모아보기" onPress={() => { setMenu(false); setGrid(true); }} />
               <MenuItem label="PDF로 내보내기 (필기 포함)" onPress={exportPdf} />
+              <MenuSep />
+              <MenuItem label="좌우로 넘기기 (한 쪽씩)" checked={prefs.flow === "h"} onPress={() => { setMenu(false); setP({ flow: "h" }); }} />
+              <MenuItem label="위아래로 넘기기 (이어서)" checked={prefs.flow === "v"} onPress={() => { setMenu(false); setP({ flow: "v" }); }} />
+              <MenuItem label="두 쪽씩 보기" checked={prefs.twoPages} onPress={() => { setMenu(false); setP({ twoPages: !prefs.twoPages }); }} />
               <MenuSep />
               <MenuItem label="＋ 뒤에 빈 쪽 (같은 속지)" onPress={() => addPage()} />
               <MenuItem label="＋ 뒤에 줄 쪽" onPress={() => addPage("lined")} />
@@ -1027,7 +1083,8 @@ function WidthDot({ size, on, onPress, label }: { size: number; on: boolean; onP
 }
 
 /** ⋯ 메뉴 한 줄. 괄호 안 덧말은 옅은 글자로 */
-function MenuItem({ label, onPress, disabled, danger }: { label: string; onPress: () => void; disabled?: boolean; danger?: boolean }) {
+/** ⋯ 메뉴 한 줄. checked가 있으면 고를 수 있는 항목 (켜져 있으면 ✓) */
+function MenuItem({ label, onPress, disabled, danger, checked }: { label: string; onPress: () => void; disabled?: boolean; danger?: boolean; checked?: boolean }) {
   const t = useTheme();
   const cut = label.indexOf(" (");
   const main = cut < 0 ? label : label.slice(0, cut);
@@ -1036,13 +1093,15 @@ function MenuItem({ label, onPress, disabled, danger }: { label: string; onPress
     <Pressable
       onPress={onPress}
       disabled={disabled}
-      accessibilityRole="menuitem"
-      style={({ pressed }) => [sx.menuItem, { opacity: disabled ? 0.35 : 1, backgroundColor: pressed ? t.sunken : "transparent" }]}
+      accessibilityRole={checked === undefined ? "menuitem" : "checkbox"}
+      accessibilityState={checked === undefined ? undefined : { checked }}
+      style={({ pressed }) => [sx.menuItem, checked !== undefined && sx.menuCheck, { opacity: disabled ? 0.35 : 1, backgroundColor: pressed ? t.sunken : "transparent" }]}
     >
       <Text style={[type.body, { color: danger ? t.bad : t.ink }]}>
         {main}
         {!!more && <Text style={{ color: t.muted }}>{more}</Text>}
       </Text>
+      {checked !== undefined && <Text style={[type.body, { color: checked ? t.ink : "transparent", fontWeight: "700" }]}>✓</Text>}
     </Pressable>
   );
 }
@@ -1101,6 +1160,7 @@ const sx = StyleSheet.create({
   menu: { marginTop: 56, minWidth: 280, maxWidth: 360, borderRadius: radius.lg },
   menuList: { paddingVertical: 8 },
   menuItem: { marginHorizontal: 8, paddingHorizontal: 12, paddingVertical: 11, borderRadius: radius.md },
+  menuCheck: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 16 },
   menuSep: { height: 1, marginVertical: 6, marginHorizontal: 20 },
 
   // 가운데 뜨는 창

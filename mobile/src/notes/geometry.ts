@@ -191,8 +191,10 @@ export function thin(pts: number[], minDist: number): number[] {
   return out;
 }
 
-/** 형광펜을 '곧게'(삼성노트·굿노트의 직선 형광펜처럼): 거의 가로로 그었으면 시작~끝을 수평선으로. */
+/** 형광펜을 '곧게'(삼성노트·굿노트의 직선 형광펜처럼): 거의 가로로 그었으면 시작~끝을 수평선으로.
+ *  긋는 동안 화면(UI 스레드)에서도 같은 규칙으로 미리 보여 주므로 worklet. */
 export function straighten(pts: number[]): number[] {
+  "worklet";
   const n = pts.length;
   if (n < 6) return pts.slice();
   const x0 = pts[0], y0 = pts[1], x1 = pts[n - 3], y1 = pts[n - 2];

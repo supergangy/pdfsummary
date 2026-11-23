@@ -368,6 +368,89 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     await page.waitForTimeout(600);
     console.log("✓ 빈 쪽 끼우기 → 다른 쪽의 필기를 되돌리면 그 쪽으로, 요약에서 보던 쪽으로 돌아오기");
 
+    // ── 쪽 보기: 두 쪽씩 · 위아래로 이어서 / 형광펜 직선은 긋는 동안에도 곧게 ──
+    const inkPer = async () => {
+      const out = {};
+      for (const [k, v] of Object.entries(await idb(page))) if (/\/ink\//.test(k) && v) out[k] = JSON.parse(v).length;
+      return out;
+    };
+    const grew = (a, b) => Object.keys(b).filter((k) => (b[k] ?? 0) > (a[k] ?? 0));
+    const viewOpt = async (re) => {
+      await page.getByLabel("더 보기").click();
+      await page.getByText(re).click();
+      await page.waitForTimeout(1000); // 메뉴가 닫힌 바로 뒤의 획은 버려진다
+    };
+    const line = async (x0, y0, x1, y1) => {
+      await page.mouse.move(x0, y0);
+      await page.mouse.down();
+      await page.mouse.move(x1, y1, { steps: 8 });
+      await page.mouse.up();
+      await page.waitForTimeout(900);
+    };
+    // 펜이 이미 골라져 있으면 한 번 더 누를 때 설정 창이 열린다 → 다른 도구(글상자)를 거쳐 펜으로
+    await page.getByLabel(/^글상자 \(/).click();
+    await page.getByLabel(/한 번 더 누르면 펜 설정/).click();
+    await viewOpt(/^두 쪽씩 보기/);
+    // 두 쪽(1·2쪽)이 화면 폭에 나란히: 오른쪽 쪽에 쓰면 2쪽, 왼쪽 쪽에 쓰면 1쪽에 들어가고 쪽 번호도 따라간다
+    const s2 = Math.min((b2.width - 24) / (2 * info.w + 24), 6);
+    const rightX = b2.x + 12 + (info.w * 1.5 + 24) * s2, leftX = b2.x + 12 + info.w * 0.5 * s2, topY = b2.y + 12 + 120 * s2;
+    let inkBefore = await inkPer();
+    await line(rightX - 40, topY, rightX + 40, topY + 20);
+    const onRight = grew(inkBefore, await inkPer());
+    if (!/^2 \//.test(await pageNo())) fail("두 쪽 보기에서 오른쪽 쪽에 썼는데 지금 쪽이 2쪽이 아님: " + (await pageNo()));
+    inkBefore = await inkPer();
+    await line(leftX - 40, topY, leftX + 40, topY + 20);
+    const onLeft = grew(inkBefore, await inkPer());
+    if (!/^1 \//.test(await pageNo())) fail("두 쪽 보기에서 왼쪽 쪽에 썼는데 지금 쪽이 1쪽이 아님: " + (await pageNo()));
+    if (onRight.length !== 1 || onLeft.length !== 1 || onRight[0] === onLeft[0]) fail(`두 쪽 보기: 오른쪽·왼쪽에 쓴 획이 서로 다른 쪽에 저장되지 않음 (${onRight} / ${onLeft})`);
+    await page.getByLabel("되돌리기").click();
+    await page.waitForTimeout(500);
+    await page.getByLabel("되돌리기").click();
+    await page.waitForTimeout(800);
+    await viewOpt(/^두 쪽씩 보기/); // 끄기
+    console.log("✓ 두 쪽씩 보기: 오른쪽 쪽에 쓰면 2쪽에, 왼쪽 쪽에 쓰면 1쪽에 (쪽 번호도 따라감)");
+
+    await viewOpt(/^위아래로 넘기기/);
+    await page.getByLabel("이전 쪽").click().catch(() => {});
+    await page.waitForTimeout(400);
+    await page.getByLabel("다음 쪽").click();
+    await page.waitForTimeout(800);
+    if (!/^2 \//.test(await pageNo())) fail("위아래 보기에서 다음 쪽으로 가지 않음: " + (await pageNo()));
+    inkBefore = await inkPer();
+    await line(b2.x + 200, b2.y + 200, b2.x + 400, b2.y + 220); // 2쪽 맨 위가 화면 위에 와 있다
+    const onDown = grew(inkBefore, await inkPer());
+    if (onDown.length !== 1 || onDown[0] !== onRight[0]) fail(`위아래 보기: 다음 쪽 단추로 간 2쪽에 쓴 획이 2쪽에 저장되지 않음 (${onDown})`);
+    // 형광펜 직선(기본 켜짐): 물결치듯 그어도 손을 떼기 전부터 곧은 띠로 보인다
+    await page.getByLabel(/한 번 더 누르면 형광펜 설정/).click();
+    await page.waitForTimeout(300);
+    const hx0 = b2.x + 150, hy = b2.y + 430;
+    await page.mouse.move(hx0, hy);
+    await page.mouse.down();
+    for (let i = 1; i <= 12; i++) await page.mouse.move(hx0 + i * 25, hy + (i % 2 ? 30 : -30));
+    await page.mouse.move(hx0 + 325, hy + 2);
+    await page.waitForTimeout(400);
+    const liveShot = path.join(TMP, "live-highlight.png");
+    await page.screenshot({ path: liveShot, clip: { x: hx0 - 20, y: hy - 90, width: 370, height: 180 } });
+    await page.mouse.up();
+    await page.waitForTimeout(900);
+    const band = JSON.parse(execFileSync("python3", ["-c", `
+import sys, json, pymupdf
+p = pymupdf.Pixmap(sys.argv[1]); k = p.width / 370
+ys = [y for y in range(p.height) for x in range(0, p.width, 3) if (lambda c: c[0] > 235 and c[1] > 210 and c[2] < 225)(p.pixel(x, y))]
+print(json.dumps([len(ys), (max(ys) - min(ys)) / k if ys else 0]))`, liveShot], { encoding: "utf8" }));
+    if (!band[0] || band[1] > 20 * s + 8) fail(`형광펜 직선: 긋는 동안 곧은 띠로 보이지 않음 (노란 부분 높이 ${band[1].toFixed(1)}px, 물결 높이 60px)`);
+    const straightHl = (await allStrokes(page)).filter((st) => st.tool === "highlighter").pop();
+    if (!straightHl || straightHl.pts.length !== 6 || straightHl.pts[1] !== straightHl.pts[4]) fail("형광펜 직선: 손을 뗀 뒤 곧은 선으로 저장되지 않음");
+    await page.getByLabel("되돌리기").click();
+    await page.waitForTimeout(500);
+    await page.getByLabel("되돌리기").click();
+    await page.waitForTimeout(800);
+    console.log(`✓ 위아래로 넘기기: 다음 쪽 단추로 2쪽 맨 위로, 쓴 획은 2쪽에 / 형광펜 직선이 긋는 동안에도 곧게 (띠 높이 ${band[1].toFixed(0)}px)`);
+    await viewOpt(/^좌우로 넘기기/);
+    await page.getByLabel(/한 번 더 누르면 펜 설정/).click();
+    await page.getByLabel("이전 쪽").click();
+    await page.waitForTimeout(600);
+
     await page.getByLabel("요약 만들기").click();
     // 먼저 기기에서 바로 만든 요약 (서버 없이): PDF 글자층에서 칠한 글자를 읽는다
     await page.getByText("서버로 자세히", { exact: true }).waitFor({ timeout: 20000 });

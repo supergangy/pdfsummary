@@ -1,6 +1,7 @@
 // 도구 설정(마지막에 쓴 펜·색·굵기, 손가락으로 쓰기)을 기억한다.
 import { HIGHLIGHT_COLORS, HIGHLIGHT_OPACITY, HIGHLIGHT_WIDTHS, PEN_COLORS, PEN_WIDTHS, type LineDash, type PenBrush } from "./model";
 import type { PenLook, SwapTarget } from "./editor-logic";
+import type { PageFlow } from "./pageLayout";
 import type { ToolName } from "./PageCanvas";
 import { deviceFs } from "./fs";
 
@@ -26,6 +27,8 @@ export type Prefs = {
   swapTool: SwapTarget; // S펜 옆 단추를 (펜을 띄운 채) 두 번 누르면 바꿀 도구
   favorite: PenLook | null; // 즐겨찾는 펜 (두 번 누르기로 바꿀 펜 모양)
   stylusSeen: boolean;
+  flow: PageFlow; // 쪽 넘기기: 좌우(한 쪽씩 딱 맞춰) / 위아래(이어서)
+  twoPages: boolean; // 두 쪽씩 보기
 };
 
 export const DEFAULT_PREFS: Prefs = {
@@ -50,6 +53,8 @@ export const DEFAULT_PREFS: Prefs = {
   swapTool: "highlighter",
   favorite: null,
   stylusSeen: false,
+  flow: "h",
+  twoPages: false,
 };
 
 const PATH = "prefs.json";

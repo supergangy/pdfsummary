@@ -21,3 +21,10 @@ export function StylusView({ onButton, ...rest }: StylusViewProps) {
   const extra = { onPointerDown: watch, onPointerMove: watch, onPointerUp: watch } as unknown as ViewProps;
   return <View {...rest} {...extra} />;
 }
+
+/** 단추 이름표: 웹은 단추의 접근성 이름(aria-label)으로 충분해서 그냥 View */
+export type TooltipViewProps = ViewProps & { text: string };
+
+export function TooltipView({ text: _text, ...rest }: TooltipViewProps) {
+  return <View {...rest} />;
+}

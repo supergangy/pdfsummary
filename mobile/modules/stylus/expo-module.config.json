@@ -1,4 +1,11 @@
 {
-  "platforms": ["android"],
-  "android": { "modules": ["expo.modules.stylus.StylusModule"] }
+  "platforms": [
+    "android"
+  ],
+  "android": {
+    "modules": [
+      "expo.modules.stylus.StylusModule",
+      "expo.modules.stylus.TooltipModule"
+    ]
+  }
 }

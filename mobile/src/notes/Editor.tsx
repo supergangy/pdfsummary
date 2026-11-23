@@ -4,6 +4,7 @@ import { ActivityIndicator, Alert, AppState, BackHandler, Modal, PixelRatio, Pla
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { pageText } from "../../modules/pdf-pages";
+import { TooltipView } from "../../modules/stylus";
 import { Button, floating, radius, styles as ui, type, useTheme, type Theme } from "../ui";
 import { clampPage, isHighlighterTap, justAfter, otherPage, pageBg, penSwap, swatchEdge, type BgCache, type SwapSaved } from "./editor-logic";
 import { bounds, eraseFrom, fitHighlight, hitAlong, straighten, thin, type CharBox } from "./geometry";
@@ -997,7 +998,7 @@ function RenameDialog({ value, onDone }: { value: string | null; onDone: (v: str
 /** 글자 하나짜리 단추 (‹ › ⋯ − ＋ ⚙︎ ✕): 바탕 없이 회색 글자만 */
 function IconBtn({ glyph, icon, onPress, disabled, label, big, compact }: { glyph?: string; icon?: IconName; onPress: () => void; disabled?: boolean; label: string; big?: boolean; compact?: boolean }) {
   const t = useTheme();
-  return (
+  const btn = (
     <Pressable
       onPress={onPress}
       disabled={disabled}
@@ -1013,6 +1014,8 @@ function IconBtn({ glyph, icon, onPress, disabled, label, big, compact }: { glyp
       )}
     </Pressable>
   );
+  // 그림뿐인 단추는 S펜을 위에 띄우면(또는 길게 누르면) 이름이 뜬다
+  return icon ? <TooltipView text={label}>{btn}</TooltipView> : btn;
 }
 
 /** 낱말 단추 (맞춤, 지우기): 바탕 없이 글자만. danger는 빨간 글자 */
@@ -1032,21 +1035,24 @@ function TextBtn({ label, onPress, label2, danger }: { label: string; onPress: (
 }
 
 /** 도구 단추: 고른 것은 검은 알약. chip은 켜고 끄는 단추라 꺼져 있어도 옅은 회색 바탕 */
-/** 도구 단추: 그림 아이콘. 고른 도구는 검은 바탕. 이름(label)은 접근성 이름표로만 (화면 글이 없어 한 줄에 들어간다) */
+/** 도구 단추: 그림 아이콘. 고른 도구는 검은 바탕. 이름(label)은 화면에 쓰지 않고(한 줄에 들어가게)
+ *  접근성 이름표와, S펜을 위에 띄우면(또는 길게 누르면) 뜨는 이름표로 */
 function ToolBtn({ label, icon, on, onPress, hint, ref }: { label: string; icon: IconName; on: boolean; onPress: () => void; hint?: string; ref?: Ref<HostInstance> }) {
   const t = useTheme();
   return (
-    <Pressable
-      ref={ref}
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={hint ? `${label} (${hint})` : label}
-      accessibilityState={{ selected: on }}
-      hitSlop={2}
-      style={({ pressed }) => [sx.toolBtn, { backgroundColor: on ? t.ink : "transparent", opacity: pressed ? 0.7 : 1 }]}
-    >
-      <ToolIcon name={icon} color={on ? t.bg : t.sub} />
-    </Pressable>
+    <TooltipView text={label}>
+      <Pressable
+        ref={ref}
+        onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={hint ? `${label} (${hint})` : label}
+        accessibilityState={{ selected: on }}
+        hitSlop={2}
+        style={({ pressed }) => [sx.toolBtn, { backgroundColor: on ? t.ink : "transparent", opacity: pressed ? 0.7 : 1 }]}
+      >
+        <ToolIcon name={icon} color={on ? t.bg : t.sub} />
+      </Pressable>
+    </TooltipView>
   );
 }
 

@@ -195,7 +195,7 @@ function HighlighterOptions({ prefs, setP }: { prefs: Prefs; setP: Props["setP"]
         onChange={(i) => setP({ hlOpacity: HIGHLIGHT_OPACITY_STEPS[i] })}
       />
       <View style={css.toggles}>
-        <Toggle label="직선" hint="가로로 그으면 곧은 선으로" value={prefs.straight} onChange={(v) => setP({ straight: v })} />
+        <Toggle label="직선" hint="처음 찍은 점에서 곧은 선으로" value={prefs.straight} onChange={(v) => setP({ straight: v })} />
         <Toggle label="글자 크기에 맞춰 두께 조절" hint="PDF 쪽에서 칠한 글줄 높이·글자 끝에 맞춰요" value={prefs.hlFit} onChange={(v) => setP({ hlFit: v })} />
       </View>
       <Colors colors={HIGHLIGHT_COLORS} value={prefs.hlColor} onPick={(c) => setP({ hlColor: c })} />

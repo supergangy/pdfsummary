@@ -754,7 +754,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
                 <WidthDot key={w} size={6 + i * 6} on={w === width} onPress={() => setP(tool === "highlighter" ? { hlWidth: w } : { penWidth: w })} label={`굵기 ${i + 1}`} />
               ))}
               {tool === "highlighter" && (
-                <ToolBtn icon="line" label="직선" on={prefs.straight} onPress={() => setP({ straight: !prefs.straight })} hint="가로로 그으면 곧은 선으로" />
+                <ToolBtn icon="line" label="직선" on={prefs.straight} onPress={() => setP({ straight: !prefs.straight })} hint="처음 찍은 점에서 곧은 선으로" />
               )}
               {tool === "pen" && (
                 <ToolBtn icon="shapes" label="도형 펴기" on={prefs.shapes} onPress={() => setP({ shapes: !prefs.shapes })} hint="선·사각형·원·삼각형을 반듯하게" />

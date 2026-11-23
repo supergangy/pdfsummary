@@ -97,13 +97,18 @@ test("thin keeps ends and drops crowded points", () => {
   assert.deepEqual(out.slice(-3), [10, 0, 0.5]);
 });
 
-test("straight highlighter: nearly horizontal → flat line, otherwise unchanged", () => {
-  const wobbly = [0, 100, 0.5, 30, 103, 0.5, 60, 98, 0.5, 90, 101, 0.5];
-  const st = straighten(wobbly);
-  assert.equal(st.length, 6);
-  assert.equal(st[1], st[4]);
-  const diag = [0, 0, 0.5, 30, 30, 0.5];
-  assert.deepEqual(straighten(diag), diag);
+test("straight highlighter: 처음 점에 고정, 흔들려도 처음 높이 그대로 수평선", () => {
+  const wobbly = [0, 100, 0.5, 30, 113, 0.5, 60, 88, 0.5, 90, 109, 0.5];
+  assert.deepEqual(straighten(wobbly), [0, 100, 0.5, 90, 100, 0.5]);
+  // 기울게 끝나도 가로로 더 갔으면 처음 높이의 수평선 (예전에는 기울면 곧게 펴지 않았다)
+  assert.deepEqual(straighten([0, 0, 0.5, 30, 20, 0.6]), [0, 0, 0.5, 30, 0, 0.6]);
+  // 왼쪽으로 그어도 처음 점에서 시작
+  assert.deepEqual(straighten([100, 50, 0.5, 40, 55, 0.5]), [100, 50, 0.5, 40, 50, 0.5]);
+  // 세로로 더 갔으면 처음 가로 자리 그대로 수직선
+  assert.deepEqual(straighten([10, 0, 0.5, 14, 60, 0.5]), [10, 0, 0.5, 10, 60, 0.5]);
+  // 아직 거의 안 움직였으면 그대로
+  const tiny = [0, 0, 0.5, 3, 2, 0.5];
+  assert.deepEqual(straighten(tiny), tiny);
 });
 
 test("view math", () => {

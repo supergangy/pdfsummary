@@ -441,6 +441,9 @@ print(json.dumps([len(ys), (max(ys) - min(ys)) / k if ys else 0]))`, liveShot], 
     if (!band[0] || band[1] > 20 * s + 8) fail(`형광펜 직선: 긋는 동안 곧은 띠로 보이지 않음 (노란 부분 높이 ${band[1].toFixed(1)}px, 물결 높이 60px)`);
     const straightHl = (await allStrokes(page)).filter((st) => st.tool === "highlighter").pop();
     if (!straightHl || straightHl.pts.length !== 6 || straightHl.pts[1] !== straightHl.pts[4]) fail("형광펜 직선: 손을 뗀 뒤 곧은 선으로 저장되지 않음");
+    // 처음 찍은 점 높이에 고정 (2쪽 맨 위가 화면 위 여백 12px 자리에 있다)
+    const firstY = (hy - b2.y - 12) / s;
+    if (Math.abs(straightHl.pts[1] - firstY) > 1.5) fail(`형광펜 직선: 처음 찍은 높이(${firstY.toFixed(1)})가 아니라 ${straightHl.pts[1]}에 그어짐`);
     await page.getByLabel("되돌리기").click();
     await page.waitForTimeout(500);
     await page.getByLabel("되돌리기").click();

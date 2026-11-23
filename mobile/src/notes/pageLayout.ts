@@ -103,11 +103,12 @@ export function pagesIn(rects: number[], x0: number, y0: number, x1: number, y1:
   return [first, last];
 }
 
-/** 좌우 넘기기에서 손을 뗐을 때 갈 묶음: 빠르게 밀었으면 그 쪽으로 하나, 아니면 화면 가운데에 가까운 묶음 */
-export function pageTurnTarget(start: number, nearest: number, velocityX: number, count: number, fast = 300): number {
+/** 좌우 넘기기에서 손을 뗐을 때 갈 묶음: 빠르게 밀었거나 화면 폭의 1/5 넘게 끌었으면 그 쪽으로 하나,
+ *  아니면 화면 가운데에 가까운 묶음. pushed = 끈 거리 ÷ 화면 폭 (왼쪽으로 끌면 음수) */
+export function pageTurnTarget(start: number, nearest: number, velocityX: number, count: number, pushed = 0, fast = 300): number {
   "worklet";
   let t = nearest;
-  if (velocityX < -fast) t = Math.max(nearest, start + 1);
-  else if (velocityX > fast) t = Math.min(nearest, start - 1);
+  if (velocityX < -fast || pushed < -0.2) t = Math.max(nearest, start + 1);
+  else if (velocityX > fast || pushed > 0.2) t = Math.min(nearest, start - 1);
   return Math.max(0, Math.min(count - 1, t));
 }

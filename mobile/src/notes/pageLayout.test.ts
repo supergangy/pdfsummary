@@ -68,6 +68,10 @@ test("좌우 넘기기: 빠르게 밀면 한 쪽 넘고, 천천히 놓으면 가
   assert.equal(pageTurnTarget(3, 3, 900, 10), 2); // 오른쪽으로 휙 → 이전 쪽
   assert.equal(pageTurnTarget(3, 3, -50, 10), 3); // 조금 끌다 놓음 → 제자리
   assert.equal(pageTurnTarget(3, 4, -50, 10), 4); // 반 넘게 끌고 놓음 → 다음 쪽
+  // 속도를 못 쟀어도(0) 화면 폭의 1/5 넘게 끌었으면 넘어간다
+  assert.equal(pageTurnTarget(3, 3, 0, 10, -0.3), 4);
+  assert.equal(pageTurnTarget(3, 3, 0, 10, 0.3), 2);
+  assert.equal(pageTurnTarget(3, 3, 0, 10, -0.1), 3);
   assert.equal(pageTurnTarget(9, 9, -900, 10), 9);
   assert.equal(pageTurnTarget(0, 0, 900, 10), 0);
 });

@@ -356,7 +356,7 @@ export function PageCanvas(props: Props) {
   const turnPage = (vx: number) => {
     "worklet";
     const s = scale.value, W = vw.value, H = vh.value;
-    const t = pageTurnTarget(startSpread.value, centerSpread(), vx, spreads.value.length / 4);
+    const t = pageTurnTarget(startSpread.value, centerSpread(), vx, spreads.value.length / 4, W ? (tx.value - sx.value) / W : 0);
     const ax = spreads.value[t * 4], ay = spreads.value[t * 4 + 1], aw = spreads.value[t * 4 + 2];
     const moved = t !== startSpread.value;
     flings.value = moved ? 2 : 1;

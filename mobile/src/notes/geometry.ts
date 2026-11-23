@@ -191,7 +191,9 @@ export function thin(pts: number[], minDist: number): number[] {
   return out;
 }
 
-/** 형광펜을 '곧게'(삼성노트·굿노트의 직선 형광펜처럼): 거의 가로로 그었으면 시작~끝을 수평선으로.
+/** 형광펜을 '곧게'(삼성노트·굿노트의 직선 형광펜처럼): 처음 찍은 점에 고정하고, 지금 펜 자리까지 곧은 선.
+ *  가로로 더 많이 갔으면 처음 점의 높이 그대로 수평선, 세로로 더 많이 갔으면 처음 점의 가로 자리 그대로 수직선.
+ *  중간에 손이 위아래로 흔들려도 선은 처음 높이를 지킨다. 아직 거의 안 움직였으면(8pt 미만) 그대로.
  *  긋는 동안 화면(UI 스레드)에서도 같은 규칙으로 미리 보여 주므로 worklet. */
 export function straighten(pts: number[]): number[] {
   "worklet";
@@ -199,14 +201,8 @@ export function straighten(pts: number[]): number[] {
   if (n < 6) return pts.slice();
   const x0 = pts[0], y0 = pts[1], x1 = pts[n - 3], y1 = pts[n - 2];
   const dx = x1 - x0, dy = y1 - y0;
-  if (Math.abs(dx) < 8 || Math.abs(dy) > Math.abs(dx) * 0.25) return pts.slice();
-  let sum = 0, k = 0;
-  for (let i = 0; i < n; i += 3) {
-    sum += pts[i + 1];
-    k++;
-  }
-  const y = sum / k;
-  return [x0, y, pts[2], x1, y, pts[n - 1]];
+  if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return pts.slice();
+  return Math.abs(dx) >= Math.abs(dy) ? [x0, y0, pts[2], x1, y0, pts[n - 1]] : [x0, y0, pts[2], x0, y1, pts[n - 1]];
 }
 
 /** 화면 좌표 ↔ 쪽 좌표. view = { scale, tx, ty } (쪽 좌표 × scale + t = 화면 좌표). */

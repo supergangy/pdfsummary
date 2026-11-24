@@ -151,6 +151,15 @@ export function sentenceAround(chars: PdfChar[], a: number, b: number) {
   return { before: flat(chars, s, a - 1).trimStart(), mark: join(chars, a, b), after: flat(chars, b + 1, e).trimEnd() };
 }
 
+/** 글자 번호들 → 형광펜 항목 (이어진 글자끼리 하나씩). 다른 앱에서 칠해 쪽 그림에 굳은 형광펜(bakedHighlights.ts)도 이것으로 */
+export function highlightItemsFromChars(page: number, color: string, chars: PdfChar[], idx: number[]): QuickItem[] {
+  return runs(idx, chars).map(([a, b]) => {
+    const cs = chars.slice(a, b + 1).filter((c) => c[0].trim());
+    const box: Box = [Math.min(...cs.map((c) => c[1])), Math.min(...cs.map((c) => c[2])), Math.max(...cs.map((c) => c[3])), Math.max(...cs.map((c) => c[4]))];
+    return { page, kind: "highlight" as const, color, text: join(chars, a, b), sentence: sentenceAround(chars, a, b), box, strokes: [] };
+  });
+}
+
 function centers(chars: PdfChar[]) {
   return chars.map(([c, x0, y0, x1, y1]) => ({ c, cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, x0, y0, x1, y1 }));
 }

@@ -1,13 +1,15 @@
 // 서버 없이 기기에서 바로 만드는 요약 화면
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import * as DeviceAi from "../../modules/device-ai";
 import { inkAvailable, inkStatus, prepareInk, recognizeInk } from "../../modules/ink-recognizer";
 import { pageText } from "../../modules/pdf-pages";
 import { ResultView } from "../platform/ResultView";
-import { Bar, Button, Hint, type, useTheme } from "../ui";
+import { Bar, Button, floating, Hint, radius, type, useTheme } from "../ui";
+import { COLOR_INFO, type ColorKey } from "./bakedHighlights";
+import { addBakedToSummary, bakedColors, scanBaked, type BakedScan } from "./findBaked";
 import { tooSoon } from "./app-nav";
 import type { Ink, Notebook } from "./model";
 import { MyNoteMaker } from "./MyNoteMaker";
@@ -26,6 +28,11 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary, onOpenNot
   const [ai, setAi] = useState<DeviceAi.DeviceAiStatus | null>(null);
   const [note, setNote] = useState("");
   const [making, setMaking] = useState(false); // '나만의 노트' 만들기 화면
+  // 다른 앱에서 칠해 쪽 그림에 굳은 형광펜 찾기
+  const [baked, setBaked] = useState<BakedScan | null>(null); // 찾은 결과 (색 고르기 창이 열림)
+  const [bakedPick, setBakedPick] = useState<Set<ColorKey>>(new Set());
+  const [bakedBusy, setBakedBusy] = useState(false);
+  const stopBaked = useRef(false);
   const alive = useRef(true);
   // 노트의 '요약' 단추를 빠르게 두 번 누르면 두 번째 누름이 같은 자리에 뜨는 '서버로 자세히'를 눌렀다 → 막 떴을 때의 누름은 넘긴다
   const openedAt = useRef(Date.now());
@@ -90,6 +97,56 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary, onOpenNot
     }
   }
 
+  /** 다른 앱에서 칠한 형광펜: 쪽마다 그려 색을 찾고, 찾은 색을 고르게 한다 */
+  async function findBakedMarks() {
+    if (!nb.hasPdf) return;
+    stopBaked.current = false;
+    setBakedBusy(true);
+    setNote("");
+    try {
+      const uri = await store.pdfUri(nb.id);
+      const res = await scanBaked(nb, uri, (d, n) => alive.current && setProg({ label: `쪽 그림에서 형광펜 색을 찾는 중… ${d}/${n}쪽`, ratio: n ? d / n : 1 }), () => stopBaked.current || !alive.current);
+      if (!alive.current) return;
+      setProg(null);
+      const cs = bakedColors(res);
+      if (!cs.length) {
+        setNote(res.scanned < res.total ? `${res.scanned}쪽까지 찾았는데 칠해진 형광펜이 없었어요.` : "쪽 그림에서 칠해진 형광펜을 찾지 못했어요.");
+        return;
+      }
+      setBakedPick(new Set([cs[0].key]));
+      setBaked(res);
+    } catch (e) {
+      setErr(`형광펜을 찾지 못했어요: ${(e as Error).message}`);
+      setProg(null);
+    } finally {
+      setBakedBusy(false);
+    }
+  }
+
+  /** 고른 색의 형광펜 밑 글자를 읽어 요약에 더한다 */
+  async function addBaked() {
+    if (!baked || !q) return;
+    const scan = baked;
+    setBaked(null);
+    stopBaked.current = false;
+    setBakedBusy(true);
+    try {
+      const uri = await store.pdfUri(nb.id);
+      const r = await addBakedToSummary(q, nb, uri, scan, bakedPick, (d, n) => alive.current && setProg({ label: `형광펜 밑 글자를 읽는 중… ${d}/${n}쪽`, ratio: n ? d / n : 1 }), () => stopBaked.current || !alive.current);
+      if (!alive.current) return;
+      setProg(null);
+      setQ(r.summary);
+      setNote(r.added
+        ? `다른 앱에서 칠한 형광펜 ${r.added}곳을 요약에 더했어요. 쪽 그림의 색으로 찾은 것이라 정확하지 않을 수 있어요 (책에 인쇄된 색 상자가 섞이거나, 칠한 곳 끝 글자가 조금 잘리거나 더 붙을 수 있어요).`
+        : "형광펜은 찾았지만 그 밑의 글자를 읽지 못했어요 (글자 층이 없는 그림 PDF일 수 있어요).");
+    } catch (e) {
+      setErr(`형광펜 글자를 읽지 못했어요: ${(e as Error).message}`);
+      setProg(null);
+    } finally {
+      setBakedBusy(false);
+    }
+  }
+
   async function writeOverview() {
     if (!q) return;
     const pr = overviewPrompt(q);
@@ -147,6 +204,7 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary, onOpenNot
             disabled={!q}
             onMessage={(m, bad) => (bad ? setErr(m) : setNote(m))}
           />
+          {nb.hasPdf && <Button small label="다른 앱에서 칠한 형광펜 찾기" onPress={findBakedMarks} disabled={!q || !!prog || bakedBusy} />}
           <Button small label="서버로 자세히" onPress={serverSummary} />
           {/* 손글씨를 다 읽은 뒤에 (읽는 중에 만들면 메모가 빠진다) */}
           <Button small kind="primary" label="나만의 노트" onPress={() => setMaking(true)} disabled={!q || !!prog} />
@@ -154,10 +212,55 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary, onOpenNot
       </View>
       {prog && (
         <View style={[s.strip, pad, { borderColor: t.lineSoft }]}>
-          <Text style={[type.caption, { color: t.sub }]}>{prog.label}</Text>
+          <View style={s.stripHead}>
+            <Text style={[type.caption, { color: t.sub, flex: 1 }]}>{prog.label}</Text>
+            {bakedBusy && <Button small kind="link" label="멈추기" onPress={() => (stopBaked.current = true)} />}
+          </View>
           <Bar ratio={prog.ratio} />
         </View>
       )}
+      {/* 찾은 형광펜 색 고르기 */}
+      <Modal visible={!!baked} transparent animationType="fade" onRequestClose={() => setBaked(null)}>
+        <View style={[s.back, { backgroundColor: t.dark ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.32)" }]}>
+          <View style={[floating(t), s.sheet]}>
+            <Text style={[type.title, { color: t.ink }]}>찾은 형광펜 색</Text>
+            <Text style={[type.caption, { color: t.sub }]}>
+              {baked && baked.scanned < baked.total ? `${baked.scanned}/${baked.total}쪽까지 찾았어요. ` : ""}요약에 넣을 색을 고르세요. 다른 앱에서 칠한 형광펜은 쪽 그림의 색으로 찾아서 정확하지 않을 수 있어요 — 책에 인쇄된 색 상자·색 글씨가 섞이거나, 칠한 곳 끝 글자가 조금 잘릴 수 있어요.
+            </Text>
+            <ScrollView style={{ maxHeight: 320 }}>
+              {baked && bakedColors(baked).map((c) => {
+                const on = bakedPick.has(c.key);
+                return (
+                  <Pressable
+                    key={c.key}
+                    onPress={() => setBakedPick((cur) => {
+                      const n = new Set(cur);
+                      if (n.has(c.key)) n.delete(c.key);
+                      else n.add(c.key);
+                      return n;
+                    })}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: on }}
+                    accessibilityLabel={`${COLOR_INFO[c.key].name} 형광펜 ${c.count}곳`}
+                    style={({ pressed }) => [s.colorRow, { borderColor: t.lineSoft, backgroundColor: pressed ? t.sunken : "transparent" }]}
+                  >
+                    <View style={[s.check, { borderColor: on ? t.accent : t.line, backgroundColor: on ? t.accent : "transparent" }]}>
+                      {on && <Text style={{ color: t.accentInk, fontWeight: "700", fontSize: 13 }}>✓</Text>}
+                    </View>
+                    <View style={[s.swatch, { backgroundColor: COLOR_INFO[c.key].hex }]} />
+                    <Text style={[type.body, { color: t.ink, flex: 1 }]}>{COLOR_INFO[c.key].name}</Text>
+                    <Text style={[type.caption, { color: t.muted }]}>{`${c.count}곳 · ${c.pages}쪽`}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <View style={s.sheetButtons}>
+              <Button label="취소" onPress={() => setBaked(null)} />
+              <Button kind="primary" label="이 색으로 요약에 넣기" onPress={addBaked} disabled={!bakedPick.size} />
+            </View>
+          </View>
+        </View>
+      </Modal>
       {!!note && <Hint style={[s.msg, pad]}>{note}</Hint>}
       {!!err && <Hint color={t.bad} style={[s.msg, pad]}>{err}</Hint>}
       {q ? <ResultView html={shown} /> : !err && <ActivityIndicator color={t.muted} style={{ marginTop: 48 }} />}
@@ -174,5 +277,12 @@ const s = StyleSheet.create({
   title: { flexShrink: 1, letterSpacing: -0.2 },
   actions: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end", gap: 8, flexShrink: 1, maxWidth: "100%" },
   strip: { paddingVertical: 12, borderBottomWidth: 1 },
+  stripHead: { flexDirection: "row", alignItems: "center", gap: 8 },
+  back: { flex: 1, alignItems: "center", justifyContent: "center", padding: 16 },
+  sheet: { width: "100%", maxWidth: 460, borderRadius: radius.lg, padding: 20, gap: 10 },
+  sheetButtons: { flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 6 },
+  colorRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12, paddingHorizontal: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderRadius: 8 },
+  check: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, alignItems: "center", justifyContent: "center" },
+  swatch: { width: 28, height: 14, borderRadius: 4 },
   msg: { paddingTop: 12 },
 });

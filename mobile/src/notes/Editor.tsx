@@ -1775,12 +1775,18 @@ function GoToPageDialog({ open, count, current, onClose, onGo }: { open: boolean
   const t = useTheme();
   const [v, setV] = useState("");
   const [err, setErr] = useState("");
+  // 처음엔 지금 쪽 번호가 들어 있다 (사용자 요청). −·＋로 한 쪽씩, 번호를 누르면 자판으로 바꾼다
   useEffect(() => {
     if (open) {
-      setV("");
+      setV(String(current + 1));
       setErr("");
     }
-  }, [open]);
+  }, [open, current]);
+  const step = (d: number) => {
+    const n = parsePageInput(v, count);
+    setV(String(Math.max(1, Math.min(count, (n === null ? current : n) + 1 + d))));
+    setErr("");
+  };
   const go = () => {
     const i = parsePageInput(v, count);
     if (i === null) {
@@ -1791,22 +1797,30 @@ function GoToPageDialog({ open, count, current, onClose, onGo }: { open: boolean
   };
   return (
     <Dialog open={open} title="쪽으로 가기" maxWidth={360} onClose={onClose} top>
-      <Text style={[type.caption, { color: t.muted }]}>{`지금 ${current + 1}쪽 · 전체 ${count}쪽`}</Text>
-      <TextInput
-        value={v}
-        onChangeText={(x) => {
-          setV(x);
-          setErr("");
-        }}
-        autoFocus
-        keyboardType="number-pad"
-        returnKeyType="go"
-        onSubmitEditing={go}
-        accessibilityLabel="갈 쪽 번호"
-        placeholder={`1 ~ ${count}`}
-        placeholderTextColor={t.muted}
-        style={[ui.input, { borderColor: err ? t.bad : t.line, color: t.ink, backgroundColor: t.card, fontSize: 20, textAlign: "center" }]}
-      />
+      <Text style={[type.caption, { color: t.muted }]}>{`지금 ${current + 1}쪽 · 전체 ${count}쪽 · 번호를 누르면 바로 바꿀 수 있어요`}</Text>
+      <View style={sx.stepRow}>
+        <Pressable onPress={() => step(-1)} accessibilityRole="button" accessibilityLabel="한 쪽 앞으로" style={({ pressed }) => [sx.stepBtn, { borderColor: t.line, backgroundColor: pressed ? t.sunken : t.card }]}>
+          <Text style={[sx.stepText, { color: t.ink }]}>−</Text>
+        </Pressable>
+        <TextInput
+          value={v}
+          onChangeText={(x) => {
+            setV(x);
+            setErr("");
+          }}
+          selectTextOnFocus
+          keyboardType="number-pad"
+          returnKeyType="go"
+          onSubmitEditing={go}
+          accessibilityLabel="갈 쪽 번호"
+          placeholder={`1 ~ ${count}`}
+          placeholderTextColor={t.muted}
+          style={[ui.input, { flex: 1, borderColor: err ? t.bad : t.line, color: t.ink, backgroundColor: t.card, fontSize: 22, fontWeight: "700", textAlign: "center" }]}
+        />
+        <Pressable onPress={() => step(1)} accessibilityRole="button" accessibilityLabel="한 쪽 뒤로" style={({ pressed }) => [sx.stepBtn, { borderColor: t.line, backgroundColor: pressed ? t.sunken : t.card }]}>
+          <Text style={[sx.stepText, { color: t.ink }]}>＋</Text>
+        </Pressable>
+      </View>
       {!!err && <Text style={[type.caption, { color: t.bad }]}>{err}</Text>}
       <View style={sx.actions}>
         <View style={{ flex: 1 }} />
@@ -2022,6 +2036,9 @@ const sx = StyleSheet.create({
   stickerWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   stamp: { borderWidth: 2, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 8 },
   stickerCell: { width: 64, height: 64, borderRadius: radius.md, alignItems: "center", justifyContent: "center" },
+  stepRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+  stepBtn: { width: 52, height: 52, borderRadius: 26, borderWidth: 1, alignItems: "center", justifyContent: "center" },
+  stepText: { fontSize: 24, fontWeight: "600", lineHeight: 28 },
   tbRow: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 2, borderBottomWidth: StyleSheet.hairlineWidth },
   // 집어 든 줄: 위로 떠 보이게 (테두리·그림자)
   tbRowHeld: { zIndex: 10, elevation: 6, borderWidth: 1.5, borderRadius: 10, shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },

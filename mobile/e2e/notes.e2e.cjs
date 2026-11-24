@@ -744,6 +744,14 @@ print(json.dumps([len(ys), (max(ys) - min(ys)) / k if ys else 0]))`, liveShot], 
       await page.getByLabel(/^쪽 이동 막대/).waitFor({ timeout: 3000 });
       const pb2 = await spotPill().boundingBox();
       await page.mouse.click(pb2.x + pb2.width / 2, pb2.y + pb2.height / 2);
+      // 처음엔 지금 쪽 번호가 들어 있고, ＋·− 로 한 쪽씩
+      if ((await page.getByLabel("갈 쪽 번호").inputValue()) !== String(all - 1)) fail("쪽으로 가기 창에 지금 쪽 번호가 미리 들어 있지 않음: " + (await page.getByLabel("갈 쪽 번호").inputValue()));
+      await page.getByLabel("한 쪽 뒤로").click();
+      if ((await page.getByLabel("갈 쪽 번호").inputValue()) !== String(all)) fail("＋를 눌렀는데 한 쪽 늘지 않음");
+      await page.getByLabel("한 쪽 뒤로").click();
+      if ((await page.getByLabel("갈 쪽 번호").inputValue()) !== String(all)) fail("마지막 쪽에서 ＋를 눌렀는데 넘어감");
+      await page.getByLabel("한 쪽 앞으로").click();
+      if ((await page.getByLabel("갈 쪽 번호").inputValue()) !== String(all - 1)) fail("−를 눌렀는데 한 쪽 줄지 않음");
       await page.getByLabel("갈 쪽 번호").fill("하나");
       await page.getByText("이동", { exact: true }).click();
       await page.getByText(/숫자로 넣어 주세요/).waitFor({ timeout: 3000 });
@@ -1068,6 +1076,42 @@ d.save(sys.argv[1])`, exam]);
       if (!(ratio > 1.5 && ratio < 6)) fail(`잘라 낸 문제 그림 모양이 이상함 (가로/세로 ${ratio.toFixed(2)})`);
       await page.screenshot({ path: path.join(TMP, "wrong-note.png") });
       console.log(`✓ 오답 노트: 두 단 시험지 2번의 빨간 사선 → 그 문제만 잘라 '오답 노트' 서식 쪽에 (2번 · 1쪽 · exam)`);
+    }
+
+    // ── 다른 앱에서 칠한 형광펜: 쪽 그림에 굳은 노랑을 찾아, 고른 색만 요약에 (파랑 인쇄 상자는 따로 나와 고르지 않으면 안 들어감) ──
+    {
+      const other = path.join(TMP, "other-app.pdf");
+      execFileSync("python3", ["-c", `
+import sys, pymupdf
+d = pymupdf.open(); p = d.new_page(width=595, height=842)
+p.draw_rect(pymupdf.Rect(70, 118, 330, 135), color=None, fill=(1, 0.93, 0.35))
+p.draw_rect(pymupdf.Rect(70, 218, 300, 235), color=None, fill=(0.6, 0.85, 1))
+lines = ["Chapter one notes", "The kernel schedules every process", "and memory pages are swapped out", "Unrelated plain line here", "Printed blue box text sample"]
+for k, t in enumerate(lines): p.insert_text((72, 80 + k * 50), t, fontsize=13)
+d.save(sys.argv[1])`, other]);
+      await page.getByLabel("노트 목록으로").click();
+      const [fco] = await Promise.all([page.waitForEvent("filechooser"), page.getByText("PDF 가져오기").click()]);
+      await fco.setFiles(other);
+      await canvas.waitFor({ timeout: 20000 });
+      await page.waitForTimeout(1200);
+      await page.getByLabel("요약 만들기").click();
+      await page.getByText("다른 앱에서 칠한 형광펜 찾기", { exact: true }).click({ timeout: 20000 });
+      await page.getByText("찾은 형광펜 색").waitFor({ timeout: 30000 });
+      if (!(await page.getByLabel(/^노랑 형광펜 1곳/).count())) fail("쪽 그림의 노랑 형광펜을 찾지 못함");
+      if (!(await page.getByText(/정확하지 않을 수 있어요/).count())) fail("다른 앱 형광펜이 정확하지 않을 수 있다는 안내가 없음");
+      await page.getByText("이 색으로 요약에 넣기", { exact: true }).click();
+      await page.getByText(/형광펜 1곳을 요약에 더했어요/).waitFor({ timeout: 20000 });
+      let body = "";
+      for (const fr of page.frames()) {
+        try {
+          body += await fr.content();
+        } catch {}
+      }
+      if (!body.includes("kernel schedules every process")) fail("칠해진 노랑 밑 글자가 요약에 없음");
+      if (body.includes("Printed blue box")) fail("고르지 않은 색(파랑)이 요약에 들어감");
+      console.log("✓ 다른 앱에서 칠한 형광펜: 쪽 그림의 노랑을 찾아 고른 색만 요약에 (정확도 안내)");
+      await page.getByText("‹ 노트로", { exact: true }).click();
+      await canvas.waitFor({ timeout: 20000 });
     }
 
     if (errors.length) fail("페이지 오류: " + errors.join(" | "));

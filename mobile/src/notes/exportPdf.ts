@@ -125,7 +125,7 @@ function drawStamp(page: PDFPage, s: Stroke, crop: Box, rot: number, font: PDFFo
 }
 
 /** 빈 쪽의 속지 무늬·서식 (화면과 같은 목록을 그린다). 칸 이름 글은 글꼴이 있을 때만 */
-function drawPaper(page: PDFPage, paper: Paper | undefined, w: number, h: number, font: PDFFont | null) {
+export function drawPaper(page: PDFPage, paper: Paper | undefined, w: number, h: number, font: PDFFont | null) {
   for (const m of paperMarks(paper, w, h)) {
     if (m.k === "line") page.drawLine({ start: { x: m.x1, y: h - m.y1 }, end: { x: m.x2, y: h - m.y2 }, thickness: m.w, color: hex(m.color) });
     else if (m.k === "dot") page.drawCircle({ x: m.x, y: h - m.y, size: m.r, color: hex(m.color) });
@@ -165,19 +165,7 @@ export async function buildPdf(nb: Notebook, ink: Ink, source: Uint8Array | null
   const src = source ? await PDFDocument.load(source, { ignoreEncryption: true, updateMetadata: false }) : null;
   const wanted = nb.pages.map((p) => (p.pdf !== undefined && src && p.pdf < src.getPageCount() ? p.pdf : -1));
   const copied = src ? await out.copyPages(src, wanted.filter((i) => i >= 0)) : [];
-  // 사진은 같은 그림이면 한 번만 넣는다
-  const embedded = new Map<string, PDFImage | null>();
-  for (const ss of Object.values(ink)) {
-    for (const s of ss) {
-      if (s.tool !== "image" || !s.img || embedded.has(s.img)) continue;
-      try {
-        const bytes = dataUriBytes(s.img);
-        embedded.set(s.img, s.img.startsWith("data:image/png") ? await out.embedPng(bytes) : await out.embedJpg(bytes));
-      } catch {
-        embedded.set(s.img, null); // 못 읽는 그림은 빼고 만든다
-      }
-    }
-  }
+  const embedded = await embedImages(out, ink);
   let k = 0;
   nb.pages.forEach((p, i) => {
     let page: PDFPage;
@@ -188,17 +176,37 @@ export async function buildPdf(nb: Notebook, ink: Ink, source: Uint8Array | null
       page = out.addPage([p.w, p.h]);
       drawPaper(page, p.paper, p.w, p.h, font);
     }
-    const crop = page.getCropBox();
-    const rot = page.getRotation().angle;
-    const strokes = ink[p.id] ?? [];
-    // 사진이 맨 밑, 그다음 형광펜(글씨 밑에), 글씨, 글상자·도장
-    for (const s of strokes) {
-      const img = s.tool === "image" && s.img ? embedded.get(s.img) : null;
-      if (img) drawImageBox(page, img, s, crop, rot);
-    }
-    for (const s of strokes) if (s.tool === "highlighter") drawStroke(page, s, crop, rot);
-    for (const s of strokes) if (s.tool === "pen") drawStroke(page, s, crop, rot);
-    if (font) for (const s of strokes) if (s.tool === "text" && s.text) (s.stamp ? drawStamp : drawText)(page, s, crop, rot, font);
+    drawInkOnPage(page, ink[p.id] ?? [], embedded, font);
   });
   return out.save();
+}
+
+/** 노트의 사진·그림 스티커를 PDF에 넣는다 (같은 그림은 한 번만). 못 읽는 그림은 null (빼고 만든다) */
+export async function embedImages(doc: PDFDocument, ink: Ink): Promise<Map<string, PDFImage | null>> {
+  const embedded = new Map<string, PDFImage | null>();
+  for (const ss of Object.values(ink)) {
+    for (const s of ss) {
+      if (s.tool !== "image" || !s.img || embedded.has(s.img)) continue;
+      try {
+        const bytes = dataUriBytes(s.img);
+        embedded.set(s.img, s.img.startsWith("data:image/png") ? await doc.embedPng(bytes) : await doc.embedJpg(bytes));
+      } catch {
+        embedded.set(s.img, null);
+      }
+    }
+  }
+  return embedded;
+}
+
+/** 쪽 하나에 필기를 그린다: 사진이 맨 밑, 그다음 형광펜(글씨 밑에), 글씨, 글상자·도장. 쪽의 자르기 상자·회전을 따른다 */
+export function drawInkOnPage(page: PDFPage, strokes: Stroke[], embedded: Map<string, PDFImage | null>, font: PDFFont | null) {
+  const crop = page.getCropBox();
+  const rot = page.getRotation().angle;
+  for (const s of strokes) {
+    const img = s.tool === "image" && s.img ? embedded.get(s.img) : null;
+    if (img) drawImageBox(page, img, s, crop, rot);
+  }
+  for (const s of strokes) if (s.tool === "highlighter") drawStroke(page, s, crop, rot);
+  for (const s of strokes) if (s.tool === "pen") drawStroke(page, s, crop, rot);
+  if (font) for (const s of strokes) if (s.tool === "text" && s.text) (s.stamp ? drawStamp : drawText)(page, s, crop, rot, font);
 }

@@ -20,6 +20,7 @@ import { Editor } from "./src/notes/Editor";
 import { buildPdf, needsKoreanFont } from "./src/notes/exportPdf";
 import { koreanFont } from "./src/notes/fontBytes";
 import { bigPdfMessage } from "./src/notes/net-errors";
+import { shareNotePdf } from "./src/notes/exportNote";
 import { deviceFs } from "./src/notes/fs";
 import { importPdf } from "./src/notes/importPdf";
 import { Library } from "./src/notes/Library";
@@ -202,10 +203,20 @@ function Root() {
           setScreen({ name: "library" });
         }}
         onExport={async (nb, ink) => {
-          const big = nb.hasPdf ? bigPdfMessage(await store.pdfSize(nb.id)) : null;
-          if (big) throw new Error(big);
+          const font = needsKoreanFont(nb, ink) ? await koreanFont() : null;
+          if (nb.hasPdf) {
+            // 원본 PDF는 그대로 복사하고 필기만 끝에 덧붙인다 (크기 제한 없음). 이상한 PDF라 못 하면 예전처럼 통째로 다시 만든다
+            try {
+              await shareNotePdf(await store.pdfUri(nb.id), nb, ink, font);
+              return;
+            } catch (e) {
+              console.warn("덧붙여 내보내기 실패, 통째로 다시 만든다:", (e as Error).message);
+              const big = bigPdfMessage(await store.pdfSize(nb.id));
+              if (big) throw new Error(big);
+            }
+          }
           const src = nb.hasPdf ? await store.pdfBytes(nb.id) : null;
-          await sharePdf(await buildPdf(nb, ink, src, needsKoreanFont(nb, ink) ? await koreanFont() : null), nb.title);
+          await sharePdf(await buildPdf(nb, ink, src, font), nb.title);
         }}
         onSummarize={(nb, ink, page) => setScreen({ name: "summary", note: { nb, ink, pdf: pdfOf(nb) }, backTo: { name: "editor", id, page } })}
         onQuick={(nb, ink, page) => setScreen({ name: "quick", nb, ink, backTo: { name: "editor", id, page } })}

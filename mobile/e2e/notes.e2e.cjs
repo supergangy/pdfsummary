@@ -747,6 +747,20 @@ print(json.dumps([len(ys), (max(ys) - min(ys)) / k if ys else 0]))`, liveShot], 
       console.log(`✓ 쪽 이동 막대: 오른쪽 끝 → ${all}쪽, 왼쪽으로 끌기 → 1쪽 / 닫았다 열면 마지막에 보던 ${all}쪽에서 / 쪽 번호 넣어 가기`);
     }
 
+    // ── PDF 노트 내보내기: 원본 PDF를 그대로 두고 필기만 끝에 덧붙인다 (큰 PDF도 되게) ──
+    {
+      await page.getByLabel("더 보기").click();
+      const [dl] = await Promise.all([page.waitForEvent("download"), page.getByText("PDF로 내보내기 (필기 포함)").click()]);
+      const outPdf = path.join(TMP, "book-export.pdf");
+      await dl.saveAs(outPdf);
+      const orig = fs.readFileSync(book), got = fs.readFileSync(outPdf);
+      if (!(got.length > orig.length && got.subarray(0, orig.length).equals(orig))) fail("PDF 노트를 내보냈는데 원본 뒤에 덧붙인 파일이 아님 (통째로 다시 만들어짐)");
+      const chk = JSON.parse(execFileSync("python3", ["-c", "import sys, json, pymupdf; d = pymupdf.open(sys.argv[1]); print(json.dumps([len(d), d.is_repaired, d[0].get_text()]))", outPdf], { encoding: "utf8" }));
+      const pages = Number((await pageNo()).split(" / ")[1]);
+      if (chk[0] !== pages || chk[1] || !chk[2].includes("경쟁적 저해제")) fail(`덧붙여 내보낸 PDF가 이상함: 쪽 ${chk[0]}/${pages}, 고침 ${chk[1]}`);
+      console.log(`✓ PDF 노트 내보내기: 원본 ${orig.length}바이트 그대로 + 필기 ${got.length - orig.length}바이트 덧붙임 (쪽 ${chk[0]}개, 끼운 빈 쪽 포함)`);
+    }
+
     await page.getByLabel("요약 만들기").click();
     // 먼저 기기에서 바로 만든 요약 (서버 없이): PDF 글자층에서 칠한 글자를 읽는다
     await page.getByText("서버로 자세히", { exact: true }).waitFor({ timeout: 20000 });

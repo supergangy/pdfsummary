@@ -55,6 +55,9 @@ export type Notebook = {
   hasPdf: boolean; // 원본 PDF(source.pdf)가 있는지
   pages: Page[];
   folder?: string;
+  fav?: boolean; // 즐겨찾기
+  trashed?: number; // 휴지통에 넣은 때 (ms). 있으면 목록에서 빠지고 휴지통에만 보인다
+  pos?: number; // 목록에서 끌어 옮긴 자리 (없으면 고친 시각). 큰 값이 앞
 };
 
 export type Ink = Record<string, Stroke[]>; // 쪽 id → 획들
@@ -147,6 +150,9 @@ export function parseNotebook(raw: unknown): Notebook | null {
     hasPdf: !!o.hasPdf,
     pages,
     ...(typeof o.folder === "string" && o.folder ? { folder: o.folder } : {}),
+    ...(o.fav === true ? { fav: true } : {}),
+    ...(typeof o.trashed === "number" && o.trashed > 0 ? { trashed: o.trashed } : {}),
+    ...(typeof o.pos === "number" && Number.isFinite(o.pos) ? { pos: o.pos } : {}),
   };
 }
 

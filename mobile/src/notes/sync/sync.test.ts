@@ -377,3 +377,23 @@ test("사진처럼 큰 획은 작업을 나눠 보내고 다른 기기에 그대
   assert.deepEqual((got[nb.pages[0].id] ?? []).map((s) => s.id).sort(), ["i1", "i2", "i3", "i4"]);
   assert.equal(got[nb.pages[0].id][0].img?.length, img("x").img!.length);
 });
+
+test("즐겨찾기·휴지통·끌어 옮긴 자리도 다른 기기로", async () => {
+  const server = new FakeServer();
+  const A = await device(server), B = await device(server);
+  const nb = blankNotebook("정보", "plain", 1);
+  await A.store.create(nb);
+  await settle(A, B);
+  await A.store.patchMeta(nb.id, { fav: true, pos: 12345, trashed: 999 });
+  await settle(A, B);
+  const got = await B.store.load(nb.id);
+  assert.equal(got?.fav, true);
+  assert.equal(got?.pos, 12345);
+  assert.equal(got?.trashed, 999);
+  await B.store.patchMeta(nb.id, { fav: undefined, trashed: undefined });
+  await settle(B, A);
+  const back = await A.store.load(nb.id);
+  assert.equal(back?.fav, undefined);
+  assert.equal(back?.trashed, undefined);
+  assert.equal(back?.pos, 12345);
+});

@@ -2,8 +2,9 @@
 // 폴더는 디렉터리처럼: 넓은 화면은 왼쪽에 폴더 나무(폴더 안의 폴더, 접고 펴기), 위에 경로(폴더 › 공부 › NCS),
 // 가운데에 그 폴더의 아래 폴더와 노트를 네모 칸 바둑판으로. 폴더 계산은 folders.ts
 import * as DocumentPicker from "expo-document-picker";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, Alert, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { ActivityIndicator, Alert, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View, type HostInstance } from "react-native";
+import { GestureDetector, ScrollView as GScroll, usePanGesture } from "react-native-gesture-handler";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { available as pdfAvailable } from "../../modules/pdf-pages";
@@ -14,7 +15,7 @@ import { importPdf } from "./importPdf";
 import { PACK_EXT, packNotebook, unpackNotebook } from "./pack";
 import { readPicked } from "./readPicked";
 import { shareFile } from "./shareFile";
-import { allFolders, ALL_NOTES, childrenOf, cleanName, crumbs, isWithin, joinPath, nameOf, parentOf, renamePath, treeRows } from "./folders";
+import { allFolders, ALL_NOTES, childrenOf, cleanName, crumbs, FAVORITES, isWithin, joinPath, nameOf, parentOf, posBefore, renamePath, sortNotes, TRASH, TRASH_DAYS, trashExpired, treeRows } from "./folders";
 import { blankNotebook, type Notebook, type Paper } from "./model";
 import { pageImage } from "./pageImage";
 import type { SyncStatus } from "./sync/engine";
@@ -63,13 +64,26 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
   const [folderMenu, setFolderMenu] = useState<string | null>(null); // ⋯ 메뉴를 연 폴더
   const [moving, setMoving] = useState<Notebook | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set()); // 왼쪽 나무에서 펼친 폴더
+  const [notice, setNotice] = useState(""); // 잠깐 뜨는 알림
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const say = (msg: string) => {
+    setNotice(msg);
+    if (noticeTimer.current) clearTimeout(noticeTimer.current);
+    noticeTimer.current = setTimeout(() => setNotice(""), 2600);
+  };
   const folderRef = useRef(folder);
   folderRef.current = folder;
   const reloadNo = useRef(0);
 
   const reload = useCallback(() => {
     const no = ++reloadNo.current;
-    store.list().then(setList).catch((e) => setErr((e as Error).message));
+    store.list().then(async (l) => {
+      // 휴지통에 30일 넘게 있던 노트는 이제 지운다
+      const now = Date.now();
+      const old = l.filter((nb) => trashExpired(nb, now));
+      for (const nb of old) await store.remove(nb.id);
+      setList(sortNotes(l.filter((nb) => !old.includes(nb))));
+    }).catch((e) => setErr((e as Error).message));
     store.folders().then((fs) => {
       setFolders(fs);
       // 보던 폴더가 그사이 지워졌으면(다른 기기에서 지운 경우 등) '전체'로.
@@ -97,8 +111,10 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
     };
   }, [store, reload]);
 
-  /** 지금 보는 진짜 폴더 (맨 위·모든 노트면 null) */
-  const here = folder && folder !== ALL_NOTES ? folder : null;
+  /** 모든 노트·즐겨찾기·휴지통 보기 */
+  const special = folder === ALL_NOTES || folder === FAVORITES || folder === TRASH;
+  /** 지금 보는 진짜 폴더 (맨 위·모든 노트·즐겨찾기·휴지통이면 null) */
+  const here = folder && !special ? folder : null;
   const tree = useMemo(() => allFolders(folders, (list ?? []).map((nb) => nb.folder)), [folders, list]);
   // 지금 폴더의 윗 폴더들은 나무에서 펼쳐 둔다
   useEffect(() => {
@@ -172,20 +188,56 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
     onOpen(nb.id);
   }
 
-  function remove(nb: Notebook) {
-    const doIt = async () => {
+  /** 노트 지우기 = 휴지통으로 (30일 동안 되살릴 수 있다) */
+  async function toTrash(nb: Notebook) {
+    setActions(null);
+    await store.patchMeta(nb.id, { trashed: Date.now() });
+    say(`'${nb.title}'을(를) 휴지통으로 옮겼어요.`);
+    reload();
+  }
+
+  async function restore(nb: Notebook) {
+    setActions(null);
+    await store.patchMeta(nb.id, { trashed: undefined });
+    say(`'${nb.title}'을(를) 되살렸어요.`);
+    reload();
+  }
+
+  async function toggleFav(nb: Notebook) {
+    setActions(null);
+    await store.patchMeta(nb.id, { fav: !nb.fav });
+    reload();
+  }
+
+  /** 정말 지울지 물어본다 (웹은 브라우저 확인 창) */
+  function confirmThen(title: string, msg: string, doIt: () => Promise<void>) {
+    if (Platform.OS === "web") {
+      if (globalThis.confirm?.(msg) ?? true) void doIt();
+    } else {
+      Alert.alert(title, msg, [{ text: "취소", style: "cancel" }, { text: "지우기", style: "destructive", onPress: () => void doIt() }]);
+    }
+  }
+
+  function purge(nb: Notebook) {
+    confirmThen("영원히 지우기", `'${nb.title}' 노트를 영원히 지울까요? 필기도 함께 지워지고 되돌릴 수 없어요.`, async () => {
       setActions(null);
       await store.remove(nb.id);
       reload();
-    };
-    if (Platform.OS === "web") {
-      if (globalThis.confirm?.(`'${nb.title}' 노트를 지울까요? 되돌릴 수 없어요.`) ?? true) void doIt();
-    } else {
-      Alert.alert(`'${nb.title}' 노트를 지울까요?`, "필기도 함께 지워지고 되돌릴 수 없어요.", [
-        { text: "취소", style: "cancel" },
-        { text: "지우기", style: "destructive", onPress: () => void doIt() },
-      ]);
-    }
+    });
+  }
+
+  function emptyTrash() {
+    const gone = (list ?? []).filter((nb) => nb.trashed);
+    if (!gone.length) return;
+    confirmThen("휴지통 비우기", `휴지통의 노트 ${gone.length}개를 영원히 지울까요? 되돌릴 수 없어요.`, async () => {
+      setBusy("휴지통을 비우는 중…");
+      try {
+        for (const nb of gone) await store.remove(nb.id);
+        reload();
+      } finally {
+        setBusy("");
+      }
+    });
   }
 
   async function addFolder(parent: string | null, name: string) {
@@ -210,13 +262,18 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
     setRenaming(null);
     const n = cleanName(name);
     if (!n) return;
-    const to = joinPath(parentOf(from), n);
+    await relocateFolder(from, joinPath(parentOf(from), n));
+  }
+
+  /** 폴더를 to 경로로 (이름 바꾸기·다른 폴더 안으로). 아래 폴더와 노트도 함께 */
+  async function relocateFolder(from: string, to: string) {
     if (to === from) return;
+    if (isWithin(to, from)) return say("폴더를 자기 안으로는 옮길 수 없어요.");
     if (tree.includes(to)) {
-      setErr(`'${n}' 폴더가 이미 있어요.`);
+      say(`'${nameOf(to)}' 폴더가 이미 있어요.`);
       return;
     }
-    setBusy("폴더 이름을 바꾸는 중…");
+    setBusy("폴더를 옮기는 중…");
     try {
       for (const nb of list ?? []) if (nb.folder && isWithin(nb.folder, from)) await store.moveTo(nb.id, renamePath(nb.folder, from, to));
       await store.saveFolders(tree.map((f) => renamePath(f, from, to)));
@@ -250,11 +307,118 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
     }
   }
 
-  const all = folder === ALL_NOTES;
-  const shown = list?.filter((nb) => all || (nb.folder ?? null) === here) ?? null;
-  const subFolders = all ? [] : childrenOf(tree, here);
+  const all = folder === ALL_NOTES, favs = folder === FAVORITES, trash = folder === TRASH;
+  const live = (list ?? []).filter((nb) => !nb.trashed);
+  const trashed = (list ?? []).filter((nb) => nb.trashed);
+  const shown = list === null ? null : trash ? trashed : favs ? live.filter((nb) => nb.fav) : all ? live : live.filter((nb) => (nb.folder ?? null) === here);
+  const subFolders = special ? [] : childrenOf(tree, here);
   const counts = new Map<string, number>(); // 폴더 → 바로 안의 노트 수
-  for (const nb of list ?? []) if (nb.folder) counts.set(nb.folder, (counts.get(nb.folder) ?? 0) + 1);
+  for (const nb of live) if (nb.folder) counts.set(nb.folder, (counts.get(nb.folder) ?? 0) + 1);
+
+  // ── 꾹 눌러 끌기: 노트·폴더를 폴더(칸·왼쪽 나무)에 넣기, 노트 앞에 놓아 순서 바꾸기, 즐겨찾기·휴지통에 놓기 ──
+  const rootRef = useRef<HostInstance>(null);
+  const dropRefs = useRef(new Map<string, RefObject<HostInstance | null>>());
+  const dragGeo = useRef<{ root: number[]; rects: { key: string; r: number[] }[] } | null>(null);
+  const [drag, setDrag] = useState<{ item: DragItem; x: number; y: number; over: string | null } | null>(null);
+  const dragRef = useRef(drag);
+  const lastDragEnd = useRef(0);
+  dragRef.current = drag;
+  const ctxRef = useRef({ shown, trash });
+  ctxRef.current = { shown, trash };
+  /** 이 끌기를 이 자리에 놓을 수 있나 */
+  const canDrop = (item: DragItem, key: string): boolean => {
+    const [kind, ...rest] = key.split(":");
+    const val = rest.join(":");
+    if (item.kind === "note") {
+      const nb = item.nb;
+      if (kind === "folder") return val !== (nb.folder ?? "");
+      if (kind === "root") return !!nb.folder;
+      if (kind === "trash") return !nb.trashed;
+      if (kind === "fav") return !nb.fav;
+      if (kind === "note") return val !== nb.id && !ctxRef.current.trash;
+      return false;
+    }
+    if (kind === "folder") return !isWithin(val, item.path) && val !== parentOf(item.path);
+    if (kind === "root") return parentOf(item.path) !== null;
+    return kind === "trash";
+  };
+  const dropApi = useMemo(() => ({
+    register: (key: string, ref: RefObject<HostInstance | null>) => {
+      dropRefs.current.set(key, ref);
+      return () => {
+        if (dropRefs.current.get(key) === ref) dropRefs.current.delete(key);
+      };
+    },
+    begin: (item: DragItem, x: number, y: number) => {
+      setDrag({ item, x, y, over: null });
+      dragGeo.current = null;
+      const winOf = (r: HostInstance | null) => new Promise<number[] | null>((res) => (r ? r.measureInWindow((a, b, c, d) => res([a, b, c, d])) : res(null)));
+      void (async () => {
+        const root = (await winOf(rootRef.current)) ?? [0, 0, 0, 0];
+        const rects: { key: string; r: number[] }[] = [];
+        for (const [key, ref] of dropRefs.current) {
+          const r = await winOf(ref.current);
+          if (r && r[2] > 0) rects.push({ key, r });
+        }
+        dragGeo.current = { root, rects };
+      })();
+    },
+    move: (x: number, y: number) => {
+      const d = dragRef.current;
+      if (!d) return;
+      const hit = dragGeo.current?.rects.find(({ r }) => x >= r[0] && x <= r[0] + r[2] && y >= r[1] && y <= r[1] + r[3]);
+      const over = hit && canDrop(d.item, hit.key) ? hit.key : null;
+      setDrag({ ...d, x, y, over });
+    },
+    end: () => {
+      const d = dragRef.current;
+      lastDragEnd.current = Date.now();
+      setDrag(null);
+      if (d?.over) void dropOn(d.item, d.over);
+    },
+    cancel: () => {
+      if (dragRef.current) {
+        lastDragEnd.current = Date.now();
+        setDrag(null);
+      }
+    },
+    /** 방금 끌기를 끝냈나 (끌고 놓을 때 밑의 칸이 눌린 것으로 치지 않게) */
+    justDragged: () => Date.now() - lastDragEnd.current < 400,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), []);
+  const dropOnRef = useRef<(item: DragItem, key: string) => Promise<void>>(async () => {});
+  const dropOn = (item: DragItem, key: string) => dropOnRef.current(item, key);
+  dropOnRef.current = async (item, key) => {
+    const [kind, ...rest] = key.split(":");
+    const val = rest.join(":");
+    if (item.kind === "note") {
+      const nb = item.nb;
+      if (kind === "folder") {
+        await store.moveTo(nb.id, val);
+        say(`'${nameOf(val)}' 폴더로 옮겼어요.`);
+      } else if (kind === "root") {
+        await store.moveTo(nb.id, undefined);
+        say("폴더 밖으로 옮겼어요.");
+      } else if (kind === "trash") return toTrash(nb);
+      else if (kind === "fav") {
+        await store.patchMeta(nb.id, { fav: true });
+        say("즐겨찾기에 넣었어요.");
+      } else if (kind === "note") {
+        await store.patchMeta(nb.id, { pos: posBefore(ctxRef.current.shown ?? [], nb.id, val) });
+      }
+      reload();
+      return;
+    }
+    if (kind === "folder") await relocateFolder(item.path, joinPath(val, nameOf(item.path)));
+    else if (kind === "root") await relocateFolder(item.path, nameOf(item.path));
+    else if (kind === "trash") deleteFolder(item.path);
+  };
+  const ghostText = (d: NonNullable<typeof drag>) => {
+    if (!d.over) return "놓을 곳으로 끌어 주세요";
+    const [kind, ...rest] = d.over.split(":");
+    const val = rest.join(":");
+    return kind === "folder" ? `'${nameOf(val)}'에 넣기` : kind === "root" ? "폴더 밖으로" : kind === "trash" ? (d.item.kind === "note" ? "휴지통에 넣기" : "폴더 지우기") : kind === "fav" ? "즐겨찾기에 넣기" : "이 앞에 놓기";
+  };
   const toggle = (f: string) => setOpen((o) => {
     const n = new Set(o);
     if (n.has(f)) n.delete(f);
@@ -286,12 +450,13 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
   const actionStyle = wide ? undefined : s.actionHalf;
 
   const sideBar = (
-    <ScrollView style={[s.side, { width: sideW, borderColor: t.lineSoft, backgroundColor: t.sunken }]} contentContainerStyle={s.sideIn}>
-      <SideRow label="모든 노트" count={list?.length} on={all} onPress={() => setFolder(ALL_NOTES)} a11y="모든 노트" icon="all" />
+    <GScroll style={[s.side, { width: sideW, borderColor: t.lineSoft, backgroundColor: t.sunken }]} contentContainerStyle={s.sideIn}>
+      <SideRow label="모든 노트" count={live.length} on={all} onPress={() => setFolder(ALL_NOTES)} a11y="모든 노트" icon="all" />
+      <SideRow label="즐겨찾기" count={live.filter((nb) => nb.fav).length} on={favs} onPress={() => setFolder(FAVORITES)} a11y="즐겨찾기" icon="star" dropKey="fav" />
       <View style={[s.sideLine, { backgroundColor: t.lineSoft }]} />
       <View style={s.sideHead}>
         <View style={{ flex: 1 }}>
-          <SideRow label="폴더" on={folder === null} onPress={() => setFolder(null)} a11y="맨 위 폴더" icon="folder" />
+          <SideRow label="폴더" on={folder === null} onPress={() => setFolder(null)} a11y="맨 위 폴더" icon="folder" dropKey="root" />
         </View>
         <Pressable onPress={() => setNewIn(null)} accessibilityRole="button" accessibilityLabel="새 폴더 만들기" hitSlop={8} style={({ pressed }) => [s.sidePlus, pressed && { backgroundColor: t.bg }]}>
           <Text style={{ color: t.sub, fontSize: 20, lineHeight: 22 }}>＋</Text>
@@ -313,16 +478,21 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
           onLongPress={() => setFolderMenu(r.path)}
           a11y={`${nameOf(r.path)} 폴더, 노트 ${counts.get(r.path) ?? 0}개`}
           icon="folder"
+          dropKey={`folder:${r.path}`}
         />
       ))}
-    </ScrollView>
+      <View style={[s.sideLine, { backgroundColor: t.lineSoft }]} />
+      <SideRow label="휴지통" count={trashed.length} on={trash} onPress={() => setFolder(TRASH)} a11y="휴지통" icon="trash" dropKey="trash" />
+    </GScroll>
   );
 
   return (
+    <DropApi.Provider value={dropApi}>
+    <DropOver.Provider value={drag?.over ?? null}>
     <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }}>
-      <View style={s.body}>
+      <View ref={rootRef} collapsable={false} style={s.body}>
       {side && sideBar}
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={[s.page, { paddingHorizontal: pad, paddingTop: wide ? 32 : 20 }]}>
+      <GScroll style={{ flex: 1 }} contentContainerStyle={[s.page, { paddingHorizontal: pad, paddingTop: wide ? 32 : 20 }]}>
         {wide ? (
           <ScreenTitle title="필기 노트" sub={subText} right={topButtons} />
         ) : (
@@ -342,8 +512,8 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
         {/* 경로: 폴더 › 공부 › NCS (누르면 그 폴더로). 끝에 새 폴더·이 폴더 ⋯ */}
         <View style={[s.pathRow, { marginTop: wide ? 28 : 22, backgroundColor: t.sunken }]}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.crumbs} style={{ flex: 1 }}>
-            {all ? (
-              <Text style={[type.label, { color: t.ink, fontWeight: "700" }]}>모든 노트</Text>
+            {special ? (
+              <Text style={[type.label, { color: t.ink, fontWeight: "700" }]}>{all ? "모든 노트" : favs ? "즐겨찾기" : "휴지통"}</Text>
             ) : (
               <>
                 <Crumb label="폴더" on={!here} onPress={() => setFolder(null)} />
@@ -357,16 +527,24 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
             )}
           </ScrollView>
           {!side && !all && <GhostPill label="모든 노트" onPress={() => setFolder(ALL_NOTES)} />}
-          {!side && all && <GhostPill label="폴더 보기" onPress={() => setFolder(null)} />}
-          {!all && <GhostPill label="＋ 폴더" onPress={() => setNewIn(here)} />}
+          {!side && !favs && <GhostPill label="즐겨찾기" onPress={() => setFolder(FAVORITES)} />}
+          {!side && special && <GhostPill label="폴더 보기" onPress={() => setFolder(null)} />}
+          {!side && !trash && <GhostPill label="휴지통" onPress={() => setFolder(TRASH)} />}
+          {trash && trashed.length > 0 && <GhostPill label="휴지통 비우기" onPress={emptyTrash} />}
+          {!special && <GhostPill label="＋ 폴더" onPress={() => setNewIn(here)} />}
           {here && <GhostPill label="폴더 ⋯" onPress={() => setFolderMenu(here)} />}
         </View>
         {!pdfAvailable && <Hint style={{ marginTop: 12 }}>이 앱(Expo Go 등)에서는 PDF를 열 수 없어요. 개발용 빌드에서 쓸 수 있어요. 빈 노트는 쓸 수 있어요.</Hint>}
         {!!err && <Hint color={t.bad} style={{ marginTop: 12 }}>{err}</Hint>}
+        {trash && <Hint style={{ marginTop: 12 }}>휴지통의 노트는 {TRASH_DAYS}일이 지나면 저절로 지워져요. 노트를 누르면 되살리거나 영원히 지울 수 있어요.</Hint>}
 
         <View style={{ marginTop: wide ? 24 : 20 }}>
           {shown === null ? (
             <ActivityIndicator color={t.muted} style={{ marginTop: 48 }} />
+          ) : shown.length === 0 && (favs || trash) ? (
+            <Empty>
+              <Text style={[type.body, { color: t.muted, textAlign: "center" }]}>{favs ? "즐겨찾기한 노트가 없어요. 노트 칸의 ☆를 누르거나, 노트를 꾹 눌러 '즐겨찾기'로 끌어 넣어요." : "휴지통이 비어 있어요."}</Text>
+            </Empty>
           ) : shown.length === 0 && subFolders.length === 0 && here !== null ? (
             <Empty>
               <Text style={[type.body, { color: t.muted, textAlign: "center" }]}>이 폴더에 노트가 없어요. 노트의 ⋯ → '폴더로 옮기기'로 넣거나, 이 폴더를 연 채로 PDF를 가져오세요.</Text>
@@ -383,6 +561,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
               {subFolders.map((f) => (
                 <FolderCard
                   key={f}
+                  path={f}
                   name={nameOf(f)}
                   notes={counts.get(f) ?? 0}
                   folders={childrenOf(tree, f).length}
@@ -392,13 +571,36 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
                 />
               ))}
               {shown.map((nb) => (
-                <NoteCard key={nb.id} nb={nb} store={store} width={cardW} onPress={() => onOpen(nb.id)} onMore={() => setActions(nb)} />
+                <NoteCard
+                  key={nb.id}
+                  nb={nb}
+                  store={store}
+                  width={cardW}
+                  onPress={() => (nb.trashed ? setActions(nb) : onOpen(nb.id))}
+                  onMore={() => setActions(nb)}
+                  onFav={nb.trashed ? undefined : () => void toggleFav(nb)}
+                />
               ))}
             </View>
           )}
         </View>
-      </ScrollView>
+      </GScroll>
       </View>
+
+      {/* 끄는 중: 손가락을 따라가는 작은 표 + 놓으면 될 일 */}
+      {drag && (
+        <View pointerEvents="none" style={[floating(t), s.ghost2, { left: drag.x - (dragGeo.current?.root[0] ?? 0) - 80, top: drag.y - (dragGeo.current?.root[1] ?? 0) - 28, borderColor: drag.over ? t.ink : t.line }]}>
+          <Text style={[type.label, { color: t.ink }]} numberOfLines={1}>{drag.item.kind === "note" ? drag.item.nb.title : `📁 ${nameOf(drag.item.path)}`}</Text>
+          <Text style={[type.caption, { color: drag.over ? t.ink : t.muted }]} numberOfLines={1}>{ghostText(drag)}</Text>
+        </View>
+      )}
+      {!!notice && (
+        <View pointerEvents="none" style={s.noticeWrap}>
+          <View style={[s.notice, { backgroundColor: t.ink }]}>
+            <Text style={[type.body, { color: t.bg }]}>{notice}</Text>
+          </View>
+        </View>
+      )}
 
       {!!busy && (
         <View style={[s.busyWrap, { backgroundColor: backdrop(t) }]}>
@@ -464,20 +666,74 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
         <Pressable style={[s.backdrop, { backgroundColor: backdrop(t) }]} onPress={() => setActions(null)}>
           <Pressable style={[floating(t), s.menu]} onPress={() => {}}>
             <Text style={[type.heading, s.menuHead, { color: t.ink }]} numberOfLines={1}>{actions?.title}</Text>
-            <MenuItem label="열기" onPress={() => actions && onOpen(actions.id)} />
-            <MenuItem label="폴더로 옮기기" onPress={() => { setMoving(actions); setActions(null); }} />
-            <MenuItem label="다른 기기로 보내기 (노트 파일)" onPress={() => actions && sendPack(actions)} />
-            <View style={[s.menuLine, { backgroundColor: t.lineSoft }]} />
-            <MenuItem label="노트 지우기" danger onPress={() => actions && remove(actions)} />
+            {actions?.trashed ? (
+              <>
+                <MenuItem label="되살리기" onPress={() => actions && void restore(actions)} />
+                <View style={[s.menuLine, { backgroundColor: t.lineSoft }]} />
+                <MenuItem label="영원히 지우기" danger onPress={() => actions && purge(actions)} />
+              </>
+            ) : (
+              <>
+                <MenuItem label="열기" onPress={() => actions && onOpen(actions.id)} />
+                <MenuItem label={actions?.fav ? "즐겨찾기에서 빼기" : "즐겨찾기에 넣기"} onPress={() => actions && void toggleFav(actions)} />
+                <MenuItem label="폴더로 옮기기" onPress={() => { setMoving(actions); setActions(null); }} />
+                <MenuItem label="다른 기기로 보내기 (노트 파일)" onPress={() => actions && sendPack(actions)} />
+                <View style={[s.menuLine, { backgroundColor: t.lineSoft }]} />
+                <MenuItem label="노트 지우기 (휴지통으로)" danger onPress={() => actions && void toTrash(actions)} />
+              </>
+            )}
           </Pressable>
         </Pressable>
       </Modal>
     </SafeAreaView>
+    </DropOver.Provider>
+    </DropApi.Provider>
   );
 }
 
-function NoteCard({ nb, store, width, onPress, onMore }: { nb: Notebook; store: SyncedStore; width: number; onPress: () => void; onMore: () => void }) {
+// ── 꾹 눌러 끌기 ─────────────────────────────────────────
+type DragItem = { kind: "note"; nb: Notebook } | { kind: "folder"; path: string };
+type DropApiT = {
+  register: (key: string, ref: RefObject<HostInstance | null>) => () => void; begin: (item: DragItem, x: number, y: number) => void;
+  move: (x: number, y: number) => void; end: () => void; cancel: () => void; justDragged: () => boolean;
+};
+const DropApi = createContext<DropApiT | null>(null);
+/** 지금 끌고 있는 것이 올라가 있는 놓을 곳 */
+const DropOver = createContext<string | null>(null);
+
+/** 놓을 곳으로 등록: 끄는 동안 이 자리 위에 오면 테두리가 진해진다 */
+function useDrop(key?: string) {
+  const api = useContext(DropApi);
+  const over = useContext(DropOver);
+  const ref = useRef<HostInstance>(null);
+  useEffect(() => (key && api ? api.register(key, ref) : undefined), [api, key]);
+  return { ref, over: !!key && over === key };
+}
+
+/** 꾹 누르면(0.45초) 끌기 시작 — 그냥 누르면 안쪽 단추가 그대로 눌린다 */
+function Draggable({ item, children }: { item: DragItem; children: ReactNode }) {
+  const api = useContext(DropApi);
+  const itemRef = useRef(item);
+  itemRef.current = item;
+  const pan = usePanGesture({
+    activateAfterLongPress: 450,
+    runOnJS: true,
+    onActivate: (e) => api?.begin(itemRef.current, e.absoluteX, e.absoluteY),
+    onUpdate: (e) => api?.move(e.absoluteX, e.absoluteY),
+    onDeactivate: () => api?.end(),
+    onFinalize: () => api?.cancel(),
+  });
+  return (
+    <GestureDetector gesture={pan}>
+      <View collapsable={false}>{children}</View>
+    </GestureDetector>
+  );
+}
+
+function NoteCard({ nb, store, width, onPress, onMore, onFav }: { nb: Notebook; store: SyncedStore; width: number; onPress: () => void; onMore: () => void; onFav?: () => void }) {
   const t = useTheme();
+  const drop = useDrop(nb.trashed ? undefined : `note:${nb.id}`);
+  const api = useContext(DropApi);
   const [thumb, setThumb] = useState<string | null>(null);
   const first = nb.pages[0];
   useEffect(() => {
@@ -495,19 +751,25 @@ function NoteCard({ nb, store, width, onPress, onMore }: { nb: Notebook; store: 
   const ratio = (first?.h ?? 842) / (first?.w ?? 595); // 쪽 그림은 칸 폭에 맞추고 위쪽부터 보인다 (네모 칸)
   const date = new Date(nb.updated);
   return (
+    <Draggable item={{ kind: "note", nb }}>
     <Pressable
-      onPress={onPress}
-      onLongPress={onMore}
+      ref={drop.ref}
+      onPress={() => !api?.justDragged() && onPress()}
       accessibilityRole="button"
       accessibilityLabel={`${nb.title} 열기`}
       style={({ pressed }) => ({ width, opacity: pressed ? 0.85 : 1 })}
     >
-      {/* 쪽 그림은 종이라서 어두운 모드에서도 흰 바탕 */}
-      <View style={[s.thumb, { width, height: width, borderColor: t.lineSoft }]}>
+      {/* 쪽 그림은 종이라서 어두운 모드에서도 흰 바탕. 끄는 것이 이 앞에 놓일 때는 왼쪽에 굵은 줄 */}
+      <View style={[s.thumb, { width, height: width, borderColor: drop.over ? t.ink : t.lineSoft, borderLeftWidth: drop.over ? 5 : 1, opacity: nb.trashed ? 0.6 : 1 }]}>
         {thumb ? (
           <Image source={{ uri: thumb }} style={{ position: "absolute", top: 0, left: 0, width, height: width * ratio }} resizeMode="stretch" />
         ) : (
           <PaperThumb paper={first?.paper} />
+        )}
+        {onFav && (
+          <Pressable onPress={onFav} hitSlop={8} accessibilityRole="button" accessibilityLabel={`${nb.title} 즐겨찾기 ${nb.fav ? "빼기" : "넣기"}`} style={s.star}>
+            <Text style={{ fontSize: 20, color: nb.fav ? "#F5B400" : "#9AA3AD" }}>{nb.fav ? "★" : "☆"}</Text>
+          </Pressable>
         )}
       </View>
       <View style={s.cardFoot}>
@@ -528,21 +790,25 @@ function NoteCard({ nb, store, width, onPress, onMore }: { nb: Notebook; store: 
         </Pressable>
       </View>
     </Pressable>
+    </Draggable>
   );
 }
 
 /** 폴더 칸: 노트 칸과 같은 네모에 큰 폴더 모양, 밑에 이름과 안에 든 것 수 */
-function FolderCard({ name, notes, folders, width, onPress, onMore }: { name: string; notes: number; folders: number; width: number; onPress: () => void; onMore: () => void }) {
+function FolderCard({ path, name, notes, folders, width, onPress, onMore }: { path: string; name: string; notes: number; folders: number; width: number; onPress: () => void; onMore: () => void }) {
   const t = useTheme();
+  const drop = useDrop(`folder:${path}`);
+  const api = useContext(DropApi);
   return (
+    <Draggable item={{ kind: "folder", path }}>
     <Pressable
-      onPress={onPress}
-      onLongPress={onMore}
+      ref={drop.ref}
+      onPress={() => !api?.justDragged() && onPress()}
       accessibilityRole="button"
       accessibilityLabel={`${name} 폴더 열기`}
       style={({ pressed }) => ({ width, opacity: pressed ? 0.85 : 1 })}
     >
-      <View style={[s.thumb, s.folderBox, { width, height: width, borderColor: t.lineSoft, backgroundColor: t.sunken }]}>
+      <View style={[s.thumb, s.folderBox, { width, height: width, borderColor: drop.over ? t.ink : t.lineSoft, borderWidth: drop.over ? 3 : 1, backgroundColor: t.sunken }]}>
         <FolderGlyph size={width * 0.42} color={t.muted} />
       </View>
       <View style={s.cardFoot}>
@@ -561,6 +827,7 @@ function FolderCard({ name, notes, folders, width, onPress, onMore }: { name: st
         </Pressable>
       </View>
     </Pressable>
+    </Draggable>
   );
 }
 
@@ -576,24 +843,31 @@ function FolderGlyph({ size, color, filled }: { size: number; color: string; fil
 }
 
 /** 왼쪽 나무의 한 줄: 펼치기 꺾쇠(아래 폴더가 있을 때) · 폴더 모양 · 이름 · 노트 수 */
-function SideRow({ label, count, on, depth = 0, kids, onToggle, onPress, onLongPress, a11y, icon }: {
-  label: string; count?: number; on: boolean; depth?: number; kids?: boolean; onToggle?: () => void; onPress: () => void; onLongPress?: () => void; a11y: string; icon: "folder" | "all";
+function SideRow({ label, count, on, depth = 0, kids, onToggle, onPress, onLongPress, a11y, icon, dropKey }: {
+  label: string; count?: number; on: boolean; depth?: number; kids?: boolean; onToggle?: () => void; onPress: () => void; onLongPress?: () => void; a11y: string;
+  icon: "folder" | "all" | "star" | "trash"; dropKey?: string;
 }) {
   const t = useTheme();
+  const drop = useDrop(dropKey);
   return (
     <Pressable
+      ref={drop.ref}
       onPress={onPress}
       onLongPress={onLongPress}
       accessibilityRole="button"
       accessibilityLabel={a11y}
       accessibilityState={{ selected: on }}
-      style={({ pressed }) => [s.sideRow, { paddingLeft: 8 + depth * 16, backgroundColor: on ? t.bg : pressed ? t.bg : "transparent" }]}
+      style={({ pressed }) => [s.sideRow, { paddingLeft: 8 + depth * 16, backgroundColor: on || drop.over ? t.bg : pressed ? t.bg : "transparent", borderWidth: drop.over ? 2 : 0, borderColor: t.ink }]}
     >
       <Pressable onPress={onToggle} disabled={kids === undefined} hitSlop={6} accessibilityLabel={kids === undefined ? undefined : `${label} ${kids ? "접기" : "펼치기"}`} style={s.chev}>
         {kids !== undefined && <Text style={{ color: t.muted, fontSize: 14, transform: [{ rotate: kids ? "90deg" : "0deg" }] }}>›</Text>}
       </Pressable>
       {icon === "folder" ? (
         <FolderGlyph size={18} color={on ? t.ink : t.sub} filled={on} />
+      ) : icon === "star" ? (
+        <Text style={{ width: 18, textAlign: "center", fontSize: 16, color: on ? "#F5B400" : t.sub }}>★</Text>
+      ) : icon === "trash" ? (
+        <Text style={{ width: 18, textAlign: "center", fontSize: 15, color: on ? t.ink : t.sub }}>🗑</Text>
       ) : (
         <View style={[s.allGlyph, { borderColor: on ? t.ink : t.sub }]} />
       )}
@@ -795,6 +1069,10 @@ const s = StyleSheet.create({
   crumbStep: { flexDirection: "row", alignItems: "center", gap: 6 },
   crumb: { paddingVertical: 6, paddingHorizontal: 4 },
   folderBox: { borderWidth: 1 },
+  star: { position: "absolute", top: 4, right: 6, padding: 2 },
+  ghost2: { position: "absolute", width: 160, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.md, borderWidth: 2, zIndex: 40 },
+  noticeWrap: { position: "absolute", left: 16, right: 16, bottom: 32, alignItems: "center" },
+  notice: { maxWidth: 560, borderRadius: radius.xl, paddingHorizontal: 18, paddingVertical: 10 },
   topButtons: { flexDirection: "row", gap: 8, alignSelf: "center" },
   actions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   actionHalf: { flexGrow: 1, flexBasis: "40%", paddingHorizontal: 10 },

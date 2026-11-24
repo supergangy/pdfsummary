@@ -132,6 +132,18 @@ export class NoteStore {
     await this.save(next);
   }
 
+  /** 노트 정보만 바꾸기 (즐겨찾기·휴지통·자리·폴더). undefined면 그 칸을 뺀다. 고친 시각은 그대로 */
+  async patchMeta(id: string, patch: { fav?: boolean; trashed?: number; pos?: number; folder?: string }): Promise<void> {
+    const nb = await this.load(id);
+    if (!nb) return;
+    const next: Notebook = { ...nb };
+    for (const [k, v] of Object.entries(patch) as [keyof typeof patch, unknown][]) {
+      if (v === undefined || v === false) delete next[k];
+      else (next as Record<string, unknown>)[k] = v;
+    }
+    await this.save(next);
+  }
+
   /** 폴더 지우기: 안의 노트는 폴더 밖으로 나온다 (노트는 지우지 않음). */
   async removeFolder(name: string): Promise<void> {
     for (const nb of await this.list()) if (nb.folder === name) await this.moveTo(nb.id, undefined);

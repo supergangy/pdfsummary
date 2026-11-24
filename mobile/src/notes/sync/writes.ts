@@ -2,7 +2,7 @@
 // 저장할 때 이전 내용과 비교해 바뀐 칸만 쓰기로 만들고, 다른 기기의 쓰기는 같은 규칙으로 적용한다.
 import type { Ink, Notebook, Page, Stroke } from "../model.ts";
 
-export type NbMeta = { title: string; created: number; updated: number; hasPdf: boolean; pdf?: string; folder?: string };
+export type NbMeta = { title: string; created: number; updated: number; hasPdf: boolean; pdf?: string; folder?: string; fav?: boolean; trashed?: number; pos?: number };
 
 export type Write =
   | { t: "nb"; nb: string; v: NbMeta | null } // null = 노트 지움
@@ -33,6 +33,9 @@ export function metaOf(nb: Notebook, pdf?: string): NbMeta {
     hasPdf: nb.hasPdf,
     ...(pdf ? { pdf } : {}),
     ...(nb.folder ? { folder: nb.folder } : {}),
+    ...(nb.fav ? { fav: true } : {}),
+    ...(nb.trashed ? { trashed: nb.trashed } : {}),
+    ...(nb.pos !== undefined ? { pos: nb.pos } : {}),
   };
 }
 
@@ -128,6 +131,9 @@ export function applyToNotebook(nb: Notebook | null, id: string, writes: Write[]
         updated: Math.max(m.updated, cur?.updated ?? 0),
         hasPdf: m.hasPdf,
         ...(m.folder ? { folder: m.folder } : {}),
+        ...(m.fav ? { fav: true } : {}),
+        ...(m.trashed ? { trashed: m.trashed } : {}),
+        ...(typeof m.pos === "number" ? { pos: m.pos } : {}),
       };
     } else if (w.t === "page" && w.nb === id) {
       cur ??= { v: 1, id, title: "동기화 중…", created: Date.now(), updated: Date.now(), hasPdf: false, pages: [] };

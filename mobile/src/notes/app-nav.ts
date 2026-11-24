@@ -1,5 +1,5 @@
 // 화면을 오갈 때 쓰는 작은 규칙들 (React·기기 코드 없음 → 단위 테스트로 확인)
-import { ALL_NOTES } from "./folders.ts";
+import { ALL_NOTES, FAVORITES, TRASH } from "./folders.ts";
 
 /**
  * 안드로이드 '뒤로'를 눌렀을 때 갈 화면. null이면 App이 처리하지 않는다:
@@ -22,5 +22,5 @@ export function tooSoon(openedAt: number, now: number, ms = 400): boolean {
 
 /** 고른 폴더가 아직 있으면 그대로, 지워져 없으면 '전체'(null) */
 export function keepFolder(folder: string | null, folders: string[]): string | null {
-  return folder !== null && (folder === ALL_NOTES || folders.includes(folder)) ? folder : null;
+  return folder !== null && (folder === ALL_NOTES || folder === FAVORITES || folder === TRASH || folders.includes(folder)) ? folder : null;
 }

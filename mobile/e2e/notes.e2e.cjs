@@ -391,6 +391,67 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     await page.waitForTimeout(500);
     console.log(`✓ 폴더: 수학 안에 미적분, 왼쪽 나무·경로·폴더 칸으로 들어가기, 이름 바꾸기 (노트 칸 ${tile.width.toFixed(0)}×${tile.height.toFixed(0)})`);
 
+    // ── 즐겨찾기 · 꾹 눌러 끌어 옮기기 · 휴지통 ──
+    const dragTo = async (from, to) => {
+      const a = await from.boundingBox(), b = await to.boundingBox();
+      await page.mouse.move(a.x + a.width / 2, a.y + a.height / 3);
+      await page.mouse.down();
+      await page.waitForTimeout(700); // 꾹 누르기
+      await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 14 });
+      await page.waitForTimeout(250);
+      if (!(await page.getByText(/에 넣기|폴더 밖으로|이 앞에 놓기|놓을 곳으로 끌어/).count())) {
+        await page.mouse.up();
+        fail("꾹 눌렀다 끌었는데 끌기가 시작되지 않음 (끄는 표가 안 보임)");
+      }
+      await page.mouse.up();
+      await page.waitForTimeout(1000);
+    };
+    const card = (title) => page.getByLabel(`${title} 열기`, { exact: true });
+    await page.getByLabel("시험 노트 즐겨찾기 넣기").click();
+    await page.waitForTimeout(600);
+    await page.getByLabel("즐겨찾기", { exact: true }).click();
+    await card("시험 노트").waitFor({ timeout: 5000 }).catch(() => fail("별을 눌렀는데 즐겨찾기에 없음"));
+    // 즐겨찾기에서 왼쪽 '폴더'(맨 위)로 끌면 폴더 밖으로
+    await dragTo(card("시험 노트"), page.getByLabel("맨 위 폴더"));
+    await page.getByLabel("맨 위 폴더").click();
+    await card("시험 노트").waitFor({ timeout: 5000 }).catch(() => fail("왼쪽 '폴더'로 끌어 놓았는데 폴더 밖으로 나오지 않음"));
+    // 맨 위에서 '수학' 폴더 칸으로 끌어 넣기
+    await dragTo(card("시험 노트"), page.getByLabel("수학 폴더 열기"));
+    if ((await card("시험 노트").count()) !== 0) fail("'수학' 폴더 칸에 끌어 넣었는데 그대로 있음");
+    await page.getByLabel("수학 폴더 열기").click();
+    await card("시험 노트").waitFor({ timeout: 5000 }).catch(() => fail("'수학' 폴더 안에 끌어 넣은 노트가 없음"));
+    // 노트 둘: 뒤의 것을 앞의 것 위에 놓으면 그 앞으로
+    await page.getByLabel("모든 노트", { exact: true }).click();
+    await page.getByText("＋ 새 노트").click();
+    await page.getByLabel("새 노트 이름").fill("둘째 노트");
+    await page.getByText("만들기", { exact: true }).click();
+    await canvas.waitFor({ timeout: 20000 });
+    await page.getByLabel("노트 목록으로").click();
+    await card("둘째 노트").waitFor({ timeout: 10000 });
+    const xOf = async (title) => (await card(title).boundingBox()).x;
+    if (!((await xOf("둘째 노트")) < (await xOf("시험 노트")))) fail("새로 만든 노트가 앞에 있지 않음");
+    await dragTo(card("시험 노트"), card("둘째 노트"));
+    if (!((await xOf("시험 노트")) < (await xOf("둘째 노트")))) fail("노트를 다른 노트 앞에 놓았는데 순서가 바뀌지 않음");
+    // 휴지통으로 끌기 → 휴지통에서 되살리기 → 다시 넣고 영원히 지우기
+    await dragTo(card("둘째 노트"), page.getByLabel("휴지통", { exact: true }));
+    if ((await card("둘째 노트").count()) !== 0) fail("휴지통으로 끌었는데 목록에 남아 있음");
+    await page.getByLabel("휴지통", { exact: true }).click();
+    await card("둘째 노트").click();
+    await page.getByText("되살리기", { exact: true }).click();
+    await page.getByLabel("모든 노트", { exact: true }).click();
+    await card("둘째 노트").waitFor({ timeout: 5000 }).catch(() => fail("휴지통에서 되살렸는데 목록에 없음"));
+    await page.getByLabel("둘째 노트 더 보기").click();
+    await page.getByText("노트 지우기 (휴지통으로)").click();
+    await page.getByLabel("휴지통", { exact: true }).click();
+    page.once("dialog", (d) => d.accept());
+    await card("둘째 노트").click();
+    await page.getByText("영원히 지우기", { exact: true }).click();
+    await page.waitForTimeout(1000);
+    if ((await card("둘째 노트").count()) !== 0) fail("영원히 지웠는데 휴지통에 남아 있음");
+    await page.getByLabel("모든 노트", { exact: true }).click();
+    await page.waitForTimeout(500);
+    console.log("✓ 즐겨찾기(별), 꾹 눌러 끌기: 폴더 밖으로·폴더 칸 안으로·노트 앞으로, 휴지통: 끌어 넣기·되살리기·영원히 지우기");
+
     // ── 노트 파일로 내보냈다가 다시 가져오기 (다른 기기로 옮기기) ──
     await page.getByLabel("시험 노트 더 보기").click();
     const [pk] = await Promise.all([page.waitForEvent("download"), page.getByText("다른 기기로 보내기 (노트 파일)").click()]);

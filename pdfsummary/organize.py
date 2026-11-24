@@ -162,6 +162,8 @@ def by_page(marks: list[Mark]) -> list[Section]:
         if not sections or sections[-1].marks[0].page != m.page:
             sections.append(Section(f"{m.page_no}쪽", 1, anchor=f"s{len(sections) + 1}"))
         sections[-1].marks.append(m)
+    for sec in sections:
+        sec.count = len(sec.marks)  # 목차에 보이는 수 (없으면 '1쪽 0'처럼 모두 0으로 나왔다)
     return sections
 
 

@@ -49,3 +49,12 @@ def test_by_chapter():
     toc = [[1, "1장", 1], [2, "1.1", 3], [1, "2장", 9]]
     secs = by_chapter(marks, toc)
     assert [(s.title, [m.text for m in s.marks]) for s in secs] == [("1장", ["a"]), ("1.1", ["b"]), ("2장", ["c"])]
+
+
+def test_by_page_counts_marks_for_toc():
+    """쪽별로 묶을 때도 목차에 쪽마다 표시 수가 나온다 (모두 0으로 나왔다)"""
+    from pdfsummary.organize import by_page
+
+    marks = [Mark(0, HIGHLIGHT, (0, 0, 10, 10), "scan"), Mark(0, HIGHLIGHT, (0, 20, 10, 30), "scan"), Mark(3, HIGHLIGHT, (0, 0, 10, 10), "scan")]
+    secs = by_page(marks)
+    assert [(s.title, s.count) for s in secs] == [("1쪽", 2), ("4쪽", 1)]

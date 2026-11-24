@@ -25,7 +25,7 @@ test("한 칸 앞으로·뒤로, 끝에서는 그대로", () => {
   const o = toolbarOrder(undefined);
   assert.deepEqual(moveItem(o, "eraser", -1).slice(0, 3), ["pen", "eraser", "highlighter"]);
   assert.deepEqual(moveItem(o, "pen", -1), o);
-  assert.deepEqual(moveItem(o, "undo", 1), o);
+  assert.deepEqual(moveItem(o, o[o.length - 1], 1), o); // 맨 끝은 더 뒤로 못 간다
 });
 
 test("나눔 줄 묶음: 도구는 한 무리", () => {

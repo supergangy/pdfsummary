@@ -22,7 +22,7 @@ import { penDoubleClick } from "./editor-logic";
 import { straighten } from "./geometry";
 import type { Ink, LineDash, Page, Stroke } from "./model";
 import { docLayout, nearestSpread, pageAt, pagesIn, pageTurnTarget, type DocLayout, type PageFlow } from "./pageLayout";
-import { inkPicture, paperPicture, type PathCache } from "./render";
+import { inkPicture, paperPicture, type Fade, type PathCache } from "./render";
 
 export type ToolName = "pen" | "highlighter" | "eraser" | "lasso" | "text";
 /** 움직이는 동안 쓸 쪽 사진에 담을 것 */
@@ -77,6 +77,10 @@ type Props = {
   onVisible?: (first: number, last: number) => void; // 화면 근처에 있는 쪽 번호 범위 (바탕 그림 미리 불러오기)
   /** 지금 보이는 곳을 묻는 함수를 채워 준다: 지금 쪽 기준 화면 가운데(쪽 좌표)와 보이는 폭·높이 — 사진·스티커를 그 자리에 넣으려고 */
   viewRef?: { current: (() => ViewSpot | null) | null };
+  /** 필기 눌러 듣기: 펜(손가락으로 쓰기면 손가락도)은 쓰지 않고 누른 자리를 onTextTap으로 알린다 */
+  tapOnly?: boolean;
+  /** 강의 녹음 재생 중: 그 녹음의 이 시각 뒤에 쓴 획은 흐리게 */
+  fade?: Fade;
 };
 
 /** 지금 쪽에서 화면 가운데 자리(쪽 좌표, 쪽 안으로 당김)와 화면에 보이는 폭·높이(쪽 좌표) */
@@ -258,6 +262,10 @@ export function PageCanvas(props: Props) {
   const eraserPx = useSharedValue(props.eraserPx);
   const rectSV = useSharedValue(props.lassoRect);
   const straightSV = useSharedValue(false);
+  const tapOnlySV = useSharedValue(false);
+  useEffect(() => {
+    tapOnlySV.value = !!props.tapOnly;
+  }, [props.tapOnly, tapOnlySV]);
   useEffect(() => {
     eraserPx.value = props.eraserPx;
     rectSV.value = props.lassoRect;
@@ -431,7 +439,7 @@ export function PageCanvas(props: Props) {
       ph.value = R[i * 4 + 3];
       const x = dx - offX.value;
       const y = dy - offY.value;
-      if (toolSV.value === 4) {
+      if (toolSV.value === 4 || tapOnlySV.value) {
         mode.value = 7;
         sx.value = x;
         sy.value = y;
@@ -685,6 +693,7 @@ export function PageCanvas(props: Props) {
                 hidden={hiddenAll}
                 bg={props.bgOf(pages[i])}
                 paths={paths.current}
+                fade={props.fade ?? null}
                 dark={theme.dark}
                 moving={moving}
                 busy={mode}
@@ -731,15 +740,20 @@ export function PageCanvas(props: Props) {
 }
 
 /** 쪽 하나: 테두리·흰 종이·바탕 그림(PDF)·속지·필기. 필기가 많으면 움직이는 동안 쪽 사진으로 */
-function PageLayer({ page, x, y, strokes, hidden, bg, paths, dark, moving, busy, fitS }: {
-  page: Page; x: number; y: number; strokes: Stroke[]; hidden: Set<string>; bg: string | null; paths: PathCache; dark: boolean;
+function PageLayer({ page, x, y, strokes, hidden, bg, paths, fade, dark, moving, busy, fitS }: {
+  page: Page; x: number; y: number; strokes: Stroke[]; hidden: Set<string>; bg: string | null; paths: PathCache; fade: Fade; dark: boolean;
   moving: SharedValue<boolean>; busy: SharedValue<number>; fitS: SharedValue<number>;
 }) {
   const image = useImage(bg ?? undefined);
   const paper = useMemo(() => paperPicture(page), [page]);
   // 이 쪽 획 중에 감춘 것이 없으면 늘 같은 빈 묶음 → 다른 쪽을 지우는 동안 이 쪽 그림을 다시 만들지 않는다
   const own = useMemo(() => (hidden.size && strokes.some((s) => hidden.has(s.id)) ? hidden : NO_IDS), [strokes, hidden]);
-  const picture = useMemo(() => inkPicture(strokes, own, page.w, page.h, paths), [strokes, own, page.w, page.h, paths]);
+  // 재생 중 흐리게: 이 쪽에 그 녹음으로 쓴 획이 있을 때만 (없는 쪽은 그림을 다시 만들지 않게)
+  const myFade = useMemo(() => (fade && strokes.some((s) => s.rec === fade.rec) ? fade : null), [fade, strokes]);
+  const fadeKey = myFade ? `${myFade.rec}@${myFade.ms}` : "";
+  const picture = useMemo(() => inkPicture(strokes, own, page.w, page.h, paths, myFade),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [strokes, own, page.w, page.h, paths, fadeKey]);
 
   // ── 움직이는 동안 쓸 쪽 사진 ────────────────────────────
   const heavy = useSharedValue(false); // 필기가 많은 쪽

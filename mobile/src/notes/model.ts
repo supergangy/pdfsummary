@@ -21,6 +21,8 @@ export type Stroke = {
   opacity?: number; // 형광펜만 (0~1, 없으면 HIGHLIGHT_OPACITY)
   img?: string; // 사진·그림 스티커만: 그림 자체 (data:image/jpeg|png;base64,…). 줄여서 넣으므로 동기화 쓰기 하나에 같이 간다
   stamp?: boolean; // 글상자 중 '도장 스티커'(중요·암기 등): 둥근 테두리 + 옅은 바탕으로 그린다
+  rec?: string; // 강의 녹음 중에 썼으면 그 녹음 id (audioSync.ts)
+  rt?: number; // 그 녹음 시작부터 몇 ms에 썼는지
 };
 
 export const PENS: { id: PenBrush; label: string; hint: string }[] = [

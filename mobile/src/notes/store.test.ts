@@ -38,3 +38,20 @@ test("folders: create, move notes, remove folder keeps notes", async () => {
   assert.equal((await st.load(a.id))?.folder, undefined);
   assert.equal((await st.list()).length, 1);
 });
+
+test("강의 녹음: 노트 폴더에 복사·목록·지우기 (노트를 지우면 함께)", async () => {
+  const { NoteStore, memoryFs } = await import("./store.ts");
+  const { blankNotebook } = await import("./model.ts");
+  const fs = memoryFs();
+  const st = new NoteStore(fs);
+  const nb = blankNotebook("강의", "plain", 1);
+  await st.create(nb);
+  const blob = new Blob([new Uint8Array([1, 2, 3])]);
+  await st.addRecording(nb.id, { id: "r1", start: 10, dur: 3000, ext: "m4a" }, { uri: "x", blob });
+  await st.addRecording(nb.id, { id: "r2", start: 20, dur: 4000, ext: "m4a" }, { uri: "y", blob });
+  assert.deepEqual((await st.recordings(nb.id)).map((r) => r.id), ["r1", "r2"]);
+  await st.removeRecording(nb.id, "r1");
+  assert.deepEqual((await st.recordings(nb.id)).map((r) => r.id), ["r2"]);
+  await st.remove(nb.id);
+  assert.deepEqual(await st.recordings(nb.id), []);
+});

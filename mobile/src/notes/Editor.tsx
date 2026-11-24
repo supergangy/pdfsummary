@@ -17,6 +17,8 @@ import { pageImage } from "./pageImage";
 import { PageCanvas, type JumpCmd, type Selection, type ToolName, type ViewSpot, type ZoomCmd } from "./PageCanvas";
 import { PageGrid } from "./PageGrid";
 import { loadPrefs, savePrefs, type Prefs } from "./prefs";
+import { clock, fadeStep, pageAt, seekFor, timedStrokeAt } from "./audioSync";
+import { PlayerBar, useLectureAudio } from "./LectureAudio";
 import { clipboardPicture, fileToDataUri, pickPhoto, shrinkDataUri, stickerPicture, type Picture } from "./insertImage";
 import { lassoSelect, moved, scaled, snapShape } from "./shapes";
 import { STAMPS, STICKERS, type Sticker } from "./stickers";
@@ -299,6 +301,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   }, [flush]);
 
   const close = async () => {
+    if (audioRef.current.live) await audioRef.current.stop(); // 녹음 중이면 저장하고 나간다
     await flush();
     onClose();
   };
@@ -373,8 +376,20 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
 
   const say = (s: string) => {
     setToast(s);
-    setTimeout(() => setToast((x) => (x === s ? "" : x)), 2600);
+    setTimeout(() => setToast((x) => (x === s ? "" : x)), s.length > 40 ? 4200 : 2600);
   };
+
+  // ── 강의 녹음 ───────────────────────────────────────────
+  // 녹음 중에 쓴 획에 녹음 시각을 붙이고, 재생 막대에서 '필기 눌러 듣기'를 켜면 필기를 눌러 그때부터 듣는다
+  const audio = useLectureAudio({ store, nbId: id, say });
+  const audioRef = useRef(audio);
+  audioRef.current = audio;
+  const [listening, setListening] = useState(false); // 필기 눌러 듣기
+  const listeningRef = useRef(listening);
+  listeningRef.current = listening;
+  const [follow, setFollow] = useState(true); // 재생하면 그때 쓰던 쪽으로 따라가기
+  const playing = !!audio.cur && audio.status.playing;
+  const fadeMs = audio.cur ? fadeStep(audio.status.currentTime) : 0;
 
   // S펜 옆 단추를 (펜을 띄운 채) 두 번 누르면 등록한 도구로, 한 번 더 두 번 누르면 원래대로
   const swapSaved = useRef<SwapSaved | null>(null);
@@ -439,6 +454,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
       ...(hl
         ? p.hlOpacity !== HIGHLIGHT_OPACITY ? { opacity: p.hlOpacity } : {}
         : { ...(p.penBrush !== "fountain" ? { brush: p.penBrush } : {}), ...(p.penDash !== "solid" ? { dash: p.penDash } : {}) }),
+      ...(audioRef.current.stamp() ?? {}), // 녹음 중이면 녹음 id·시각
     };
     setInk((k) => hist.current.run(k, { kind: "add", page: page.id, strokes: [s] }));
     touch(page.id);
@@ -632,6 +648,15 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     if (justAfter(Date.now(), menuClosedAt.current)) return; // 메뉴를 두 번 누른 둘째 누름은 넘긴다
     const page = activate(pageId);
     if (!page) return;
+    if (listeningRef.current) {
+      // 필기 눌러 듣기: 그 자리 획을 쓰던 때(조금 앞)부터
+      const st = timedStrokeAt(inkRef.current[page.id] ?? [], x, y, 10);
+      if (!st) return say("녹음하면서 쓴 필기를 눌러 주세요.");
+      const rec = audioRef.current.recs.find((r) => r.id === st.rec);
+      if (!rec) return say("이 필기의 녹음이 이 기기에 없어요. (녹음은 녹음한 기기에만 있어요)");
+      void audioRef.current.play(rec, seekFor(st));
+      return;
+    }
     const hit = [...(inkRef.current[page.id] ?? [])].reverse().find((s) => s.tool === "text" && !s.stamp && hitAlong([s], x, y, x, y, 2).length); // 도장 스티커는 글상자 고치기에서 뺀다
     setTextEdit(hit ? { page: page.id, x: hit.pts[0], y: hit.pts[1], stroke: hit } : { page: page.id, x, y });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -652,7 +677,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         setInk((k) => hist.current.run(k, { kind: "replace", page: page.id, before: [ed.stroke!], after: [after] }));
       }
     } else if (text.trim()) {
-      const s = makeTextBox(newId(), ed.x, ed.y, text, size, color, page.w);
+      const s = { ...makeTextBox(newId(), ed.x, ed.y, text, size, color, page.w), ...(audioRef.current.stamp() ?? {}) };
       setInk((k) => hist.current.run(k, { kind: "add", page: page.id, strokes: [s] }));
     }
     touch(page.id);
@@ -760,6 +785,15 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     keptHistory = { id, hist: hist.current };
     onQuick(nbRef.current ?? nb, inkRef.current, piRef.current);
   };
+
+  // 재생 중 쪽 따라가기: 지금 들리는 때에 쓰던 쪽으로
+  useEffect(() => {
+    if (!playing || !follow || !audio.cur) return;
+    const pid = pageAt(inkRef.current, audio.cur.id, fadeMs);
+    const i = pid ? (nbRef.current?.pages.findIndex((x) => x.id === pid) ?? -1) : -1;
+    if (i >= 0 && i !== piRef.current) showPage(i);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fadeMs, playing, follow]);
 
   // ── 사진·스티커 넣기 ───────────────────────────────────
   // 화면 가운데(지금 쪽)에 넣고 바로 올가미로 골라 둔다 → 끌어서 옮기거나 '크게·작게'
@@ -945,6 +979,22 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         return <ToolBtn ref={toolRef("lasso")} icon="lasso" label="올가미" on={tool === "lasso"} onPress={() => pick("lasso")} hint="둘러싸서 고르고 옮기기, 한 번 더 누르면 설정" />;
       case "text":
         return <ToolBtn ref={toolRef("text")} icon="text" label="글상자" on={tool === "text"} onPress={() => setP({ tool: "text" })} hint="쪽을 누르면 글을 써 넣어요" />;
+      case "record":
+        return (
+          <View style={vertical ? sx.swatchesCol : sx.swatches}>
+            {audio.live ? (
+              <Pressable onPress={() => void audio.stop()} accessibilityRole="button" accessibilityLabel={`녹음 멈추기 (${clock(audio.elapsed)})`} style={({ pressed }) => [sx.recLive, { opacity: pressed ? 0.7 : 1 }]}>
+                <View style={sx.recDot} />
+                {!vertical && <Text style={sx.recTime}>{clock(audio.elapsed)}</Text>}
+              </Pressable>
+            ) : (
+              <IconBtn icon="mic" onPress={() => void audio.start()} label="강의 녹음" />
+            )}
+            {audio.recs.length > 0 && !audio.live && (
+              <IconBtn icon="headphones" onPress={() => void audio.play(audio.cur ?? audio.recs[audio.recs.length - 1])} label="녹음 듣기" />
+            )}
+          </View>
+        );
       case "insert":
         return <IconBtn icon="image" onPress={() => setInsertMenu(true)} label="사진·스티커 넣기" />;
       case "colors":
@@ -1112,6 +1162,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         onShown={onShown}
         onVisible={onVisible}
         viewRef={viewRef}
+        tapOnly={listening && !!audio.cur}
+        fade={audio.cur ? { rec: audio.cur.id, ms: fadeMs } : null}
       />
       </View>
       {dock === "right" && sideStrip}
@@ -1157,6 +1209,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         </View>
       )}
 
+      <PlayerBar audio={audio} listening={listening} onListening={setListening} follow={follow} onFollow={setFollow} />
       {tip && <TipBubble key={`${tip.label}@${tip.r.join(",")}`} label={tip.label} r={tip.r} side={tip.side} maxX={win.width} />}
       {!!toast && (
         <View pointerEvents="none" style={sx.toastWrap}>
@@ -1632,6 +1685,10 @@ const sx = StyleSheet.create({
   floatBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 6, paddingVertical: 4, borderRadius: radius.xl },
   grip: { width: 22, height: 36, alignItems: "center", justifyContent: "center" },
   ghost: { position: "absolute", zIndex: 30, width: 140, height: 44, borderRadius: radius.md, borderWidth: 2, borderStyle: "dashed", alignItems: "center", justifyContent: "center" },
+  // 녹음 중 단추: 빨간 점 + 시간
+  recLive: { flexDirection: "row", alignItems: "center", gap: 6, height: 36, paddingHorizontal: 10, borderRadius: radius.pill, backgroundColor: "#FDE8EA" },
+  recDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: "#E5484D" },
+  recTime: { color: "#C62A35", fontWeight: "700", fontVariant: ["tabular-nums"] },
   insertMenu: { alignSelf: "center" },
   stickerWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   stamp: { borderWidth: 2, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 8 },

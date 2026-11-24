@@ -86,8 +86,9 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
   procs.push(api);
   await waitFor(`http://127.0.0.1:${apiPort}/healthz`);
 
-  const browser = await chromium.launch();
-  const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, acceptDownloads: true });
+  // 녹음 시험용 가짜 마이크 (허락 창 없이)
+  const browser = await chromium.launch({ args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] });
+  const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, acceptDownloads: true, permissions: ["microphone"] });
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -706,6 +707,43 @@ open(sys.argv[1], "wb").write(png); print(base64.b64encode(png).decode())`, pngP
     const pdfInfo = execFileSync("python3", ["-c", "import sys, pymupdf; p = pymupdf.open(sys.argv[1])[0]; print(len(set(x[0] for x in p.get_images()))); print(p.get_text())", out2], { encoding: "utf8" });
     if (Number(pdfInfo.trim().split(/\s+/)[0]) < 2 || !pdfInfo.includes("중요")) fail("내보낸 PDF에 사진·스티커가 없음: " + pdfInfo.slice(0, 80));
     console.log("✓ 사진 고르기·크게, 도장·그림 스티커, Ctrl+V 붙여넣기, PDF 내보내기에 사진·도장");
+
+    // ── 강의 녹음: 녹음하며 쓴 필기에 녹음 시각, '필기 눌러 듣기'로 그때부터 ──
+    await page.getByLabel(/^글상자 \(/).click();
+    await page.getByLabel(/한 번 더 누르면 펜 설정/).click();
+    await page.getByLabel("강의 녹음").click();
+    await page.getByLabel(/^녹음 멈추기/).waitFor({ timeout: 8000 }).catch(() => fail("녹음이 시작되지 않음"));
+    const rb = await canvas.boundingBox();
+    const recLine = async (y) => {
+      await page.mouse.move(rb.x + 150, rb.y + y);
+      await page.mouse.down();
+      await page.mouse.move(rb.x + 450, rb.y + y, { steps: 8 });
+      await page.mouse.up();
+    };
+    await page.waitForTimeout(1200);
+    await recLine(520);
+    await page.waitForTimeout(3000);
+    await recLine(600);
+    await page.waitForTimeout(800);
+    await page.getByLabel(/^녹음 멈추기/).click();
+    await page.getByText(/녹음을 저장했어요/).waitFor({ timeout: 10000 }).catch(() => fail("녹음이 저장되지 않음"));
+    await page.waitForTimeout(800);
+    const timed = (await allStrokes(page)).filter((st) => st.rec);
+    if (timed.length !== 2 || !(timed[1].rt - timed[0].rt > 2500)) fail(`녹음 중에 쓴 획에 녹음 시각이 맞게 붙지 않음: ${JSON.stringify(timed.map((x) => x.rt))}`);
+    const recFiles = Object.keys(await idb(page)).filter((k) => /\/rec\/[^/]+\/audio\./.test(k));
+    if (recFiles.length !== 1) fail("녹음 파일이 노트 안에 저장되지 않음");
+    await page.getByLabel("녹음 듣기").click();
+    await page.getByLabel("재생 시간").waitFor({ timeout: 5000 });
+    await page.getByLabel("녹음 멈춤").click().catch(() => {});
+    await page.getByLabel("필기 눌러 듣기").click();
+    await page.mouse.click(rb.x + 300, rb.y + 600); // 두 번째 획 (녹음 4초쯤에 씀)
+    await page.waitForTimeout(900);
+    const shown = await page.getByLabel("재생 시간").innerText();
+    const [mm, ss] = shown.split("/")[0].trim().split(":").map(Number);
+    const at = mm * 60 + ss, want = timed[1].rt / 1000 - 2;
+    if (Math.abs(at - want) > 1.6) fail(`필기를 눌렀는데 그 필기를 쓰던 때(${want.toFixed(1)}초쯤)로 가지 않음: ${shown}`);
+    await page.getByLabel("재생 막대 닫기").click();
+    console.log(`✓ 강의 녹음: 녹음하며 쓴 필기에 시각(${timed.map((x) => (x.rt / 1000).toFixed(1)).join("초, ")}초), 필기를 누르면 ${shown.split("/")[0].trim()}부터 재생`);
 
     if (errors.length) fail("페이지 오류: " + errors.join(" | "));
   } catch (e) {

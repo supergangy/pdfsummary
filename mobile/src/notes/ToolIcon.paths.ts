@@ -1,7 +1,7 @@
 // 도구 아이콘 모양 (24×24 칸의 SVG 경로). 기기는 Skia로(ToolIcon.tsx), 웹은 SVG로(ToolIcon.web.tsx) 그린다.
 export type IconName =
   | "pen" | "highlighter" | "eraser" | "lasso" | "text" | "settings" | "finger" | "hand" | "undo" | "redo"
-  | "back" | "prev" | "next" | "more" | "minus" | "plus" | "fit" | "close" | "shapes" | "line" | "sliders" | "grip" | "up" | "down" | "shrink" | "grow" | "image";
+  | "back" | "prev" | "next" | "more" | "minus" | "plus" | "fit" | "close" | "shapes" | "line" | "sliders" | "grip" | "up" | "down" | "shrink" | "grow" | "image" | "mic" | "headphones";
 
 /** 24×24 칸의 SVG 경로. stroke=선으로, fill=채워서 */
 export const PATHS: Record<IconName, { d: string; fill?: boolean }> = {
@@ -30,6 +30,8 @@ export const PATHS: Record<IconName, { d: string; fill?: boolean }> = {
   up: { d: "M6 15 L12 9 L18 15" },
   shrink: { d: "M13 6 L7 12 L13 18 M19 6 L13 12 L19 18" },
   grow: { d: "M11 6 L17 12 L11 18 M5 6 L11 12 L5 18" },
+  mic: { d: "M12 3 A3 3 0 0 0 9 6 V12 A3 3 0 0 0 15 12 V6 A3 3 0 0 0 12 3 Z M6 11 A6 6 0 0 0 18 11 M12 17 V21 M9 21 H15" },
+  headphones: { d: "M4 16 V12 A8 8 0 0 1 20 12 V16 M4 14 H7 V20 H4 Z M17 14 H20 V20 H17 Z" },
   image: { d: "M4 5 H20 V19 H4 Z M4 15.5 L9 10.5 L14 15.5 L16 13.5 L20 17.5 M15.5 7.5 A1.6 1.6 0 1 0 15.51 7.5" },
   down: { d: "M6 9 L12 15 L18 9" },
 };

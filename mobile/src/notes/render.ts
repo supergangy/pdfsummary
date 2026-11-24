@@ -23,7 +23,10 @@ export function strokeImage(s: Stroke): SkImage | null {
   return images.get(s) ?? null;
 }
 
-export function inkPicture(strokes: Stroke[], hidden: Set<string>, w: number, h: number, cache: PathCache) {
+/** fade: 강의 녹음을 재생하는 중 — 그 녹음의 ms 뒤에 쓴 획은 흐리게 (아직 '안 쓴' 것처럼) */
+export type Fade = { rec: string; ms: number } | null;
+
+export function inkPicture(strokes: Stroke[], hidden: Set<string>, w: number, h: number, cache: PathCache, fade: Fade = null) {
   const get = (s: Stroke) => {
     if (!cache.has(s)) {
       const draw = strokeDraw(s);
@@ -40,7 +43,7 @@ export function inkPicture(strokes: Stroke[], hidden: Set<string>, w: number, h:
       if (!g) return;
       const { draw, path } = g;
       paint.setColor(Skia.Color(s.color));
-      paint.setAlphaf(draw.alpha);
+      paint.setAlphaf(draw.alpha * (fade && s.rec === fade.rec && (s.rt ?? 0) > fade.ms ? 0.18 : 1));
       paint.setPathEffect(null);
       if (draw.kind === "fill") {
         paint.setStyle(PaintStyle.Fill);

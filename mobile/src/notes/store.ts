@@ -1,5 +1,6 @@
 // 노트 저장: notebooks/<id>/notebook.json, source.pdf, ink/<쪽 id>.json
 // 파일을 읽고 쓰는 방법(Fs)은 기기용(fs.ts)·웹용(fs.web.ts)·시험용으로 바꿔 끼운다.
+import { parseRecordings, type Recording } from "./audioSync.ts";
 import { parseNotebook, parseStrokes, type Ink, type Notebook, type Stroke } from "./model.ts";
 
 export type Fs = {
@@ -135,6 +136,33 @@ export class NoteStore {
   async removeFolder(name: string): Promise<void> {
     for (const nb of await this.list()) if (nb.folder === name) await this.moveTo(nb.id, undefined);
     await this.saveFolders((await this.folders()).filter((f) => f !== name));
+  }
+
+  // ── 강의 녹음 (이 기기에만: 파일이 커서 동기화하지 않는다. 획의 rec·rt는 동기화된다) ──
+  async recordings(nbId: string): Promise<Recording[]> {
+    try {
+      const t = await this.fs.readText(`${dir(nbId)}/recordings.json`);
+      return t ? parseRecordings(JSON.parse(t)) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** 녹음 파일을 노트 폴더 안으로 복사하고 목록에 더한다 */
+  async addRecording(nbId: string, rec: Recording, from: { uri: string; blob?: Blob }): Promise<void> {
+    await this.fs.importFile(from, `${dir(nbId)}/rec/${rec.id}/audio.${rec.ext}`);
+    const list = (await this.recordings(nbId)).filter((r) => r.id !== rec.id);
+    await this.fs.writeText(`${dir(nbId)}/recordings.json`, JSON.stringify([...list, rec]));
+  }
+
+  recordingUri(nbId: string, rec: Recording): Promise<string> {
+    return this.fs.uri(`${dir(nbId)}/rec/${rec.id}/audio.${rec.ext}`);
+  }
+
+  async removeRecording(nbId: string, recId: string): Promise<void> {
+    await this.fs.remove(`${dir(nbId)}/rec/${recId}`);
+    const list = (await this.recordings(nbId)).filter((r) => r.id !== recId);
+    await this.fs.writeText(`${dir(nbId)}/recordings.json`, JSON.stringify(list));
   }
 
   pdfUri(nbId: string): Promise<string> {

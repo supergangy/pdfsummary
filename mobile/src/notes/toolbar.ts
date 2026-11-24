@@ -1,7 +1,7 @@
 // 필기 화면 도구 모음: 무엇을 어떤 순서로 보일지, 어디에 붙일지 (사용자가 '도구 모음 편집'에서 바꾼다).
 // 화면 그리기는 Editor.tsx. 여기는 계산만 (시험: toolbar.test.ts)
 
-export type ToolbarItem = "pen" | "highlighter" | "eraser" | "lasso" | "text" | "insert" | "colors" | "widths" | "finger" | "zoom" | "undo";
+export type ToolbarItem = "pen" | "highlighter" | "eraser" | "lasso" | "text" | "insert" | "colors" | "widths" | "finger" | "zoom" | "undo" | "record";
 /** 도구 모음 자리: 위(쪽 번호 줄 안) · 왼쪽 · 오른쪽 · 떠 있게(끌어서 아무 데나) */
 export type ToolbarDock = "top" | "left" | "right" | "float";
 
@@ -17,6 +17,7 @@ export const TOOLBAR_ITEMS: { id: ToolbarItem; label: string }[] = [
   { id: "finger", label: "손가락 쓰기/이동" },
   { id: "zoom", label: "축소·맞춤·확대" },
   { id: "undo", label: "되돌리기·다시 하기" },
+  { id: "record", label: "강의 녹음·듣기" },
 ];
 export const DEFAULT_TOOLBAR: ToolbarItem[] = TOOLBAR_ITEMS.map((i) => i.id);
 export const DOCKS: { id: ToolbarDock; label: string }[] = [

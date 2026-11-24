@@ -62,6 +62,21 @@
             "useLegacyPackaging": true
           }
         }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "강의를 녹음해 필기와 함께 들으려면 마이크를 써야 해요.",
+          "enableBackgroundRecording": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "노트에 사진을 붙이려면 사진을 골라야 해요.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
       ]
     ]
   }

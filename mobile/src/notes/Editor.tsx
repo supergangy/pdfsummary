@@ -1163,14 +1163,14 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     </View>
     </GestureDetector>
   );
-  // 왼쪽·오른쪽에 붙인 도구 모음: 맨 위 돌아가기·손잡이, 가운데 도구, 맨 아래 쪽·더 보기·요약 (윗줄은 없앤다)
+  // 왼쪽·오른쪽에 붙인 도구 모음: 맨 위 돌아가기, 가운데 도구, 맨 아래 쪽·더 보기·요약·손잡이 (윗줄은 없앤다)
+  // 손잡이(점 6개)는 어느 모양에서나 맨 끝(가로면 오른쪽 끝, 세로면 맨 아래)에 둔다 (사용자 요청)
   const sideStrip = (
     <Animated.View style={[lifted && sx.lifted, liftStyle]}>
     <StylusView onHover={onBarHover} style={{ flex: 1 }}>
       <GestureDetector gesture={holdMove}>
         <View ref={stripRef} collapsable={false} style={[sx.sideBar, { borderColor: t.lineSoft, backgroundColor: t.bg }, dock === "left" ? sx.sideLeft : sx.sideRight]}>
           {backBtn}
-          {gripView}
           <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={sx.toolCol} keyboardShouldPersistTaps="handled">
             {strip(true)}
           </ScrollView>
@@ -1178,6 +1178,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
             {pageNav(true)}
             {moreBtn}
             {sumBtn(true)}
+            {gripView}
           </View>
         </View>
       </GestureDetector>
@@ -1189,7 +1190,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   return (
     <TipCtx.Provider value={tipCtx}>
     <SafeAreaView ref={rootRef} style={{ flex: 1, backgroundColor: t.bg }} edges={["top", "left", "right"]}>
-      {/* 맨 윗줄 (위에 붙였을 때만): 돌아가기 · 손잡이 · 도구 모음 · 쪽 · 더 보기 · 요약.
+      {/* 맨 윗줄 (위에 붙였을 때만): 돌아가기 · 도구 모음 · 쪽 · 더 보기 · 요약 · 손잡이.
           노트 이름은 자리를 차지하지 않게 ⋯ 메뉴의 '이름 바꾸기'로. 좁으면 도구 모음만 옆으로 민다.
           왼쪽·오른쪽에 붙이거나 띄우면 윗줄을 없애고 그 자리를 쪽 화면이 쓴다 */}
       {dock === "top" && (
@@ -1198,13 +1199,13 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
           <GestureDetector gesture={holdMove}>
             <View ref={barRef} collapsable={false} style={[sx.toolBar, { borderColor: t.lineSoft, backgroundColor: t.bg, paddingHorizontal: pad }]}>
               {backBtn}
-              {gripView}
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={sx.toolRow} keyboardShouldPersistTaps="handled" style={sx.toolScroll}>
                 {strip(false)}
               </ScrollView>
               {pageNav(false)}
               {moreBtn}
               {sumBtn(false)}
+              {gripView}
             </View>
           </GestureDetector>
         </StylusView>
@@ -1265,18 +1266,17 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
               {shape === "column" ? (
                 <>
                   {backBtn}
-                  {gripView}
                   <ScrollView style={{ flexShrink: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={sx.toolCol} keyboardShouldPersistTaps="handled">
                     {strip(true)}
                   </ScrollView>
                   {pageNav(true)}
                   {moreBtn}
                   {sumBtn(true)}
+                  {gripView}
                 </>
               ) : shape === "two" ? (
                 <>
                   <View style={sx.floatLine}>
-                    {gripView}
                     {backBtn}
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={sx.toolRow} keyboardShouldPersistTaps="handled" style={{ flexShrink: 1 }}>
                       {strip(false, 0)}
@@ -1289,11 +1289,11 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
                     </ScrollView>
                     {moreBtn}
                     {sumBtn(false)}
+                    {gripView}
                   </View>
                 </>
               ) : (
                 <>
-                  {gripView}
                   {backBtn}
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={sx.toolRow} keyboardShouldPersistTaps="handled" style={{ flexShrink: 1 }}>
                     {strip(false)}
@@ -1301,6 +1301,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
                   {pageNav(false)}
                   {moreBtn}
                   {sumBtn(false)}
+                  {gripView}
                 </>
               )}
             </View>

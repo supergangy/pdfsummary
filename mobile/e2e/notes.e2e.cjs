@@ -159,6 +159,13 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     const pageNoB = await page.getByLabel("쪽 모아보기").boundingBox();
     if (!(backB.x < 60 && pageNoB.x < 60)) fail("왼쪽에 붙였는데 돌아가기·쪽 번호가 왼쪽 줄에 있지 않음 (윗줄이 남아 있음)");
     if (!((await canvas.boundingBox()).y < 10)) fail("왼쪽에 붙였는데 쪽 화면이 맨 위까지 오지 않음");
+    // 손잡이(점 6개)는 맨 끝: 세로 줄이면 요약 단추 밑
+    const gripEnd = async (vertical, what) => {
+      const g = await page.getByLabel(/^도구 모음 옮기기/).boundingBox();
+      const sum = await page.getByLabel("요약 만들기").boundingBox();
+      if (vertical ? !(g.y > sum.y + sum.height - 2) : !(g.x > sum.x + sum.width - 2)) fail(`${what}: 손잡이가 맨 끝(요약 단추 ${vertical ? "밑" : "오른쪽"})에 있지 않음`);
+    };
+    await gripEnd(true, "왼쪽에 붙인 도구 모음");
     await hoverOn(eraserBtn);
     const sideTip = await tipEl.boundingBox();
     if (!(sideTip.x > eB.x + eB.width)) fail("왼쪽에 붙인 도구 모음의 이름표가 단추 오른쪽에 뜨지 않음");
@@ -193,6 +200,7 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await dragGrip(500, 420);
     eB = await eraserBtn.boundingBox();
     if (!(Math.abs(eB.y + eB.height / 2 - 420) < 40)) fail(`가운데에 놓았는데 그 높이에 떠 있지 않음 (지우개 ${eB.x.toFixed(0)}, ${eB.y.toFixed(0)})`);
+    await gripEnd(false, "떠 있는 도구 모음");
     // 떠 있는 모양 '두 줄': 도구가 두 줄로 (되돌리기는 아랫줄)
     await editBar();
     await page.getByLabel("떠 있는 모양: 두 줄").click();

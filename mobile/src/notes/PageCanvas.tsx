@@ -13,7 +13,7 @@ import { Canvas, Circle, DashPathEffect, Fill, FilterMode, Group, Image, MipmapM
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PixelRatio, Platform, Text, View, type LayoutChangeEvent } from "react-native";
 import { GestureDetector, PointerType, usePanGesture, usePinchGesture, useSimultaneousGestures } from "react-native-gesture-handler";
-import Animated, { cancelAnimation, Easing, useAnimatedReaction, useAnimatedStyle, useDerivedValue, useSharedValue, withDecay, withDelay, withTiming, type SharedValue } from "react-native-reanimated";
+import Animated, { cancelAnimation, Easing, useAnimatedReaction, useAnimatedStyle, useDerivedValue, useSharedValue, withDecay, withDelay, withSequence, withTiming, type SharedValue } from "react-native-reanimated";
 import { scheduleOnRN, scheduleOnUI } from "react-native-worklets";
 
 import { StylusView } from "../../modules/stylus";
@@ -74,6 +74,8 @@ type Props = {
   onTransformSelection?: (dx: number, dy: number, k: number, deg: number) => void;
   /** 손가락으로 화면을 옮기는 중에 톡 눌렀을 때 (사진·스티커를 누르면 고르게) */
   onObjectTap?: (x: number, y: number, pageId: string) => void;
+  /** 움직일 때 나오는 '3 / 12'를 눌렀을 때 (쪽 번호를 넣어 가기) */
+  onAskPage?: () => void;
   onTextTap?: (x: number, y: number, pageId: string) => void; // 글상자 도구로 쪽을 눌렀을 때
   onViewWidth?: (pagePx: number) => void; // 쪽이 화면에서 몇 픽셀 폭인지 (바탕 그림 해상도용)
   onPenDouble?: () => void; // S펜 옆 단추를 펜을 띄운 채 두 번 눌렀을 때
@@ -412,6 +414,22 @@ export function PageCanvas(props: Props) {
     flings.value = moved ? 2 : 1;
     tx.value = withTiming((W - aw * s) / 2 - ax * s, TURN, animDone);
     if (moved) ty.value = withTiming(clampXY(s, 0, MARGIN - ay * s, docW.value, docH.value, W, H)[1], TURN, animDone);
+  };
+
+  /** 오른쪽(가로 넘김이면 아래) 위치 막대를 끌다가 놓았을 때: 좌우 넘기기 맞춤 배율이면 가까운 쪽에 딱 맞춘다 */
+  const scrubEnd = () => {
+    "worklet";
+    if (!flowV.value) {
+      const s = scale.value, W = vw.value;
+      const si = centerSpread();
+      const ax = spreads.value[si * 4], aw = spreads.value[si * 4 + 2] * s;
+      if (aw + MARGIN * 2 <= W + 1) {
+        flings.value = 1;
+        tx.value = withTiming((W - aw) / 2 - ax * s, TURN, animDone);
+        return;
+      }
+    }
+    stopMoving();
   };
 
   /** 미끄러지던 화면은 다시 닿는 순간 멈춘다 */
@@ -845,22 +863,41 @@ export function PageCanvas(props: Props) {
         {selIdx >= 0 && sel ? (
           <TextLayer strokes={selStrokes.filter((s) => sel.ids.has(s.id))} hidden={hidden} page={pages[selIdx]} ox={selX} oy={selY} tx={tx} ty={ty} scale={scale} dx={dragX} dy={dragY} k={selK} r={selR} box={selBox} />
         ) : null}
-        <ScrollSpot tx={tx} ty={ty} scale={scale} vw={vw} vh={vh} docW={docW} docH={docH} vertical={flow === "v"} moving={moving} label={spotLabel(L, spotSpread, activeIdx, pages.length)} />
       </View>
     </GestureDetector>
+    {/* key: 넘기는 방향이 바뀌면 새로 그린다 (위아래 때 붙은 top·height가 남아 막대가 큰 네모로, 쪽 번호가 엉뚱한 곳에 보였다) */}
+    <ScrollSpot
+      key={flow}
+      tx={tx} ty={ty} scale={scale} vw={vw} vh={vh} docW={docW} docH={docH}
+      vertical={flow === "v"} moving={moving} label={spotLabel(L, spotSpread, activeIdx, pages.length)}
+      pulse={jump.n} onEnd={scrubEnd} onAskPage={props.onAskPage}
+    />
     </StylusView>
   );
 }
 
-/** 지금 보는 자리: 움직이는 동안만 막대(문서 전체에서 화면이 있는 곳)와 쪽 번호를 보이고, 멈추면 1초 뒤 사라진다 */
-function ScrollSpot({ tx, ty, scale, vw, vh, docW, docH, vertical, moving, label }: {
+/** 지금 보는 자리: 움직이는 동안(그리고 쪽 단추로 건너뛴 뒤 잠깐) 막대(문서 전체에서 화면이 있는 곳)와 쪽 번호를 보이고, 멈추면 1초 뒤 사라진다.
+ *  보이는 동안에는 막대를 손가락으로 잡고 끌어 빨리 넘기고, '3 / 12'를 누르면 쪽 번호를 넣어 간다 (삼성 노트·내 파일의 빠른 스크롤처럼).
+ *  안 보일 때는 손을 받지 않아 가장자리에 쓰는 것을 막지 않는다 */
+function ScrollSpot({ tx, ty, scale, vw, vh, docW, docH, vertical, moving, label, pulse, onEnd, onAskPage }: {
   tx: SharedValue<number>; ty: SharedValue<number>; scale: SharedValue<number>; vw: SharedValue<number>; vh: SharedValue<number>;
   docW: SharedValue<number>; docH: SharedValue<number>; vertical: boolean; moving: SharedValue<boolean>; label: string;
+  pulse: number; onEnd: () => void; onAskPage?: () => void;
 }) {
   const show = useSharedValue(0);
   useAnimatedReaction(() => moving.value, (m, prev) => {
     if (m === prev) return;
     show.value = m ? withTiming(1, { duration: 120 }) : withDelay(1000, withTiming(0, { duration: 400 }));
+  });
+  // 쪽 단추·쪽 번호로 건너뛰었을 때도 잠깐 보인다 (어디쯤인지 알게, 이어서 막대를 잡을 수 있게)
+  useEffect(() => {
+    if (!pulse || moving.value) return;
+    show.value = withSequence(withTiming(1, { duration: 120 }), withDelay(1500, withTiming(0, { duration: 400 })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pulse]);
+  const [live, setLive] = useState(false); // 보이는 동안만 손을 받는다
+  useAnimatedReaction(() => show.value > 0.05, (v, prev) => {
+    if (v !== prev) scheduleOnRN(setLive, v);
   });
   /** [막대 시작, 막대 길이, 보이는 칸 길이] (화면 픽셀) */
   const bar = useDerivedValue(() => {
@@ -885,12 +922,70 @@ function ScrollSpot({ tx, ty, scale, vw, vh, docW, docH, vertical, moving, label
     const mid = len > 0 ? at + len / 2 : (vertical ? vh.value : vw.value) / 2;
     return { opacity: show.value, ...(vertical ? { top: mid - 15 } : { left: mid - 36 }) };
   });
+
+  // ── 막대 끌기 ──
+  const grab = useSharedValue(0); // 잡은 자리 - 막대 가운데 (막대를 잡았으면 그만큼 어긋난 채 따라온다)
+  const startAt = useSharedValue({ pos: 0, t: 0, onThumb: false });
+  const far = useSharedValue(0);
+  /** 손가락 자리(막대 방향, 화면 px) → 화면 옮기기 */
+  const scrollTo = (pos: number) => {
+    "worklet";
+    const [, len, track] = bar.value;
+    if (len <= 0) return;
+    const s = scale.value;
+    const view = vertical ? vh.value : vw.value;
+    const doc = (vertical ? docH.value : docW.value) * s;
+    const p = Math.min(1, Math.max(0, (pos - grab.value - 12 - len / 2) / Math.max(1, track - len)));
+    if (vertical) ty.value = -p * (doc - view);
+    else tx.value = -p * (doc - view);
+  };
+  const ask = useCallback(() => onAskPage?.(), [onAskPage]);
+  const pan = usePanGesture({
+    minDistance: 0,
+    onActivate: (e) => {
+      "worklet";
+      cancelAnimation(tx);
+      cancelAnimation(ty);
+      const pos = vertical ? e.y : e.x;
+      const [at, len] = bar.value;
+      const mid = at + len / 2;
+      const onThumb = len > 0 && Math.abs(pos - mid) <= Math.max(26, len / 2 + 10);
+      grab.value = onThumb ? pos - mid : 0;
+      startAt.value = { pos, t: Date.now(), onThumb };
+      far.value = 0;
+      moving.value = true;
+      if (!onThumb) scrollTo(pos); // 막대 밖(길)을 누르면 그 자리로
+    },
+    onUpdate: (e) => {
+      "worklet";
+      const pos = vertical ? e.y : e.x;
+      far.value = Math.max(far.value, Math.abs(pos - startAt.value.pos));
+      if (far.value > 3) scrollTo(pos);
+    },
+    onFinalize: () => {
+      "worklet";
+      const st = startAt.value;
+      // 막대(쪽 번호)를 톡 누름 → 쪽 번호 넣기
+      if (st.onThumb && far.value < 8 && Date.now() - st.t < 450) scheduleOnRN(ask);
+      onEnd();
+    },
+  });
   return (
     <>
       <Animated.View pointerEvents="none" style={[vertical ? sx.thumbV : sx.thumbH, thumb]} />
       <Animated.View pointerEvents="none" style={[vertical ? sx.pillV : sx.pillH, pill]}>
         <Text style={sx.pillText} accessibilityLabel={`지금 ${label.replace(" / ", "쪽, 전체 ")}쪽`}>{label}</Text>
       </Animated.View>
+      {live && (
+        <GestureDetector gesture={pan}>
+          <View
+            collapsable={false}
+            style={vertical ? sx.hitV : sx.hitH}
+            accessibilityRole="adjustable"
+            accessibilityLabel={`쪽 이동 막대: 지금 ${label.replace(" / ", "쪽, 전체 ")}쪽 (끌어서 넘기기, 눌러서 쪽 번호로 가기)`}
+          />
+        </GestureDetector>
+      )}
     </>
   );
 }
@@ -901,6 +996,9 @@ const sx = {
   pillV: { position: "absolute" as const, right: 14, height: 30, minWidth: 64, paddingHorizontal: 12, borderRadius: 15, backgroundColor: "rgba(32,33,36,0.82)", alignItems: "center" as const, justifyContent: "center" as const },
   pillH: { position: "absolute" as const, bottom: 14, height: 30, minWidth: 72, paddingHorizontal: 12, borderRadius: 15, backgroundColor: "rgba(32,33,36,0.82)", alignItems: "center" as const, justifyContent: "center" as const },
   pillText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" as const, fontVariant: ["tabular-nums" as const] },
+  // 막대를 잡는 자리: 막대와 쪽 번호를 덮는 가장자리 띠 (보이는 동안만 있다)
+  hitV: { position: "absolute" as const, right: 0, top: 0, bottom: 0, width: 100 },
+  hitH: { position: "absolute" as const, left: 0, right: 0, bottom: 0, height: 64 },
 };
 
 /** 쪽 하나: 테두리·흰 종이·바탕 그림(PDF)·속지·필기. 필기가 많으면 움직이는 동안 쪽 사진으로 */

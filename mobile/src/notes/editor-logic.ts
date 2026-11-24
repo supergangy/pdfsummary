@@ -15,12 +15,6 @@ export function clampPage(i: number | undefined, count: number): number {
   return Math.max(0, Math.min(count - 1, Math.floor(i)));
 }
 
-/** 아래쪽 쪽 이동 막대: 막대 위 x(막대 폭 w 안)가 가리키는 쪽 번호 (0부터). 양 끝은 첫 쪽·마지막 쪽 */
-export function scrubIndex(x: number, w: number, count: number): number {
-  if (count <= 1 || !(w > 0)) return 0;
-  return Math.max(0, Math.min(count - 1, Math.round((x / w) * (count - 1))));
-}
-
 /** 쪽 번호 입력 → 쪽 번호(0부터). 숫자가 아니면 null, 범위 밖이면 첫·마지막 쪽으로 (전각 숫자·'쪽'·띄어쓰기는 받아 준다) */
 export function parsePageInput(text: string, count: number): number | null {
   const t = text.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace(/\s+|쪽|p\.?/gi, "");

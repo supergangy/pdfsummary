@@ -18,7 +18,6 @@ import {
 import { pageImage } from "./pageImage";
 import { PageCanvas, type JumpCmd, type Selection, type ToolName, type ViewSpot, type ZoomCmd } from "./PageCanvas";
 import { PageGrid } from "./PageGrid";
-import { PageScrubber } from "./PageScrubber";
 import { loadLastPage, saveLastPage } from "./lastPage";
 import { loadPrefs, savePrefs, type Prefs } from "./prefs";
 import { clock, fadeStep, pageAt, seekFor, timedStrokeAt } from "./audioSync";
@@ -1284,6 +1283,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         onMoveSelection={onMoveSelection}
         onTransformSelection={onTransformSelection}
         onObjectTap={onObjectTap}
+        onAskPage={() => setGoOpen(true)}
         onTextTap={onTextTap}
         onPenDouble={onPenDouble}
         onShown={onShown}
@@ -1292,7 +1292,6 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         tapOnly={listening && !!audio.cur}
         fade={audio.cur ? { rec: audio.cur.id, ms: fadeMs } : null}
       />
-      {nb.pages.length > 1 && !selection && !audio.cur && <PageScrubber count={nb.pages.length} index={pi} onSeek={(i) => showPage(i)} onAskPage={() => setGoOpen(true)} />}
       </View>
       {dock === "right" && sideStrip}
       </View>
@@ -1771,7 +1770,7 @@ function TextDialog({ open, initial, size, editing, onCancel, onSave }: { open: 
   );
 }
 
-/** 쪽 번호를 넣어 그 쪽으로 바로 가기 (아래쪽 쪽 이동 막대의 'N / 전체'를 누르면) */
+/** 쪽 번호를 넣어 그 쪽으로 바로 가기 (움직일 때 오른쪽에 나오는 'N / 전체'를 누르면) */
 function GoToPageDialog({ open, count, current, onClose, onGo }: { open: boolean; count: number; current: number; onClose: () => void; onGo: (i: number) => void }) {
   const t = useTheme();
   const [v, setV] = useState("");

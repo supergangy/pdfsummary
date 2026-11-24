@@ -711,40 +711,50 @@ print(json.dumps([len(ys), (max(ys) - min(ys)) / k if ys else 0]))`, liveShot], 
     await page.getByLabel("이전 쪽").click();
     await page.waitForTimeout(600);
 
-    // ── 아래쪽 쪽 이동 막대: 누르거나 끌면 그 쪽으로 / 닫았다 다시 열면 마지막에 보던 쪽에서 ──
+    // ── 위치 막대(움직일 때·쪽을 건너뛸 때 잠깐 나오는 까만 막대와 'N / 전체'): 잡고 끌면 넘어가고, 'N / 전체'를 누르면 쪽 번호로 가기 ──
+    //    (좌우 넘기기라 막대는 아래쪽). 늘 떠 있는 막대는 없다 / 닫았다 다시 열면 마지막에 보던 쪽에서
     {
-      const bb = await page.getByLabel(/^쪽 이동 막대/).boundingBox();
-      if (!bb) fail("아래쪽 쪽 이동 막대가 없음");
-      const midY = bb.y + bb.height / 2;
-      await page.mouse.click(bb.x + bb.width - 2, midY);
-      await page.waitForTimeout(800);
+      await page.waitForTimeout(2600); // 바로 앞에서 쪽을 넘겨 잠깐 보이는 것이 사라질 때까지
+      if (await page.getByLabel(/^쪽 이동 막대/).count()) fail("움직이지 않았는데 쪽 이동 막대가 떠 있음 (늘 떠 있으면 안 됨)");
+      const spotPill = () => page.getByLabel(/^지금 .*쪽, 전체/).first();
+      await page.getByLabel("다음 쪽").click();
+      await page.waitForTimeout(300);
+      await page.getByLabel("이전 쪽").click();
+      await page.getByLabel(/^쪽 이동 막대/).waitFor({ timeout: 3000 });
       const all = Number((await pageNo()).split(" / ")[1]);
-      if (!(all >= 2) || (await pageNo()) !== `${all} / ${all}`) fail("쪽 이동 막대 오른쪽 끝을 눌렀는데 마지막 쪽으로 가지 않음: " + (await pageNo()));
-      await page.mouse.move(bb.x + bb.width - 2, midY);
+      const strip = await page.getByLabel(/^쪽 이동 막대/).boundingBox();
+      const pb = await spotPill().boundingBox();
+      // 막대(쪽 번호)를 잡고 오른쪽 끝까지 끌기 → 마지막 쪽에 딱 맞춰 선다
+      await page.mouse.move(pb.x + pb.width / 2, pb.y + pb.height / 2);
       await page.mouse.down();
-      await page.mouse.move(bb.x + 2, midY, { steps: 10 });
+      await page.mouse.move(strip.x + strip.width - 4, pb.y + pb.height / 2, { steps: 12 });
       await page.mouse.up();
-      await page.waitForTimeout(800);
-      if ((await pageNo()) !== `1 / ${all}`) fail("쪽 이동 막대를 왼쪽 끝으로 끌었는데 첫 쪽으로 가지 않음: " + (await pageNo()));
+      await page.waitForTimeout(1000);
+      if (!(all >= 2) || (await pageNo()) !== `${all} / ${all}`) fail("위치 막대를 끝까지 끌었는데 마지막 쪽으로 가지 않음: " + (await pageNo()));
+      await page.waitForTimeout(2500);
+      if (await page.getByLabel(/^쪽 이동 막대/).count()) fail("멈춘 뒤에도 쪽 이동 막대가 사라지지 않음");
       // 마지막 쪽을 보다가 닫고 다시 열면 그 쪽에서
-      await page.mouse.click(bb.x + bb.width - 2, midY);
-      await page.waitForTimeout(800);
       await page.getByLabel("노트 목록으로").click();
       await page.getByLabel("book 열기").first().click();
       await canvas.waitFor({ timeout: 20000 });
       await page.waitForTimeout(1500);
       if ((await pageNo()) !== `${all} / ${all}`) fail("닫았다 다시 열었는데 마지막에 보던 쪽이 아님: " + (await pageNo()));
-      // 쪽 번호를 넣어 바로 가기 ('N / 전체'를 누르면 창): 숫자가 아니면 안내, 숫자면 그 쪽으로 (요약 시험을 위해 1쪽으로)
-      await page.getByLabel(/^쪽 번호로 가기/).click();
+      // 'N / 전체'를 누르면 쪽 번호 넣는 창: 숫자가 아니면 안내, 숫자면 그 쪽으로 (요약 시험을 위해 1쪽으로)
+      await page.getByLabel("이전 쪽").click();
+      await page.getByLabel(/^쪽 이동 막대/).waitFor({ timeout: 3000 });
+      const pb2 = await spotPill().boundingBox();
+      await page.mouse.click(pb2.x + pb2.width / 2, pb2.y + pb2.height / 2);
       await page.getByLabel("갈 쪽 번호").fill("하나");
       await page.getByText("이동", { exact: true }).click();
       await page.getByText(/숫자로 넣어 주세요/).waitFor({ timeout: 3000 });
-      await page.getByLabel("갈 쪽 번호").fill("1");
+      await page.getByLabel("갈 쪽 번호").fill(String(all));
       await page.getByLabel("갈 쪽 번호").press("Enter");
       await page.getByLabel("갈 쪽 번호").waitFor({ state: "detached", timeout: 3000 });
       await page.waitForTimeout(800);
-      if ((await pageNo()) !== `1 / ${all}`) fail("쪽 번호 1을 넣었는데 1쪽으로 가지 않음: " + (await pageNo()));
-      console.log(`✓ 쪽 이동 막대: 오른쪽 끝 → ${all}쪽, 왼쪽으로 끌기 → 1쪽 / 닫았다 열면 마지막에 보던 ${all}쪽에서 / 쪽 번호 넣어 가기`);
+      if ((await pageNo()) !== `${all} / ${all}`) fail(`쪽 번호 ${all}을 넣었는데 그 쪽으로 가지 않음: ` + (await pageNo()));
+      await page.getByLabel("이전 쪽").click();
+      await page.waitForTimeout(800);
+      console.log(`✓ 위치 막대: 건너뛸 때 잠깐 보이고, 잡고 끌면 ${all}쪽까지, 멈추면 사라짐 / 'N / 전체'를 누르면 쪽 번호로 가기 / 닫았다 열면 마지막에 보던 쪽에서`);
     }
 
     // ── PDF 노트 내보내기: 원본 PDF를 그대로 두고 필기만 끝에 덧붙인다 (큰 PDF도 되게) ──

@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { clampPage, parsePageInput, openingPage, rememberPage, scrubIndex, isHighlighterTap, justAfter, otherPage, pageBg, penDoubleClick, penSwap, previewPts, previewScale, reach, ro, swatchEdge, type BgCache, type SwapSaved, colorName, widthName } from "./editor-logic.ts";
+import { clampPage, parsePageInput, openingPage, rememberPage, isHighlighterTap, justAfter, otherPage, pageBg, penDoubleClick, penSwap, previewPts, previewScale, reach, ro, swatchEdge, type BgCache, type SwapSaved, colorName, widthName } from "./editor-logic.ts";
 import { History } from "./history.ts";
 import { insertPage, removePage, type Ink, type Notebook, type Stroke } from "./model.ts";
 
@@ -155,16 +155,6 @@ test("색·굵기 단추 이름표: 도구 모음의 모든 색에 이름이 있
   assert.equal(colorName("#123456"), "#123456");
   assert.equal(widthName(0), "굵기: 가늘게");
   assert.equal(widthName(2), "굵기: 굵게");
-});
-
-test("아래쪽 쪽 이동 막대: 막대 위 자리 → 쪽 번호 (양 끝은 첫·마지막 쪽)", () => {
-  assert.equal(scrubIndex(0, 500, 92), 0);
-  assert.equal(scrubIndex(500, 500, 92), 91);
-  assert.equal(scrubIndex(250, 500, 92), 46); // 가운데쯤
-  assert.equal(scrubIndex(-30, 500, 92), 0); // 막대 밖으로 끌어도 끝에서 멈춤
-  assert.equal(scrubIndex(900, 500, 92), 91);
-  assert.equal(scrubIndex(100, 500, 1), 0);
-  assert.equal(scrubIndex(100, 0, 10), 0);
 });
 
 test("마지막에 보던 쪽 기억: 다시 열면 그 쪽, 요약에서 돌아오면 요약에서 보던 쪽, 지운 쪽이면 첫 쪽", () => {

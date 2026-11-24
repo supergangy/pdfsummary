@@ -68,10 +68,14 @@ export const A4 = { w: 595.28, h: 841.89 };
 
 export const PEN_COLORS = ["#1F2328", "#1E4FD8", "#D7263D", "#0F8A5F", "#7A3EC8", "#E67E22", "#6B7280", "#0EA5E9", "#EC4899", "#8B5A2B", "#C9A100", "#FFFFFF"];
 export const HIGHLIGHT_COLORS = ["#FFE14D", "#FF9EC7", "#8FE38F", "#7FD3FF", "#FFB86B", "#C9A7FF", "#FF7B7B", "#BDBDBD"];
-export const PEN_WIDTHS = [1.2, 2, 3.2]; // 도구 모음의 빠른 고르기
+/** 펜 굵기는 실제 펜처럼 mm로 보여 준다 (획에는 쪽 단위 pt로 저장: 1mm = 72/25.4pt) */
+export const mmToPt = (mm: number) => Math.round(((mm * 72) / 25.4) * 100) / 100;
+export const ptToMm = (pt: number) => Math.round(((pt * 25.4) / 72) * 10) / 10;
+/** 도구 모음의 빠른 고르기: 많이 쓰는 0.3·0.5·0.7mm (사용자 요청) */
+export const PEN_WIDTHS = [0.3, 0.5, 0.7].map(mmToPt);
 export const HIGHLIGHT_WIDTHS = [10, 14, 20];
-/** 설정 창의 굵기 단계 (pt) */
-export const PEN_WIDTH_STEPS = [0.6, 0.9, 1.2, 1.6, 2, 2.6, 3.2, 4, 5, 6.5, 8];
+/** 설정 창의 굵기 단계 (mm로 보이고 pt로 저장) */
+export const PEN_WIDTH_STEPS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.5, 2, 3].map(mmToPt);
 export const HIGHLIGHT_WIDTH_STEPS = [6, 8, 10, 12, 14, 17, 20, 24, 28, 34];
 export const HIGHLIGHT_OPACITY_STEPS = [0.2, 0.28, 0.38, 0.5, 0.62, 0.75];
 export const HIGHLIGHT_OPACITY = 0.38;

@@ -168,8 +168,9 @@ export function PageCanvas(props: Props) {
     const si = Lc.spreadOf[i] ?? 0;
     const sw = Lc.spreads[si * 4 + 2] || 1, sh = Lc.spreads[si * 4 + 3] || 1;
     const s = Math.min((W - MARGIN * 2) / sw, 6);
-    // 위아래로 이어 볼 때는 여러 쪽이 한눈에 보이게 더 작게까지
-    minS.value = Math.min(s, (H - MARGIN * 2) / sh) * (flowV.value ? 0.3 : 0.6);
+    // 가장 작게 줄이면 쪽이 화면 위아래에 꽉 차는 크기까지 (사용자 요청: 더 작게 줄어 빈 곳만 커지지 않게).
+    // 쪽이 길쭉해 위아래를 채우면 양옆이 잘릴 때는 쪽 폭이 꽉 차는 크기까지 — 어느 쪽이든 쪽 하나는 다 보인다
+    minS.value = Math.min(s, H / sh);
     maxS.value = s * 6;
     scale.value = s;
     fitS.value = s;

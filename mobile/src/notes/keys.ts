@@ -10,7 +10,6 @@ type Mod = {
   addListener?: (name: "onKey", fn: (e: KeyPress) => void) => { remove(): void };
 };
 const M = requireOptionalNativeModule<Mod>("Stylus");
-let listening = false;
 
 /** 키를 누를 때마다 handler (true를 돌려주면 처리한 것) */
 export function useKeys(handler: (k: KeyPress) => boolean | void, active = true) {
@@ -18,7 +17,8 @@ export function useKeys(handler: (k: KeyPress) => boolean | void, active = true)
   h.current = handler;
   useEffect(() => {
     if (!active || !M?.addListener) return;
-    if (!listening && M.listenKeys) listening = !!M.listenKeys();
+    // 화면이 새로 만들어졌을 수 있으니 매번 단다 (이미 달려 있으면 기기 쪽에서 그대로 둔다)
+    M.listenKeys?.();
     const sub = M.addListener("onKey", (e) => void h.current(e));
     return () => sub.remove();
   }, [active]);

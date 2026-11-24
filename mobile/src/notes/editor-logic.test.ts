@@ -155,6 +155,14 @@ test("색·굵기 단추 이름표: 도구 모음의 모든 색에 이름이 있
   assert.equal(colorName("#123456"), "#123456");
   assert.equal(widthName(0), "굵기: 가늘게");
   assert.equal(widthName(2), "굵기: 굵게");
+  assert.equal(widthName(0, 0.3), "굵기: 0.3mm");
+});
+
+test("펜 굵기: 도구 모음은 0.3·0.5·0.7mm, mm↔pt가 왕복해도 같은 값", async () => {
+  const { PEN_WIDTHS, PEN_WIDTH_STEPS, ptToMm } = await import("./model.ts");
+  assert.deepEqual(PEN_WIDTHS.map(ptToMm), [0.3, 0.5, 0.7]);
+  for (const w of PEN_WIDTHS) assert.ok(PEN_WIDTH_STEPS.includes(w), "빠른 고르기 굵기는 설정 창 단계에도 있다");
+  assert.equal(PEN_WIDTH_STEPS.map(ptToMm).join(","), "0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1,1.5,2,3");
 });
 
 test("마지막에 보던 쪽 기억: 다시 열면 그 쪽, 요약에서 돌아오면 요약에서 보던 쪽, 지운 쪽이면 첫 쪽", () => {

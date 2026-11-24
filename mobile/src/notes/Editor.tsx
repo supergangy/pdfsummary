@@ -12,7 +12,7 @@ import { clampPage, openingPage, parsePageInput, colorName, isHighlighterTap, ju
 import { bounds, eraseFrom, fitHighlight, hitAlong, objectAt, straighten, thin, type CharBox } from "./geometry";
 import { History, removal, type Op } from "./history";
 import {
-  HIGHLIGHT_COLORS, HIGHLIGHT_OPACITY, HIGHLIGHT_WIDTHS, PEN_COLORS, PEN_WIDTHS, PENS, TEXT_SIZES, insertPage, makeImage, makeStamp, makeTextBox, newId, removePage,
+  HIGHLIGHT_COLORS, HIGHLIGHT_OPACITY, HIGHLIGHT_WIDTHS, PEN_COLORS, PEN_WIDTHS, PENS, TEXT_SIZES, insertPage, ptToMm, makeImage, makeStamp, makeTextBox, newId, removePage,
   type Ink, type Notebook, type Paper, type Stroke,
 } from "./model";
 import { pageImage } from "./pageImage";
@@ -1150,7 +1150,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         return (
           <View style={line}>
             {widths.map((w, i) => (
-              <WidthDot key={w} size={6 + i * 6} on={w === width} onPress={() => setP(tool === "highlighter" ? { hlWidth: w } : { penWidth: w })} label={`굵기 ${i + 1}`} tipText={widthName(i)} />
+              <WidthDot key={w} size={6 + i * 6} on={w === width} onPress={() => setP(tool === "highlighter" ? { hlWidth: w } : { penWidth: w })} label={tool === "highlighter" ? `굵기 ${i + 1}` : `굵기 ${ptToMm(w)}mm`} tipText={widthName(i, tool === "highlighter" ? undefined : ptToMm(w))} />
             ))}
             {tool === "highlighter" ? (
               <ToolBtn icon="line" label="직선" on={prefs.straight} onPress={() => setP({ straight: !prefs.straight })} hint="처음 찍은 점에서 곧은 선으로" />

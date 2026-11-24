@@ -14,6 +14,7 @@ import {
   PEN_COLORS,
   PEN_WIDTH_STEPS,
   PENS,
+  ptToMm,
   type LineDash,
   type Stroke,
 } from "./model";
@@ -100,7 +101,7 @@ function PenOptions({ prefs, setP, viewScale }: { prefs: Prefs; setP: Props["set
           <Chip key={p.id} label={p.label} on={prefs.penBrush === p.id} onPress={() => setP({ penBrush: p.id })} hint={p.hint} />
         ))}
       </View>
-      <StepSlider label="굵기" steps={PEN_WIDTH_STEPS} index={nearest(PEN_WIDTH_STEPS, prefs.penWidth)} onChange={(i) => setP({ penWidth: PEN_WIDTH_STEPS[i] })} />
+      <StepSlider label="굵기" steps={PEN_WIDTH_STEPS} index={nearest(PEN_WIDTH_STEPS, prefs.penWidth)} onChange={(i) => setP({ penWidth: PEN_WIDTH_STEPS[i] })} format={(v) => `${ptToMm(v)}mm`} />
       <Section label="선 모양">
         <View style={css.dashRow} accessibilityRole="radiogroup" accessibilityLabel="선 모양">
           {(["solid", "dash", "dot"] as LineDash[]).map((d) => (
@@ -127,7 +128,7 @@ const SWAPS: { v: SwapTarget; label: string }[] = [
 function PenSwapOptions({ prefs, setP }: { prefs: Prefs; setP: Props["setP"] }) {
   const t = useTheme();
   const fav = prefs.favorite;
-  const favLabel = fav ? `${PENS.find((x) => x.id === fav.penBrush)?.label ?? "펜"} · 굵기 ${fav.penWidth}` : "아직 등록하지 않았어요";
+  const favLabel = fav ? `${PENS.find((x) => x.id === fav.penBrush)?.label ?? "펜"} · ${ptToMm(fav.penWidth)}mm` : "아직 등록하지 않았어요";
   const edge = swatchEdge(t.sunken, "rgba(0,0,0,0.18)");
   return (
     <View style={[css.swap, { borderColor: t.lineSoft }]}>

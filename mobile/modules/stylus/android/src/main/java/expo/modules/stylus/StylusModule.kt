@@ -1,11 +1,16 @@
 package expo.modules.stylus
 
 import android.content.Context
+import android.app.Activity
 import android.os.SystemClock
+import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
 import android.view.Window
 import android.widget.EditText
+import android.widget.FrameLayout
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -18,31 +23,27 @@ import expo.modules.kotlin.views.ExpoView
 // hoverEvents를 켜면 펜(마우스)이 떠 있는 자리도 알린다 (onHover: 창 기준 dp 좌표, 떠났으면 exit) — 도구 모음 단추 이름표용.
 // (안드로이드 기본 툴팁 View.tooltipText는 갤럭시탭에서 S펜을 띄워도 뜨지 않았다)
 class StylusModule : Module() {
+  fun emitKey(name: String, ctrl: Boolean, ev: KeyEvent) =
+    sendEvent("onKey", mapOf("key" to name, "ctrl" to ctrl, "shift" to ev.isShiftPressed, "alt" to ev.isAltPressed, "repeat" to (ev.repeatCount > 0)))
+
   override fun definition() = ModuleDefinition {
     Name("Stylus")
     // 키보드(블루투스·북커버 키보드) 단축키: 창의 키 입력을 엿보아 JS로 알린다.
     // React Native에는 전체 키 이벤트가 없어서 창의 Window.Callback을 감싼다 (MainActivity를 고치지 않아도 된다).
-    // 글 쓰는 칸(EditText)에 입력 중이면 건드리지 않는다
+    // 글 쓰는 칸(EditText)에 입력 중이면 건드리지 않는다.
+    // 키보드(방향키·터치패드 달린 것)를 꽂으면 안드로이드가 화면(Activity)을 새로 만들 수 있어서,
+    // 앞으로 나올 때마다 다시 단다 (한 번만 달면 새 화면에서는 단축키가 하나도 안 먹었다)
     Events("onKey")
     Function("listenKeys") {
+      wantKeys = true
       val act = appContext.currentActivity ?: return@Function false
-      act.runOnUiThread {
-        val w = act.window
-        val base = w.callback
-        if (base !is KeyTap) {
-          w.callback = KeyTap(base) { ev ->
-            if (act.currentFocus is EditText) return@KeyTap false
-            val name = keyName(ev) ?: return@KeyTap false
-            val ctrl = ev.isCtrlPressed || ev.isMetaPressed
-            if (ev.action == KeyEvent.ACTION_DOWN) {
-              sendEvent("onKey", mapOf("key" to name, "ctrl" to ctrl, "shift" to ev.isShiftPressed, "alt" to ev.isAltPressed, "repeat" to (ev.repeatCount > 0)))
-            }
-            // 앱이 쓰는 키는 안드로이드 기본 동작(단추 사이 초점 옮기기 등)으로 넘기지 않는다
-            consumes(name, ctrl)
-          }
-        }
-      }
+      act.runOnUiThread { attachKeys(act) }
       true
+    }
+    OnActivityEntersForeground {
+      if (!wantKeys) return@OnActivityEntersForeground
+      val act = appContext.currentActivity ?: return@OnActivityEntersForeground
+      act.runOnUiThread { attachKeys(act) }
     }
     View(StylusView::class) {
       Events("onButton", "onHover")
@@ -52,11 +53,74 @@ class StylusModule : Module() {
 }
 
 /** 창의 키 입력을 먼저 본다. on이 true면 그 키는 여기서 끝 */
-class KeyTap(private val base: Window.Callback, private val on: (KeyEvent) -> Boolean) : Window.Callback by base {
+class KeyTap(private val base: Window.Callback, val on: (KeyEvent) -> Boolean) : Window.Callback by base {
   override fun dispatchKeyEvent(event: KeyEvent): Boolean {
     if (on(event)) return true
     return base.dispatchKeyEvent(event)
   }
+}
+
+/**
+ * 보이지 않는 1×1 칸. 다른 칸(글 쓰는 칸 등)이 초점을 갖지 않을 때 초점을 쥐고 있다가 키를 가장 먼저 받는다.
+ * 이게 없으면 펜·손으로 화면을 만진 뒤 처음 누른 화살표·PageUp·Home 키를 안드로이드가
+ * '키보드 조작 모드로 바꾸기'에 써 버려 앱까지 오지 않았다 (두 번 눌러야 한 쪽 넘어감).
+ * 키보드 앱(삼성 키보드)보다도 먼저 받는다.
+ */
+class KeyCatcher(context: Context, private val on: (KeyEvent) -> Boolean) : View(context) {
+  init {
+    isFocusable = true
+    isFocusableInTouchMode = true
+    importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+    defaultFocusHighlightEnabled = false
+  }
+  override fun dispatchKeyEventPreIme(event: KeyEvent): Boolean = on(event) || super.dispatchKeyEventPreIme(event)
+  override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
+    super.onWindowFocusChanged(hasWindowFocus)
+    if (hasWindowFocus) grabIfFree()
+  }
+  /** 아무도 초점을 갖지 않았으면 쥔다 (글 쓰는 칸에서 빠져나온 뒤 등) */
+  fun grabIfFree() {
+    post { if (rootView.findFocus() == null) requestFocus() }
+  }
+}
+
+/** 이 화면(Activity)에 키 받는 장치를 단다. 이미 달려 있으면 그대로 */
+private var wantKeys = false
+private var lastKey = Triple(0L, 0L, 0)
+
+fun StylusModule.attachKeys(act: Activity) {
+  val w = act.window ?: return
+  val handle = { ev: KeyEvent ->
+    if (act.currentFocus is EditText) false
+    else {
+      val name = keyName(ev)
+      if (name == null) false
+      else {
+        val ctrl = ev.isCtrlPressed || ev.isMetaPressed
+        // 같은 키가 두 곳(먼저 받는 칸·창)을 거쳐도 한 번만 알린다
+        val id = Triple(ev.downTime, ev.eventTime, ev.keyCode)
+        if (ev.action == KeyEvent.ACTION_DOWN && lastKey != id) {
+          lastKey = id
+          if (consumes(name, ctrl)) Log.i("PdfKeys", "단축키 " + (if (ctrl) "Ctrl+" else "") + name)
+          emitKey(name, ctrl, ev)
+        }
+        // 앱이 쓰는 키는 안드로이드 기본 동작(단추 사이 초점 옮기기 등)으로 넘기지 않는다
+        consumes(name, ctrl)
+      }
+    }
+  }
+  if (w.callback !is KeyTap) w.callback = KeyTap(w.callback, handle)
+  val decor = w.decorView as? ViewGroup ?: return
+  var catcher: KeyCatcher? = null
+  for (i in 0 until decor.childCount) (decor.getChildAt(i) as? KeyCatcher)?.let { catcher = it }
+  if (catcher == null) {
+    val c = KeyCatcher(act, handle)
+    decor.addView(c, FrameLayout.LayoutParams(1, 1))
+    // 글 쓰는 칸 등에서 초점이 빠져 아무도 없으면 다시 쥔다
+    decor.viewTreeObserver.addOnGlobalFocusChangeListener { _, now -> if (now == null) c.grabIfFree() }
+    catcher = c
+  }
+  catcher?.grabIfFree()
 }
 
 /** 키 이름: 글자·숫자는 소문자 한 글자, 그 밖에는 이름 (앱이 쓰지 않는 키는 null) */

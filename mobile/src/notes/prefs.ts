@@ -1,5 +1,5 @@
 // 도구 설정(마지막에 쓴 펜·색·굵기, 손가락으로 쓰기)을 기억한다.
-import { HIGHLIGHT_COLORS, HIGHLIGHT_OPACITY, HIGHLIGHT_WIDTHS, PEN_COLORS, PEN_WIDTHS, type LineDash, type PenBrush } from "./model";
+import { HIGHLIGHT_COLORS, HIGHLIGHT_OPACITY, HIGHLIGHT_WIDTHS, PEN_COLORS, PEN_WIDTH_STEPS, PEN_WIDTHS, type LineDash, type PenBrush } from "./model";
 import type { PenLook, SwapTarget } from "./editor-logic";
 import type { PageFlow } from "./pageLayout";
 import type { ToolbarDock } from "./toolbar";
@@ -74,10 +74,18 @@ export const DEFAULT_PREFS: Prefs = {
 
 const PATH = "prefs.json";
 
+/** 예전 판에서 고른 펜 굵기(pt)를 가장 가까운 mm 단계로 (0.3·0.5·0.7mm 단추가 켜져 보이게) */
+export function snapWidth(w: number): number {
+  if (!Number.isFinite(w) || w <= 0) return DEFAULT_PREFS.penWidth;
+  return PEN_WIDTH_STEPS.reduce((a, b) => (Math.abs(b - w) < Math.abs(a - w) ? b : a));
+}
+
 export async function loadPrefs(): Promise<Prefs> {
   try {
     const t = await deviceFs.readText(PATH);
-    return t ? { ...DEFAULT_PREFS, ...JSON.parse(t) } : DEFAULT_PREFS;
+    if (!t) return DEFAULT_PREFS;
+    const p: Prefs = { ...DEFAULT_PREFS, ...JSON.parse(t) };
+    return { ...p, penWidth: snapWidth(p.penWidth) };
   } catch {
     return DEFAULT_PREFS;
   }

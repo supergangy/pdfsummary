@@ -163,6 +163,7 @@ export function colorName(hex: string): string {
 }
 
 /** 굵기 단추 이름표 (도구 모음의 빠른 굵기 세 개) */
-export function widthName(i: number): string {
+export function widthName(i: number, mm?: number): string {
+  if (mm !== undefined) return `굵기: ${mm}mm`; // 펜은 실제 펜처럼 mm로
   return `굵기: ${["가늘게", "보통", "굵게"][i] ?? i + 1}`;
 }

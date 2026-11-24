@@ -13,7 +13,7 @@ import { Canvas, Circle, DashPathEffect, Fill, FilterMode, Group, Image, MipmapM
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PixelRatio, Platform, Text, View, type LayoutChangeEvent } from "react-native";
 import { GestureDetector, PointerType, usePanGesture, usePinchGesture, useSimultaneousGestures } from "react-native-gesture-handler";
-import Animated, { cancelAnimation, Easing, useAnimatedReaction, useAnimatedStyle, useDerivedValue, useSharedValue, withDecay, withTiming, type SharedValue } from "react-native-reanimated";
+import Animated, { cancelAnimation, Easing, useAnimatedReaction, useAnimatedStyle, useDerivedValue, useSharedValue, withDecay, withDelay, withTiming, type SharedValue } from "react-native-reanimated";
 import { scheduleOnRN, scheduleOnUI } from "react-native-worklets";
 
 import { StylusView } from "../../modules/stylus";
@@ -22,7 +22,7 @@ import { penDoubleClick } from "./editor-logic";
 import { straighten } from "./geometry";
 import type { Ink, LineDash, Page, Stroke } from "./model";
 import { docLayout, nearestSpread, pageAt, pagesIn, pageTurnTarget, type DocLayout, type PageFlow } from "./pageLayout";
-import { inkPicture, paperPicture, type Fade, type PathCache } from "./render";
+import { inkPicture, paperPicture, usePaperFont, type Fade, type PathCache } from "./render";
 
 export type ToolName = "pen" | "highlighter" | "eraser" | "lasso" | "text";
 /** 움직이는 동안 쓸 쪽 사진에 담을 것 */
@@ -254,6 +254,16 @@ export function PageCanvas(props: Props) {
     return nearestSpread(spreads.value, (W / 2 - tx.value) / s, (H / 2 - ty.value) / s);
   }, (cur, prev) => {
     if (cur >= 0 && prev !== null && cur !== prev) scheduleOnRN(onCenter, cur);
+  });
+
+  // ── 지금 어디쯤인지: 움직이는 동안 오른쪽(가로 넘김이면 아래)에 막대와 '3 / 12' ──
+  const [spotPage, setSpotPage] = useState(activeIdx);
+  useAnimatedReaction(() => {
+    const s = scale.value, W = vw.value, H = vh.value;
+    if (!W || !H) return -1;
+    return pageAt(rects.value, (W / 2 - tx.value) / s, (H / 2 - ty.value) / s);
+  }, (cur, prev) => {
+    if (cur >= 0 && cur !== prev) scheduleOnRN(setSpotPage, cur);
   });
 
   // ── 입력 ────────────────────────────────────────────────
@@ -733,11 +743,63 @@ export function PageCanvas(props: Props) {
         {selIdx >= 0 && sel ? (
           <TextLayer strokes={selStrokes.filter((s) => sel.ids.has(s.id))} hidden={hidden} page={pages[selIdx]} ox={selX} oy={selY} tx={tx} ty={ty} scale={scale} dx={dragX} dy={dragY} />
         ) : null}
+        <ScrollSpot tx={tx} ty={ty} scale={scale} vw={vw} vh={vh} docW={docW} docH={docH} vertical={flow === "v"} moving={moving} label={`${Math.min(spotPage, pages.length - 1) + 1} / ${pages.length}`} />
       </View>
     </GestureDetector>
     </StylusView>
   );
 }
+
+/** 지금 보는 자리: 움직이는 동안만 막대(문서 전체에서 화면이 있는 곳)와 쪽 번호를 보이고, 멈추면 1초 뒤 사라진다 */
+function ScrollSpot({ tx, ty, scale, vw, vh, docW, docH, vertical, moving, label }: {
+  tx: SharedValue<number>; ty: SharedValue<number>; scale: SharedValue<number>; vw: SharedValue<number>; vh: SharedValue<number>;
+  docW: SharedValue<number>; docH: SharedValue<number>; vertical: boolean; moving: SharedValue<boolean>; label: string;
+}) {
+  const show = useSharedValue(0);
+  useAnimatedReaction(() => moving.value, (m, prev) => {
+    if (m === prev) return;
+    show.value = m ? withTiming(1, { duration: 120 }) : withDelay(1000, withTiming(0, { duration: 400 }));
+  });
+  /** [막대 시작, 막대 길이, 보이는 칸 길이] (화면 픽셀) */
+  const bar = useDerivedValue(() => {
+    const s = scale.value;
+    const view = vertical ? vh.value : vw.value;
+    const doc = (vertical ? docH.value : docW.value) * s;
+    const track = Math.max(0, view - 24);
+    if (!view || doc <= view + 1) return [0, 0, track];
+    const len = Math.max(40, (track * view) / doc);
+    const p = Math.min(1, Math.max(0, -(vertical ? ty.value : tx.value) / (doc - view)));
+    return [12 + p * (track - len), len, track];
+  });
+  const thumb = useAnimatedStyle(() => {
+    const [at, len] = bar.value;
+    return {
+      opacity: len > 0 ? show.value : 0,
+      ...(vertical ? { top: at, height: len } : { left: at, width: len }),
+    };
+  });
+  const pill = useAnimatedStyle(() => {
+    const [at, len] = bar.value;
+    const mid = len > 0 ? at + len / 2 : (vertical ? vh.value : vw.value) / 2;
+    return { opacity: show.value, ...(vertical ? { top: mid - 15 } : { left: mid - 36 }) };
+  });
+  return (
+    <>
+      <Animated.View pointerEvents="none" style={[vertical ? sx.thumbV : sx.thumbH, thumb]} />
+      <Animated.View pointerEvents="none" style={[vertical ? sx.pillV : sx.pillH, pill]}>
+        <Text style={sx.pillText} accessibilityLabel={`지금 ${label.replace(" / ", "쪽, 전체 ")}쪽`}>{label}</Text>
+      </Animated.View>
+    </>
+  );
+}
+
+const sx = {
+  thumbV: { position: "absolute" as const, right: 3, width: 5, borderRadius: 3, backgroundColor: "rgba(60,64,72,0.55)" },
+  thumbH: { position: "absolute" as const, bottom: 3, height: 5, borderRadius: 3, backgroundColor: "rgba(60,64,72,0.55)" },
+  pillV: { position: "absolute" as const, right: 14, height: 30, minWidth: 64, paddingHorizontal: 12, borderRadius: 15, backgroundColor: "rgba(32,33,36,0.82)", alignItems: "center" as const, justifyContent: "center" as const },
+  pillH: { position: "absolute" as const, bottom: 14, height: 30, minWidth: 72, paddingHorizontal: 12, borderRadius: 15, backgroundColor: "rgba(32,33,36,0.82)", alignItems: "center" as const, justifyContent: "center" as const },
+  pillText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" as const, fontVariant: ["tabular-nums" as const] },
+};
 
 /** 쪽 하나: 테두리·흰 종이·바탕 그림(PDF)·속지·필기. 필기가 많으면 움직이는 동안 쪽 사진으로 */
 function PageLayer({ page, x, y, strokes, hidden, bg, paths, fade, dark, moving, busy, fitS }: {
@@ -745,7 +807,8 @@ function PageLayer({ page, x, y, strokes, hidden, bg, paths, fade, dark, moving,
   moving: SharedValue<boolean>; busy: SharedValue<number>; fitS: SharedValue<number>;
 }) {
   const image = useImage(bg ?? undefined);
-  const paper = useMemo(() => paperPicture(page), [page]);
+  const tf = usePaperFont([page.paper]);
+  const paper = useMemo(() => paperPicture(page, tf), [page, tf]);
   // 이 쪽 획 중에 감춘 것이 없으면 늘 같은 빈 묶음 → 다른 쪽을 지우는 동안 이 쪽 그림을 다시 만들지 않는다
   const own = useMemo(() => (hidden.size && strokes.some((s) => hidden.has(s.id)) ? hidden : NO_IDS), [strokes, hidden]);
   // 재생 중 흐리게: 이 쪽에 그 녹음으로 쓴 획이 있을 때만 (없는 쪽은 그림을 다시 만들지 않게)
@@ -864,7 +927,9 @@ function PageLayer({ page, x, y, strokes, hidden, bg, paths, fade, dark, moving,
 
   return (
     <Group transform={[{ translateX: x }, { translateY: y }]}>
-      <Rect x={-0.5} y={-0.5} width={page.w + 1} height={page.h + 1} color={dark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.10)"} />
+      {/* 쪽 사이가 또렷하게: 아래·오른쪽으로 옅은 그림자 + 테두리 */}
+      <Rect x={1.5} y={2.5} width={page.w} height={page.h} color={dark ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.07)"} />
+      <Rect x={-0.75} y={-0.75} width={page.w + 1.5} height={page.h + 1.5} color={dark ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.20)"} />
       <Rect x={0} y={0} width={page.w} height={page.h} color="#FFFFFF" />
       <Group clip={sharpClip}>
         {image ? <Image image={image} x={0} y={0} width={page.w} height={page.h} fit="fill" /> : null}

@@ -2,6 +2,7 @@
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type Ref, type RefObject } from "react";
 import { ActivityIndicator, Alert, AppState, BackHandler, Image, Modal, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View, type HostInstance } from "react-native";
 import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
+import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { pageText } from "../../modules/pdf-pages";
@@ -169,47 +170,75 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     if (tipTimer.current) clearTimeout(tipTimer.current);
   }, []);
 
-  // ── 도구 모음 옮기기: 손잡이를 끌어 놓은 자리에 붙인다 ─────────────
-  // 끄는 동안은 도구 모음은 그대로 두고 '여기에 놓기' 표시만 손가락을 따라간다 (끄는 손잡이가 사라지면 끌기가 끊기므로)
+  // ── 도구 모음 옮기기: 손잡이를 끌거나 꾹 눌러 집으면 도구 모음이 손가락을 따라오고, 놓은 자리에 붙인다 ──
+  // 끄는 동안 도구 모음은 원래 자리에 그대로 두고 화면에서만 밀어 옮긴다 (빼고 다시 그리면 끄는 손잡이가 사라져 끌기가 끊긴다).
+  // 가장자리 가까이 가면 그쪽에 '붙이기' 띠를 보인다
   const [ghost, setGhost] = useState<{ x: number; y: number; dock: ToolbarDock } | null>(null);
-  const dragGeo = useRef<{ root: number[]; barBottom: number } | null>(null);
+  const [lifted, setLifted] = useState(false);
+  const tbDX = useSharedValue(0);
+  const tbDY = useSharedValue(0);
+  const liftStyle = useAnimatedStyle(() => ({ transform: [{ translateX: tbDX.value }, { translateY: tbDY.value }] }));
+  const dragGeo = useRef<{ root: number[]; barBottom: number; grab: [number, number] } | null>(null);
   const stripRef = useRef<HostInstance>(null); // 왼쪽·오른쪽·떠 있는 도구 모음
   const [floatSize, setFloatSize] = useState({ w: 400, h: 52 });
+  const floatSizeRef = useRef(floatSize);
+  floatSizeRef.current = floatSize;
   const [tbEdit, setTbEdit] = useState(false); // 도구 모음 편집 창
   /** 도구 모음 집어 옮기기: 시작·움직임·놓기 (손잡이 끌기와 도구 모음 꾹 누르기가 함께 쓴다) */
   const tbDrag = useMemo(() => {
-    const last = { x: 0, y: 0, x0: 0, y0: 0 };
+    const last = { x: 0, y: 0, x0: 0, y0: 0, dock: "" };
     const where = (x: number, y: number) => {
       const g = dragGeo.current;
       if (!g) return null;
       return { x: x - g.root[0], y: y - g.root[1], dock: dockAt(x - g.root[0], y - g.root[1], g.root[2], g.barBottom - g.root[1]) };
     };
+    /** 붙일 자리가 바뀔 때만 화면을 다시 그린다 (움직일 때마다 편집 화면 전체를 다시 그리지 않게) */
+    const showWhere = (x: number, y: number) => {
+      const w = where(x, y);
+      if ((w?.dock ?? "") === last.dock) return;
+      last.dock = w?.dock ?? "";
+      setGhost(w);
+    };
+    const reset = () => {
+      setGhost(null);
+      setLifted(false);
+      tbDX.value = 0;
+      tbDY.value = 0;
+      dragGeo.current = null;
+      last.dock = "";
+    };
     return {
       begin: (x: number, y: number) => {
         hideTip();
-        Object.assign(last, { x, y, x0: x, y0: y });
-        void Promise.all([winOf(rootRef.current), winOf(barRef.current)]).then(([root, bar]) => {
+        Object.assign(last, { x, y, x0: x, y0: y, dock: "" });
+        setLifted(true);
+        void Promise.all([winOf(rootRef.current), winOf(barRef.current), winOf(stripRef.current)]).then(([root, bar, strip]) => {
           // 윗줄이 없으면(왼쪽·오른쪽·떠 있게) 화면 맨 위 가까이가 '위에 붙이기'
-          if (root) dragGeo.current = { root, barBottom: bar ? bar[1] + bar[3] : root[1] + 8 };
-          setGhost(where(last.x, last.y));
+          const box = bar ?? strip;
+          // 도구 모음 안에서 손가락이 잡은 자리 (떠 있게 놓을 때 그 자리를 손가락 밑에 둔다)
+          const grab: [number, number] = box ? [x - box[0], y - box[1]] : [20, 22];
+          if (root) dragGeo.current = { root, barBottom: bar ? bar[1] + bar[3] : root[1] + 8, grab };
+          showWhere(last.x, last.y);
         });
       },
       move: (x: number, y: number) => {
         last.x = x;
         last.y = y;
-        setGhost(where(x, y));
+        tbDX.value = x - last.x0;
+        tbDY.value = y - last.y0;
+        showWhere(x, y);
       },
       end: () => {
         const w = where(last.x, last.y);
-        setGhost(null);
-        dragGeo.current = null;
+        const grab = dragGeo.current?.grab ?? [20, 22];
+        const size = floatSizeRef.current;
+        reset();
         if (!w || Math.abs(last.x - last.x0) + Math.abs(last.y - last.y0) < 8) return; // 살짝 누르기만 했다
-        setP(w.dock === "float" ? { toolbarDock: "float", toolbarFloat: { x: w.x - 20, y: w.y - 22 } } : { toolbarDock: w.dock });
+        // 떠 있게: 잡은 자리가 손가락 밑에 오게 (윗줄처럼 길던 것이 짧아지면 잡은 자리를 막대 안으로 줄인다)
+        const gx = Math.min(grab[0], size.w - 24), gy = Math.min(grab[1], size.h - 12);
+        setP(w.dock === "float" ? { toolbarDock: "float", toolbarFloat: { x: w.x - gx, y: w.y - gy } } : { toolbarDock: w.dock });
       },
-      cancel: () => {
-        setGhost(null);
-        dragGeo.current = null;
-      },
+      cancel: reset,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1136,7 +1165,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   );
   // 왼쪽·오른쪽에 붙인 도구 모음: 맨 위 돌아가기·손잡이, 가운데 도구, 맨 아래 쪽·더 보기·요약 (윗줄은 없앤다)
   const sideStrip = (
-    <StylusView onHover={onBarHover}>
+    <Animated.View style={[lifted && sx.lifted, liftStyle]}>
+    <StylusView onHover={onBarHover} style={{ flex: 1 }}>
       <GestureDetector gesture={holdMove}>
         <View ref={stripRef} collapsable={false} style={[sx.sideBar, { borderColor: t.lineSoft, backgroundColor: t.bg }, dock === "left" ? sx.sideLeft : sx.sideRight]}>
           {backBtn}
@@ -1152,6 +1182,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         </View>
       </GestureDetector>
     </StylusView>
+    </Animated.View>
   );
   const fl = clampFloat(prefs.toolbarFloat?.x ?? 80, prefs.toolbarFloat?.y ?? 120, floatSize.w, floatSize.h, win.width, win.height, 4);
 
@@ -1162,6 +1193,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
           노트 이름은 자리를 차지하지 않게 ⋯ 메뉴의 '이름 바꾸기'로. 좁으면 도구 모음만 옆으로 민다.
           왼쪽·오른쪽에 붙이거나 띄우면 윗줄을 없애고 그 자리를 쪽 화면이 쓴다 */}
       {dock === "top" && (
+        <Animated.View style={[lifted && sx.lifted, liftStyle]}>
         <StylusView onHover={onBarHover}>
           <GestureDetector gesture={holdMove}>
             <View ref={barRef} collapsable={false} style={[sx.toolBar, { borderColor: t.lineSoft, backgroundColor: t.bg, paddingHorizontal: pad }]}>
@@ -1176,6 +1208,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
             </View>
           </GestureDetector>
         </StylusView>
+        </Animated.View>
       )}
 
       <View style={sx.body}>
@@ -1220,7 +1253,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
 
       {/* 떠 있는 도구 모음: 손잡이로 끌어 아무 데나 */}
       {dock === "float" && (
-        <StylusView onHover={onBarHover} style={[sx.floatWrap, { left: fl.x, top: fl.y }]}>
+        <Animated.View style={[sx.floatWrap, { left: fl.x, top: fl.y }, lifted && sx.lifted, liftStyle]}>
+        <StylusView onHover={onBarHover}>
           <GestureDetector gesture={holdMove}>
             <View
               ref={stripRef}
@@ -1272,10 +1306,12 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
             </View>
           </GestureDetector>
         </StylusView>
+        </Animated.View>
       )}
-      {ghost && (
-        <View pointerEvents="none" style={[sx.ghost, { left: ghost.x - 70, top: ghost.y - 22, borderColor: t.ink, backgroundColor: t.card }]}>
-          <Text style={[type.caption, { color: t.ink }]}>{ghost.dock === "float" ? "여기에 띄우기" : `${DOCKS.find((d) => d.id === ghost.dock)?.label}에 붙이기`}</Text>
+      {/* 끄는 중 가장자리 가까이: 그쪽에 붙는다는 띠 (가운데면 놓은 자리에 그대로 뜬다) */}
+      {ghost && ghost.dock !== "float" && (
+        <View pointerEvents="none" style={[sx.dockZone, ghost.dock === "top" ? sx.dockTop : ghost.dock === "left" ? sx.dockLeft : sx.dockRight, { borderColor: t.accent, backgroundColor: t.soft }]}>
+          <Text style={[type.caption, { color: t.accent, fontWeight: "700" }]}>{`${DOCKS.find((d) => d.id === ghost.dock)?.label}에 붙이기`}</Text>
         </View>
       )}
 
@@ -1793,7 +1829,12 @@ const sx = StyleSheet.create({
   floatWrap: { position: "absolute", zIndex: 15 },
   floatBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 6, paddingVertical: 4, borderRadius: radius.xl },
   grip: { width: 22, height: 36, alignItems: "center", justifyContent: "center" },
-  ghost: { position: "absolute", zIndex: 30, width: 140, height: 44, borderRadius: radius.md, borderWidth: 2, borderStyle: "dashed", alignItems: "center", justifyContent: "center" },
+  // 끄는 동안 도구 모음을 다른 것들 위로 띄운다
+  lifted: { zIndex: 40, elevation: 12, shadowColor: "#000", shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, opacity: 0.94 },
+  dockZone: { position: "absolute", zIndex: 30, borderWidth: 2, borderStyle: "dashed", borderRadius: radius.md, alignItems: "center", justifyContent: "center", opacity: 0.9 },
+  dockTop: { top: 4, left: 8, right: 8, height: 56 },
+  dockLeft: { top: 8, bottom: 8, left: 4, width: 72 },
+  dockRight: { top: 8, bottom: 8, right: 4, width: 72 },
   // 녹음 중 단추: 빨간 점 + 시간
   recLive: { flexDirection: "row", alignItems: "center", gap: 6, height: 36, paddingHorizontal: 10, borderRadius: radius.pill, backgroundColor: "#FDE8EA" },
   recDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: "#E5484D" },

@@ -172,6 +172,20 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
       await page.mouse.up();
       await page.waitForTimeout(700);
     };
+    // 끄는 동안 도구 모음이 손가락을 따라온다 (제자리에 돌아와 놓으면 그대로)
+    {
+      const g = await page.getByLabel(/^도구 모음 옮기기/).boundingBox();
+      const before = await eraserBtn.boundingBox();
+      await page.mouse.move(center(g), g.y + g.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(center(g) + 200, g.y + g.height / 2 + 60, { steps: 10 });
+      await page.waitForTimeout(150);
+      const mid = await eraserBtn.boundingBox();
+      await page.mouse.move(center(g), g.y + g.height / 2, { steps: 6 });
+      await page.mouse.up();
+      await page.waitForTimeout(500);
+      if (!(mid.x - before.x > 150 && mid.y - before.y > 40)) fail(`도구 모음을 끄는 동안 손가락을 따라오지 않음 (${before.x.toFixed(0)},${before.y.toFixed(0)} → ${mid.x.toFixed(0)},${mid.y.toFixed(0)})`);
+    }
     await dragGrip(vp.width - 20, 420);
     eB = await eraserBtn.boundingBox();
     if (!(eB.x > vp.width - 70)) fail(`손잡이를 오른쪽 끝에 놓았는데 오른쪽에 붙지 않음 (지우개 x ${eB.x.toFixed(0)})`);
@@ -214,7 +228,7 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await closeEdit();
     eB = await eraserBtn.boundingBox(), hB = await hlBtn.boundingBox();
     if (!(eB.x > hB.x && eB.y < 60) || (await lassoBtn.count()) !== 1) fail("'처음대로'로 도구 모음이 처음 모습(위, 기본 순서, 올가미 보임)으로 돌아오지 않음");
-    console.log("✓ 이름표: 펜 단추 가운데 밑·색 이름 / 도구 모음 편집: 순서·숨기기·왼쪽에 붙이기(이름표는 옆에)·손잡이로 오른쪽·떠 있게(두 줄)·꾹 눌러 옮기기·윗줄 없애기·접기·처음대로");
+    console.log("✓ 이름표: 펜 단추 가운데 밑·색 이름 / 도구 모음 편집: 순서·숨기기·왼쪽에 붙이기(이름표는 옆에)·끄는 동안 따라오기·손잡이로 오른쪽·떠 있게(두 줄)·꾹 눌러 옮기기·윗줄 없애기·접기·처음대로");
     await page.mouse.move(x0, y0);
     await page.mouse.down();
     for (let i = 1; i <= 20; i++) await page.mouse.move(x0 + i * 10, y0 + (i % 2 ? 15 : 0), { steps: 2 });
@@ -452,8 +466,15 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     await page.getByLabel("모든 노트", { exact: true }).click();
     await page.getByText("＋ 새 노트").click();
     await page.getByLabel("새 노트 이름").fill("둘째 노트");
+    if ((await page.getByPlaceholder("노트 이름", { exact: true }).count()) !== 1) fail("새 노트 이름 칸의 안내 글이 '노트 이름'이 아님 (예시 글이 남음)");
+    await page.getByLabel("속지: 월간 달력").click();
     await page.getByText("만들기", { exact: true }).click();
     await canvas.waitFor({ timeout: 20000 });
+    {
+      const files = await idb(page);
+      const nb2 = Object.entries(files).filter(([k, v]) => k.endsWith("/notebook.json") && v).map(([, v]) => JSON.parse(v)).find((n) => n.title === "둘째 노트");
+      if (!nb2 || nb2.pages[0].paper !== "month") fail(`'월간 달력' 서식으로 만들었는데 쪽 속지가 ${nb2?.pages[0].paper}`);
+    }
     await page.getByLabel("노트 목록으로").click();
     await card("둘째 노트").waitFor({ timeout: 10000 });
     const xOf = async (title) => (await card(title).boundingBox()).x;
@@ -511,6 +532,7 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
 
     // ── 서버 설정 ──
     await page.getByText("설정", { exact: true }).click();
+    await page.getByText("요약 서버 · API 키 설정").click();
     await page.waitForTimeout(800);
     await page.getByLabel("서버 주소").fill(`http://127.0.0.1:${apiPort}`);
     await page.getByLabel("접속 코드").fill(CODE);

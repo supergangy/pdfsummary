@@ -26,7 +26,7 @@ export type Theme = {
 export const LIGHT: Theme = {
   dark: false,
   bg: "#FFFFFF", card: "#FFFFFF", sunken: "#F5F5F5", ink: "#212121", sub: "#424242", muted: "#757575",
-  line: "#E0E0E0", lineSoft: "#EEEEEE", accent: "#6A3DF5", accentInk: "#FFFFFF", soft: "#F3EFFF", canvas: "#F2F2F2",
+  line: "#E0E0E0", lineSoft: "#EEEEEE", accent: "#6A3DF5", accentInk: "#FFFFFF", soft: "#F3EFFF", canvas: "#E6E8EC",
   ok: "#1E8E3E", bad: "#D93025", warn: "#B26A00",
 };
 export const DARK: Theme = {

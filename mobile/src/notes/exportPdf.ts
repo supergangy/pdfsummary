@@ -5,6 +5,7 @@ import { BlendMode, LineCapStyle, PDFDocument, degrees, rgb, type PDFFont, type 
 
 import { penOutline, strokeDraw } from "./geometry.ts";
 import { type Ink, type Notebook, type Paper, type Stroke } from "./model.ts";
+import { paperHasText, paperMarks } from "./paperTemplates.ts";
 
 type Box = { x: number; y: number; width: number; height: number };
 
@@ -117,17 +118,27 @@ function drawStamp(page: PDFPage, s: Stroke, crop: Box, rot: number, font: PDFFo
   page.drawText(text, { x: X, y: Y, size: s.width, font, color: hex(s.color), rotate: degrees(((rot % 360) + 360) % 360) });
 }
 
-function drawPaper(page: PDFPage, paper: Paper | undefined, w: number, h: number) {
-  if (!paper || paper === "plain") return;
-  if (paper === "lined") {
-    for (let y = 84; y < h - 30; y += 26) page.drawLine({ start: { x: 36, y: h - y }, end: { x: w - 36, y: h - y }, thickness: 0.6, color: rgb(0.73, 0.83, 0.93) });
-    page.drawLine({ start: { x: 64, y: h - 40 }, end: { x: 64, y: 30 }, thickness: 0.6, color: rgb(0.95, 0.72, 0.72) });
-  } else if (paper === "grid") {
-    for (let x = 18; x < w; x += 18) page.drawLine({ start: { x, y: 0 }, end: { x, y: h }, thickness: 0.5, color: rgb(0.84, 0.87, 0.91) });
-    for (let y = 18; y < h; y += 18) page.drawLine({ start: { x: 0, y: h - y }, end: { x: w, y: h - y }, thickness: 0.5, color: rgb(0.84, 0.87, 0.91) });
-  } else {
-    for (let x = 18; x < w; x += 18) for (let y = 18; y < h; y += 18) page.drawCircle({ x, y: h - y, size: 0.8, color: rgb(0.72, 0.75, 0.78) });
+/** 빈 쪽의 속지 무늬·서식 (화면과 같은 목록을 그린다). 칸 이름 글은 글꼴이 있을 때만 */
+function drawPaper(page: PDFPage, paper: Paper | undefined, w: number, h: number, font: PDFFont | null) {
+  for (const m of paperMarks(paper, w, h)) {
+    if (m.k === "line") page.drawLine({ start: { x: m.x1, y: h - m.y1 }, end: { x: m.x2, y: h - m.y2 }, thickness: m.w, color: hex(m.color) });
+    else if (m.k === "dot") page.drawCircle({ x: m.x, y: h - m.y, size: m.r, color: hex(m.color) });
+    else if (m.k === "rect") {
+      page.drawRectangle({
+        x: m.x, y: h - m.y - m.h, width: m.w, height: m.h,
+        ...(m.fill ? { color: hex(m.fill) } : {}),
+        ...(m.stroke ? { borderColor: hex(m.stroke), borderWidth: m.sw ?? 1 } : {}),
+      });
+    } else if (font) {
+      const x = m.center ? m.x - font.widthOfTextAtSize(m.text, m.size) / 2 : m.x;
+      page.drawText(m.text, { x, y: h - m.y, size: m.size, font, color: hex(m.color) });
+    }
   }
+}
+
+/** 이 노트를 PDF로 만들 때 한글 글꼴이 필요한지 (글상자·도장, 또는 칸 이름이 있는 서식 쪽) */
+export function needsKoreanFont(nb: Notebook, ink: Ink): boolean {
+  return Object.values(ink).some((ss) => ss.some((s) => s.tool === "text" && s.text)) || nb.pages.some((p) => p.pdf === undefined && paperHasText(p.paper));
 }
 
 /**
@@ -136,9 +147,8 @@ function drawPaper(page: PDFPage, paper: Paper | undefined, w: number, h: number
  */
 export async function buildPdf(nb: Notebook, ink: Ink, source: Uint8Array | null, fontBytes?: Uint8Array | null): Promise<Uint8Array> {
   const out = await PDFDocument.create();
-  const hasText = Object.values(ink).some((ss) => ss.some((s) => s.tool === "text" && s.text));
   let font: PDFFont | null = null;
-  if (hasText && fontBytes) {
+  if (needsKoreanFont(nb, ink) && fontBytes) {
     out.registerFontkit(fontkit);
     // 글꼴을 통째로 넣는다. '쓴 글자만 넣기'(subset)는 나눔고딕에서 글자 모양을 망가뜨려
     // 글상자 글이 대부분 안 보였다. 대신 글상자가 있는 PDF는 0.7MB쯤 커진다.
@@ -170,7 +180,7 @@ export async function buildPdf(nb: Notebook, ink: Ink, source: Uint8Array | null
       out.addPage(page);
     } else {
       page = out.addPage([p.w, p.h]);
-      drawPaper(page, p.paper, p.w, p.h);
+      drawPaper(page, p.paper, p.w, p.h, font);
     }
     const crop = page.getCropBox();
     const rot = page.getRotation().angle;

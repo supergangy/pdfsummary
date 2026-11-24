@@ -35,7 +35,8 @@ export const PENS: { id: PenBrush; label: string; hint: string }[] = [
 
 export const TEXT_SIZES = [12, 16, 22];
 
-export type Paper = "plain" | "lined" | "grid" | "dotted";
+// 무지·줄·모눈·점 + 서식(코넬 노트·할 일·월간 달력·주간 계획·오답 노트). 무늬는 paperTemplates.ts
+export type Paper = "plain" | "lined" | "grid" | "dotted" | "cornell" | "todo" | "month" | "week" | "wrong";
 
 export type Page = {
   id: string;

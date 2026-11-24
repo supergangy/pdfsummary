@@ -8,7 +8,7 @@ import { Button, radius, type, useTheme } from "../ui";
 import type { Ink, Notebook, Page } from "./model";
 import { GRID_LABEL_H, GRID_PAD, GRID_ROW_GAP, gridRow, gridRows } from "./objects-grid";
 import { pageImage } from "./pageImage";
-import { inkPicture, paperPicture, type PathCache } from "./render";
+import { inkPicture, paperPicture, usePaperFont, type PathCache } from "./render";
 
 type Props = {
   visible: boolean;
@@ -121,7 +121,8 @@ const Thumb = memo(function Thumb({ nbId, page, ink, pdfUri, width, active }: { 
   const strokes = ink[page.id];
   const cache = useRef<PathCache>(new WeakMap());
   const pic = useMemo(() => (strokes?.length ? inkPicture(strokes, new Set(), page.w, page.h, cache.current) : null), [strokes, page.w, page.h]);
-  const paper = useMemo(() => paperPicture(page), [page]);
+  const tf = usePaperFont([page.paper]);
+  const paper = useMemo(() => paperPicture(page, tf), [page, tf]);
   // 지금 보던 쪽은 바깥에 검은(어두운 모드는 흰) 테두리를 두르고 종이와 사이를 조금 띄운다
   const inset = active ? RING + RING_GAP : 1;
   const innerW = width - inset * 2;

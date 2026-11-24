@@ -9,7 +9,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { available as pdfAvailable } from "../../modules/pdf-pages";
 import type { Picked } from "../platform/types";
-import { Button, Chip, floating, Hint, radius, ScreenTitle, styles as ui, type, useTheme, type Theme } from "../ui";
+import { Button, Chip, floating, Hint, radius, ScreenTitle, Segmented, styles as ui, type, useTheme, useThemeMode, type Theme, type ThemeMode } from "../ui";
 import { keepFolder } from "./app-nav";
 import { importPdf } from "./importPdf";
 import { PACK_EXT, packNotebook, unpackNotebook } from "./pack";
@@ -17,6 +17,7 @@ import { readPicked } from "./readPicked";
 import { shareFile } from "./shareFile";
 import { allFolders, ALL_NOTES, childrenOf, cleanName, crumbs, FAVORITES, isWithin, joinPath, nameOf, parentOf, posBefore, renamePath, sortNotes, TRASH, TRASH_DAYS, trashExpired, treeRows } from "./folders";
 import { blankNotebook, type Notebook, type Paper } from "./model";
+import { PAPER_CHOICES, paperMarks } from "./paperTemplates";
 import { pageImage } from "./pageImage";
 import type { SyncStatus } from "./sync/engine";
 import { statusText } from "./sync/SyncSheet";
@@ -34,12 +35,9 @@ type Props = {
   onFolder: (f: string | null) => void;
 };
 
-const PAPERS: { value: Paper; label: string }[] = [
-  { value: "lined", label: "줄" },
-  { value: "grid", label: "모눈" },
-  { value: "dotted", label: "점" },
-  { value: "plain", label: "무지" },
-];
+// 새 노트 창: 위는 기본 속지, 아래는 서식(코넬 노트·달력 등)
+const BASIC_PAPERS = PAPER_CHOICES.filter((p) => !p.template);
+const TEMPLATES = PAPER_CHOICES.filter((p) => p.template);
 
 /** 화면 크기에 따른 여백: 넓은 화면(태블릿)은 넉넉하게, 폰은 조금 좁게 */
 const WIDE = 700;
@@ -57,6 +55,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [newOpen, setNewOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false); // 설정 창 (화면 테마 · 요약 서버 설정으로)
   const [actions, setActions] = useState<Notebook | null>(null);
   const [folders, setFolders] = useState<string[]>([]);
   const [newIn, setNewIn] = useState<string | null | undefined>(undefined); // 새 폴더 창: 어느 폴더 안에 (undefined = 닫힘)
@@ -456,7 +455,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
   const topButtons = (
     <View style={s.topButtons}>
       <Button small label={syncLabel} accessibilityLabel={syncStatus ? `동기화: ${statusText(syncStatus)}` : "동기화 켜기"} onPress={onSync} />
-      <Button small label="설정" onPress={onSettings} />
+      <Button small label="설정" onPress={() => setSettingsOpen(true)} />
     </View>
   );
   const subText = "PDF 교재에 바로 필기하고, 칠한 부분만 모아 요약해요.";
@@ -628,6 +627,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
       )}
 
       <NewNoteDialog visible={newOpen} onCancel={() => setNewOpen(false)} onCreate={createBlank} />
+      <SettingsDialog visible={settingsOpen} onClose={() => setSettingsOpen(false)} onMore={() => { setSettingsOpen(false); onSettings(); }} />
       <NameDialog
         visible={newIn !== undefined}
         title={newIn ? `'${nameOf(newIn)}' 안에 새 폴더` : "새 폴더"}
@@ -927,6 +927,7 @@ function Crumb({ label, on, onPress }: { label: string; on: boolean; onPress: ()
 
 /** 빈 노트의 겉모습: 속지 무늬를 옅게 (줄·모눈·점, 무지는 비워 둔다). small = 새 노트 창의 작은 견본 */
 function PaperThumb({ paper, small }: { paper?: Paper; small?: boolean }) {
+  if (PAPER_CHOICES.some((p) => p.template && p.value === paper)) return <TemplateThumb paper={paper!} />;
   const rows = small ? 7 : 12;
   if (paper === "lined") {
     return (
@@ -963,6 +964,38 @@ function PaperThumb({ paper, small }: { paper?: Paper; small?: boolean }) {
   return null;
 }
 
+/** 서식 견본: 실제 쪽과 같은 무늬 목록을 작게 줄여 View로 그린다 (아주 작은 글은 뺀다) */
+function TemplateThumb({ paper }: { paper: Paper }) {
+  const [w, setW] = useState(0);
+  const pw = 595.28, ph = 841.89;
+  const k = w / pw;
+  const marks = useMemo(() => (w ? paperMarks(paper, pw, ph) : []), [paper, w]);
+  return (
+    <View style={s.paperFill} onLayout={(e) => setW(e.nativeEvent.layout.width)} pointerEvents="none">
+      {marks.map((m, i) => {
+        if (m.k === "line") {
+          const horiz = m.y1 === m.y2;
+          return (
+            <View key={i} style={{
+              position: "absolute", backgroundColor: m.color,
+              left: Math.min(m.x1, m.x2) * k, top: Math.min(m.y1, m.y2) * k,
+              width: horiz ? Math.abs(m.x2 - m.x1) * k : 1, height: horiz ? 1 : Math.abs(m.y2 - m.y1) * k,
+            }} />
+          );
+        }
+        if (m.k === "rect") {
+          return <View key={i} style={{ position: "absolute", left: m.x * k, top: m.y * k, width: m.w * k, height: m.h * k, backgroundColor: m.fill, borderColor: m.stroke, borderWidth: m.stroke ? 1 : 0 }} />;
+        }
+        if (m.k === "text" && m.size * k >= 6) {
+          const size = m.size * k;
+          return <Text key={i} style={{ position: "absolute", left: m.center ? m.x * k - size / 2 : m.x * k, top: m.y * k - size, fontSize: size, lineHeight: size * 1.15, color: m.color }}>{m.text}</Text>;
+        }
+        return null;
+      })}
+    </View>
+  );
+}
+
 // 속지 무늬 색 (종이 위라서 모드와 관계없이 같다)
 const PAPER_LINE = "#CFDDEB";
 const PAPER_GRID = "#E1E7EE";
@@ -975,42 +1008,64 @@ function NewNoteDialog({ visible, onCancel, onCreate }: { visible: boolean; onCa
   useEffect(() => {
     if (visible) setTitle("");
   }, [visible]);
+  const pick = (p: (typeof PAPER_CHOICES)[number]) => {
+    const on = paper === p.value;
+    return (
+      <Pressable
+        key={p.value}
+        onPress={() => setPaper(p.value)}
+        accessibilityRole="radio"
+        accessibilityLabel={`속지: ${p.label}`}
+        accessibilityState={{ selected: on }}
+        style={({ pressed }) => [s.paperPick, { opacity: pressed ? 0.75 : 1 }]}
+      >
+        {/* 고른 속지는 검은 테두리로 감싼다 (어두운 모드에서는 흰 테두리) */}
+        <View style={[s.paperRing, { borderColor: on ? t.ink : "transparent" }]}>
+          <View style={[s.paperSample, { borderColor: t.line }]}>
+            <PaperThumb paper={p.value} small />
+          </View>
+        </View>
+        <Text style={[type.caption, { color: on ? t.ink : t.muted, fontWeight: on ? "700" : "500" }]} numberOfLines={1}>{p.label}</Text>
+      </Pressable>
+    );
+  };
   return (
-    <Dialog visible={visible} onCancel={onCancel} title="새 노트" maxWidth={460}>
+    <Dialog visible={visible} onCancel={onCancel} title="새 노트" maxWidth={560}>
       <TextInput
         value={title}
         onChangeText={setTitle}
-        placeholder="노트 이름 (예: 정보처리기사 오답)"
+        placeholder="노트 이름"
         placeholderTextColor={t.muted}
         accessibilityLabel="새 노트 이름"
         style={[ui.input, { borderColor: t.line, color: t.ink, backgroundColor: t.card }]}
       />
       <Text style={[type.label, { color: t.ink, marginTop: 24, marginBottom: 12 }]}>속지</Text>
-      <View style={s.papers}>
-        {PAPERS.map((p) => {
-          const on = paper === p.value;
-          return (
-            <Pressable
-              key={p.value}
-              onPress={() => setPaper(p.value)}
-              accessibilityRole="radio"
-              accessibilityState={{ selected: on }}
-              style={({ pressed }) => [s.paperPick, { opacity: pressed ? 0.75 : 1 }]}
-            >
-              {/* 고른 속지는 검은 테두리로 감싼다 (어두운 모드에서는 흰 테두리) */}
-              <View style={[s.paperRing, { borderColor: on ? t.ink : "transparent" }]}>
-                <View style={[s.paperSample, { borderColor: t.line }]}>
-                  <PaperThumb paper={p.value} small />
-                </View>
-              </View>
-              <Text style={[type.caption, { color: on ? t.ink : t.muted, fontWeight: on ? "700" : "500" }]}>{p.label}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      <View style={s.papers}>{BASIC_PAPERS.map(pick)}</View>
+      <Text style={[type.label, { color: t.ink, marginTop: 20, marginBottom: 12 }]}>서식</Text>
+      <View style={[s.papers, s.templates]}>{TEMPLATES.map(pick)}</View>
       <View style={s.dialogButtons}>
         <Button label="취소" onPress={onCancel} />
         <Button kind="primary" label="만들기" onPress={() => onCreate(paper, title)} />
+      </View>
+    </Dialog>
+  );
+}
+
+const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
+  { value: "light", label: "밝게" },
+  { value: "dark", label: "어둡게" },
+  { value: "system", label: "기기 설정 따르기" },
+];
+
+/** 목록 화면의 설정: 화면 테마를 바로 고르고, 요약 서버·API 키는 따로 연다 */
+function SettingsDialog({ visible, onClose, onMore }: { visible: boolean; onClose: () => void; onMore: () => void }) {
+  const { mode, setMode } = useThemeMode();
+  return (
+    <Dialog visible={visible} onCancel={onClose} title="설정" maxWidth={460}>
+      <Segmented label="화면 테마" options={THEME_OPTIONS} value={mode} onChange={setMode} note="기기 설정 따르기: 휴대폰·태블릿의 어두운 모드를 켜고 끄는 대로 바뀌어요." />
+      <View style={[s.dialogButtons, { justifyContent: "space-between" }]}>
+        <Button label="요약 서버 · API 키 설정" onPress={onMore} />
+        <Button kind="primary" label="닫기" onPress={onClose} />
       </View>
     </Dialog>
   );
@@ -1135,6 +1190,7 @@ const s = StyleSheet.create({
   dialog: { borderRadius: radius.xl, padding: 24, width: "100%" },
   dialogButtons: { flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 28 },
   papers: { flexDirection: "row", gap: 12 },
+  templates: { flexWrap: "wrap" },
   paperPick: { flex: 1, alignItems: "center", gap: 8 },
   paperRing: { width: "100%", borderWidth: 2, borderRadius: radius.md, padding: 2 },
   paperSample: { aspectRatio: 3 / 4, borderWidth: 1, borderRadius: radius.sm, overflow: "hidden", backgroundColor: "#FFFFFF" },

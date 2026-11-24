@@ -17,7 +17,7 @@ import * as DeviceAi from "./modules/device-ai";
 import { runDeviceTasks } from "./src/deviceRun";
 import { backTarget, exitOnSecondBack } from "./src/notes/app-nav";
 import { Editor } from "./src/notes/Editor";
-import { buildPdf } from "./src/notes/exportPdf";
+import { buildPdf, needsKoreanFont } from "./src/notes/exportPdf";
 import { koreanFont } from "./src/notes/fontBytes";
 import { deviceFs } from "./src/notes/fs";
 import { importPdf } from "./src/notes/importPdf";
@@ -202,8 +202,7 @@ function Root() {
         }}
         onExport={async (nb, ink) => {
           const src = nb.hasPdf ? await store.pdfBytes(nb.id) : null;
-          const hasText = Object.values(ink).some((ss) => ss.some((s) => s.tool === "text"));
-          await sharePdf(await buildPdf(nb, ink, src, hasText ? await koreanFont() : null), nb.title);
+          await sharePdf(await buildPdf(nb, ink, src, needsKoreanFont(nb, ink) ? await koreanFont() : null), nb.title);
         }}
         onSummarize={(nb, ink, page) => setScreen({ name: "summary", note: { nb, ink, pdf: pdfOf(nb) }, backTo: { name: "editor", id, page } })}
         onQuick={(nb, ink, page) => setScreen({ name: "quick", nb, ink, backTo: { name: "editor", id, page } })}

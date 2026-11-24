@@ -151,6 +151,7 @@ async function mailCode(to, n, what) {
     page.on("dialog", (d) => d.accept());
     await page.goto(`http://127.0.0.1:${port}/`);
     await page.getByText("설정", { exact: true }).click();
+    await page.getByText("요약 서버 · API 키 설정").click();
     await page.waitForTimeout(800);
     await page.getByLabel("서버 주소").fill(`http://127.0.0.1:${apiPort}`);
     await page.getByLabel("접속 코드").fill(CODE);

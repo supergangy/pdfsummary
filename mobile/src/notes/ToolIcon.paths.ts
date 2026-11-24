@@ -1,7 +1,7 @@
 // 도구 아이콘 모양 (24×24 칸의 SVG 경로). 기기는 Skia로(ToolIcon.tsx), 웹은 SVG로(ToolIcon.web.tsx) 그린다.
 export type IconName =
   | "pen" | "highlighter" | "eraser" | "lasso" | "text" | "settings" | "finger" | "hand" | "undo" | "redo"
-  | "back" | "prev" | "next" | "more" | "minus" | "plus" | "fit" | "close" | "shapes" | "line" | "sliders" | "grip" | "up" | "down";
+  | "back" | "prev" | "next" | "more" | "minus" | "plus" | "fit" | "close" | "shapes" | "line" | "sliders" | "grip" | "up" | "down" | "shrink" | "grow";
 
 /** 24×24 칸의 SVG 경로. stroke=선으로, fill=채워서 */
 export const PATHS: Record<IconName, { d: string; fill?: boolean }> = {
@@ -28,6 +28,8 @@ export const PATHS: Record<IconName, { d: string; fill?: boolean }> = {
   sliders: { d: "M4 7 H20 M4 12 H20 M4 17 H20 M9 5 V9 M15 10 V14 M7 15 V19" },
   grip: { d: "M9 6 A1.4 1.4 0 1 0 9.01 6 M15 6 A1.4 1.4 0 1 0 15.01 6 M9 12 A1.4 1.4 0 1 0 9.01 12 M15 12 A1.4 1.4 0 1 0 15.01 12 M9 18 A1.4 1.4 0 1 0 9.01 18 M15 18 A1.4 1.4 0 1 0 15.01 18", fill: true },
   up: { d: "M6 15 L12 9 L18 15" },
+  shrink: { d: "M13 6 L7 12 L13 18 M19 6 L13 12 L19 18" },
+  grow: { d: "M11 6 L17 12 L11 18 M5 6 L11 12 L5 18" },
   down: { d: "M6 9 L12 15 L18 9" },
 };
 

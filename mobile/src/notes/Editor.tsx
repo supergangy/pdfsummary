@@ -914,8 +914,15 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         );
     }
   };
-  /** 도구 모음 내용: 사용자가 정한 순서대로, 무리가 바뀔 때 나눔 줄. 맨 끝에 '도구 모음 편집' */
+  /** 도구 모음 내용: 사용자가 정한 순서대로, 무리가 바뀔 때 나눔 줄. 맨 끝에 '도구 모음 접기'·'도구 모음 편집'.
+   *  접었으면 지금 도구 하나와 '펼치기'만 */
   const strip = (vertical: boolean) => {
+    if (prefs.toolbarMin) {
+      return [
+        <Fragment key={tool}>{item(tool, vertical)}</Fragment>,
+        <IconBtn key="grow" icon="grow" onPress={() => setP({ toolbarMin: false })} label="도구 모음 펼치기" />,
+      ];
+    }
     const out: ReactNode[] = [];
     let last = "";
     for (const id of order) {
@@ -927,6 +934,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
       last = groupOf(id);
     }
     out.push(<Divider key="d-edit" vertical={vertical} />);
+    out.push(<IconBtn key="shrink" icon="shrink" onPress={() => setP({ toolbarMin: true })} label="도구 모음 접기" />);
     out.push(<IconBtn key="edit" icon="sliders" onPress={() => setTbEdit(true)} label="도구 모음 편집" />);
     return out;
   };
@@ -1191,7 +1199,7 @@ function ToolbarDialog({ open, prefs, setP, onClose }: { open: boolean; prefs: P
         })}
       </ScrollView>
       <View style={sx.actions}>
-        <TextBtn label="처음대로" onPress={() => setP({ toolbar: [], toolbarHidden: [], toolbarDock: "top" })} label2="도구 모음을 처음 모습으로" />
+        <TextBtn label="처음대로" onPress={() => setP({ toolbar: [], toolbarHidden: [], toolbarDock: "top", toolbarMin: false })} label2="도구 모음을 처음 모습으로" />
         <View style={{ flex: 1 }} />
         <Button kind="primary" label="닫기" onPress={onClose} />
       </View>

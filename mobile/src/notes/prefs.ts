@@ -34,6 +34,7 @@ export type Prefs = {
   toolbarHidden: string[]; // 도구 모음에서 숨긴 항목
   toolbarDock: ToolbarDock; // 도구 모음 자리: 위·왼쪽·오른쪽·떠 있게
   toolbarFloat: { x: number; y: number } | null; // 떠 있는 도구 모음 자리
+  toolbarMin: boolean; // 도구 모음 접기 (지금 도구 하나와 펼치기 단추만)
 };
 
 export const DEFAULT_PREFS: Prefs = {
@@ -64,6 +65,7 @@ export const DEFAULT_PREFS: Prefs = {
   toolbarHidden: [],
   toolbarDock: "top",
   toolbarFloat: null,
+  toolbarMin: false,
 };
 
 const PATH = "prefs.json";

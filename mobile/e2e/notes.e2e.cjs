@@ -173,12 +173,19 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await dragGrip(500, 420);
     eB = await eraserBtn.boundingBox();
     if (!(Math.abs(eB.y + eB.height / 2 - 420) < 40)) fail(`가운데에 놓았는데 그 높이에 떠 있지 않음 (지우개 ${eB.x.toFixed(0)}, ${eB.y.toFixed(0)})`);
+    // 접기: 지금 도구(펜)와 펼치기만 남고, 펼치면 다시 다 보인다
+    await page.getByLabel("도구 모음 접기").click();
+    await page.waitForTimeout(400);
+    if ((await eraserBtn.count()) !== 0 || (await page.getByLabel(/한 번 더 누르면 펜 설정/).count()) !== 1) fail("도구 모음을 접었는데 지금 도구(펜)만 남지 않음");
+    await page.getByLabel("도구 모음 펼치기").click();
+    await page.waitForTimeout(400);
+    if ((await eraserBtn.count()) !== 1) fail("도구 모음을 펼쳤는데 지우개가 돌아오지 않음");
     await editBar();
     await page.getByText("처음대로", { exact: true }).click();
     await closeEdit();
     eB = await eraserBtn.boundingBox(), hB = await hlBtn.boundingBox();
     if (!(eB.x > hB.x && eB.y < 60) || (await lassoBtn.count()) !== 1) fail("'처음대로'로 도구 모음이 처음 모습(위, 기본 순서, 올가미 보임)으로 돌아오지 않음");
-    console.log("✓ 이름표: 펜 단추 가운데 밑·색 이름 / 도구 모음 편집: 순서·숨기기·왼쪽에 붙이기(이름표는 옆에)·손잡이로 오른쪽·떠 있게·처음대로");
+    console.log("✓ 이름표: 펜 단추 가운데 밑·색 이름 / 도구 모음 편집: 순서·숨기기·왼쪽에 붙이기(이름표는 옆에)·손잡이로 오른쪽·떠 있게·접기·처음대로");
     await page.mouse.move(x0, y0);
     await page.mouse.down();
     for (let i = 1; i <= 20; i++) await page.mouse.move(x0 + i * 10, y0 + (i % 2 ? 15 : 0), { steps: 2 });

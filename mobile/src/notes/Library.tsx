@@ -793,15 +793,15 @@ function NoteCard({ nb, store, width, onPress, onMore, onFav, onRename }: { nb: 
           <PaperThumb paper={first?.paper} />
         )}
         {onFav && (
-          // 즐겨찾기 단추: 흰 동그라미에 테두리 (즐겨찾기면 노란 테두리·채운 별) — 단추로 보이게
+          // 즐겨찾기 단추: 별만 그리고 (동그라미 테두리 없음) 누르는 자리만 넓게. 흐린 그림자로 어떤 바탕에서도 보이게
           <Pressable
             onPress={onFav}
             hitSlop={8}
             accessibilityRole="button"
             accessibilityLabel={`${nb.title} 즐겨찾기 ${nb.fav ? "빼기" : "넣기"}`}
-            style={({ pressed }) => [s.star, { borderColor: nb.fav ? "#F5B400" : "#8B95A1", backgroundColor: nb.fav ? "#FFF8E1" : "#FFFFFF", opacity: pressed ? 0.7 : 1 }]}
+            style={({ pressed }) => [s.star, { opacity: pressed ? 0.6 : 1 }]}
           >
-            <Text style={{ fontSize: 22, lineHeight: 26, color: nb.fav ? "#F5B400" : "#6B7480" }}>{nb.fav ? "★" : "☆"}</Text>
+            <Text style={{ fontSize: 24, lineHeight: 28, color: nb.fav ? "#F5B400" : "#8B95A1", textShadowColor: "rgba(255,255,255,0.9)", textShadowRadius: 3 }}>{nb.fav ? "★" : "☆"}</Text>
           </Pressable>
         )}
       </View>
@@ -1107,11 +1107,8 @@ const s = StyleSheet.create({
   crumbStep: { flexDirection: "row", alignItems: "center", gap: 6 },
   crumb: { paddingVertical: 6, paddingHorizontal: 4 },
   folderBox: { borderWidth: 1 },
-  star: {
-    position: "absolute", top: 6, right: 6, width: 38, height: 38, borderRadius: 19, borderWidth: 2,
-    alignItems: "center", justifyContent: "center",
-    shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 2,
-  },
+  // 테두리·바탕 없이 별만 보이고, 누르는 자리는 38칸 그대로 넓게
+  star: { position: "absolute", top: 4, right: 4, width: 38, height: 38, alignItems: "center", justifyContent: "center" },
   ghost2: { position: "absolute", width: 160, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.md, borderWidth: 2, zIndex: 40 },
   noticeWrap: { position: "absolute", left: 16, right: 16, bottom: 32, alignItems: "center" },
   notice: { maxWidth: 560, borderRadius: radius.xl, paddingHorizontal: 18, paddingVertical: 10 },

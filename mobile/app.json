@@ -18,7 +18,7 @@
       "package": "com.supergangy.pdfsummary",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#182E5C"
+        "backgroundColor": "#FFE9DE"
       }
     },
     "web": {
@@ -29,7 +29,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#182E5C",
+          "backgroundColor": "#FFE9DE",
           "image": "./assets/splash-icon.png",
           "imageWidth": 120
         }

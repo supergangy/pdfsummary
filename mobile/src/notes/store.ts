@@ -96,8 +96,12 @@ export class NoteStore {
     }
   }
 
+  /** 원본 PDF가 있는지. 크기만 본다 — 파일을 통째로 읽으면 수백 MB PDF에서 메모리가 모자라 가져오기가 실패했다
+   *  (262MB PDF: 가져온 뒤 저장하며 이것을 불러 OutOfMemoryError → 'PDF를 열 수 없어요') */
   async hasPdf(nbId: string): Promise<boolean> {
-    return (await this.fs.readBytes(`${dir(nbId)}/source.pdf`)) !== null;
+    const p = `${dir(nbId)}/source.pdf`;
+    if (this.fs.fileSize) return (await this.fs.fileSize(p)) !== null;
+    return (await this.fs.readBytes(p)) !== null;
   }
 
   async writePdf(nbId: string, bytes: Uint8Array): Promise<void> {

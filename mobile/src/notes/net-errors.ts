@@ -52,7 +52,18 @@ export function withTimeLimit<T>(ms: number, fail: () => Error, run: (l: Limit) 
 }
 
 /** PDF를 못 열었을 때 보여 줄 말. 기기·pdf.js가 주는 영어 글은 붙이지 않는다. */
+/** 필기를 합친 PDF·노트 파일로 내보낼 때 원본 PDF를 통째로 메모리에 읽는다. 이보다 크면 앱 메모리(안드로이드 약 256MB)가 모자라
+ *  내보내기가 실패하므로 미리 알린다. (보기·필기·요약은 쪽마다 읽어서 큰 PDF도 된다) */
+export const EXPORT_PDF_MAX = 120 * 1024 * 1024;
+
+/** 원본 PDF가 너무 커서 내보낼 수 없을 때 알림 (크기를 모르면 null = 해 본다) */
+export function bigPdfMessage(size: number | null, what = "필기를 합친 PDF"): string | null {
+  if (size === null || size <= EXPORT_PDF_MAX) return null;
+  return `원본 PDF가 너무 커서(${Math.round(size / 1024 / 1024)}MB) ${what}로 내보낼 수 없어요. 보기·필기·요약은 그대로 할 수 있어요. 내보내려면 ${Math.round(EXPORT_PDF_MAX / 1024 / 1024)}MB 아래로 나눈 PDF로 해 주세요.`;
+}
+
 export function pdfOpenMessage(raw: string): string {
+  if (/OutOfMemory|out of memory|Failed to allocate/i.test(raw)) return "PDF가 너무 커서 이 기기의 앱 메모리로 읽지 못했어요. 더 작게 나눈 PDF로 해 보세요.";
   if (/암호|password|encrypt/i.test(raw)) return "암호가 걸린 PDF는 가져올 수 없어요.";
   if (/empty|zero bytes/i.test(raw)) return "빈 파일이에요. 다른 파일을 골라 주세요.";
   if (/invalid pdf|corrupt|not in pdf format/i.test(raw)) return "PDF 파일이 깨졌거나 PDF가 아니에요.";

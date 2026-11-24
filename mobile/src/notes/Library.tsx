@@ -13,6 +13,7 @@ import { Button, Chip, floating, Hint, radius, ScreenTitle, Segmented, styles as
 import { keepFolder } from "./app-nav";
 import { importPdf } from "./importPdf";
 import { PACK_EXT, packNotebook, unpackNotebook } from "./pack";
+import { bigPdfMessage } from "./net-errors";
 import { readPicked } from "./readPicked";
 import { shareFile } from "./shareFile";
 import { allFolders, ALL_NOTES, childrenOf, cleanName, crumbs, FAVORITES, isWithin, joinPath, nameOf, parentOf, posBefore, renamePath, sortNotes, TRASH, TRASH_DAYS, trashExpired, treeRows } from "./folders";
@@ -158,6 +159,8 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
     try {
       const full = await store.load(nb.id);
       if (!full) throw new Error("노트를 열 수 없어요.");
+      const big = full.hasPdf ? bigPdfMessage(await store.pdfSize(full.id), "노트 파일") : null;
+      if (big) throw new Error(big);
       const bytes = packNotebook(full, await store.loadInk(full), full.hasPdf ? await store.pdfBytes(full.id) : null);
       await shareFile(bytes, `${full.title}${PACK_EXT}`, "application/zip");
     } catch (e) {

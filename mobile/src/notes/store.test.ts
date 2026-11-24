@@ -55,3 +55,25 @@ test("강의 녹음: 노트 폴더에 복사·목록·지우기 (노트를 지�
   await st.remove(nb.id);
   assert.deepEqual(await st.recordings(nb.id), []);
 });
+
+test("큰 PDF: 원본이 있는지 볼 때 파일을 통째로 읽지 않는다 (262MB PDF 가져오기가 메모리 부족으로 실패했다)", async () => {
+  const mem = memoryFs();
+  let reads = 0;
+  const fs = {
+    ...mem,
+    async readBytes(p: string) {
+      reads++;
+      throw new Error("java.lang.OutOfMemoryError: Failed to allocate a 261862880 byte allocation");
+      return mem.readBytes(p);
+    },
+    async fileSize(p: string) {
+      return mem.files.has(p) ? 261862877 : null;
+    },
+  };
+  const st = new NoteStore(fs);
+  const nb = pdfNotebook("큰 책", [{ w: 595, h: 842 }]);
+  await st.create(nb, { uri: "file:///big.pdf" });
+  assert.equal(await st.hasPdf(nb.id), true);
+  assert.equal(await st.hasPdf("없는노트"), false);
+  assert.equal(reads, 0);
+});

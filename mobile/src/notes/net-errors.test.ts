@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ApiError, Client, type Settings } from "../api.ts";
-import { LONG_MS, NO_ANSWER, SHORT_MS, STALL_MS, pdfOpenMessage, withTimeLimit } from "./net-errors.ts";
+import { EXPORT_PDF_MAX, LONG_MS, NO_ANSWER, SHORT_MS, STALL_MS, bigPdfMessage, pdfOpenMessage, withTimeLimit } from "./net-errors.ts";
 
 const S: Settings = { serverUrl: "http://192.168.0.9:8000", accessCode: "code", apiKey: "" };
 
@@ -112,4 +112,13 @@ test("PDF를 못 열 때: 영어 글을 붙이지 않고 경우에 맞는 말", 
     assert.doesNotMatch(m.replace(/PDF/g, ""), /[A-Za-z]/, m);
     assert.doesNotMatch(m, /열 수 없어요.*열 수 없어요/, m);
   }
+});
+
+test("아주 큰 PDF: 메모리가 모자라면 그렇다고, 내보내기는 미리 알린다", () => {
+  const oom = "Call to function 'FileSystemFile.bytes' has been rejected.\n→ Caused by: java.lang.OutOfMemoryError: Failed to allocate a 261862880 byte allocation";
+  assert.match(pdfOpenMessage(oom), /너무 커서/);
+  assert.equal(bigPdfMessage(null), null); // 크기를 모르면 해 본다
+  assert.equal(bigPdfMessage(EXPORT_PDF_MAX), null);
+  assert.match(bigPdfMessage(261862877) ?? "", /^원본 PDF가 너무 커서\(250MB\) 필기를 합친 PDF로 내보낼 수 없어요/);
+  assert.match(bigPdfMessage(261862877, "노트 파일") ?? "", /노트 파일로 내보낼 수 없어요/);
 });

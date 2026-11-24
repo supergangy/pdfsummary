@@ -19,6 +19,7 @@ import { backTarget, exitOnSecondBack } from "./src/notes/app-nav";
 import { Editor } from "./src/notes/Editor";
 import { buildPdf, needsKoreanFont } from "./src/notes/exportPdf";
 import { koreanFont } from "./src/notes/fontBytes";
+import { bigPdfMessage } from "./src/notes/net-errors";
 import { deviceFs } from "./src/notes/fs";
 import { importPdf } from "./src/notes/importPdf";
 import { Library } from "./src/notes/Library";
@@ -201,6 +202,8 @@ function Root() {
           setScreen({ name: "library" });
         }}
         onExport={async (nb, ink) => {
+          const big = nb.hasPdf ? bigPdfMessage(await store.pdfSize(nb.id)) : null;
+          if (big) throw new Error(big);
           const src = nb.hasPdf ? await store.pdfBytes(nb.id) : null;
           await sharePdf(await buildPdf(nb, ink, src, needsKoreanFont(nb, ink) ? await koreanFont() : null), nb.title);
         }}

@@ -90,7 +90,7 @@ export function makeFileFs(api: FileApi): Fs {
     async fileSize(path) {
       await queues.get(path);
       const f = file(path);
-      return f.exists ? f.size ?? null : null;
+      return f.exists ? f.size ?? 0 : null; // 있는데 크기를 모르면 0 (없음과 구별)
     },
     writeBytes: (path, bytes) => atomicWrite(path, bytes),
     importFile: (from, path) =>

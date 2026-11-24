@@ -870,7 +870,7 @@ export function PageCanvas(props: Props) {
       key={flow}
       tx={tx} ty={ty} scale={scale} vw={vw} vh={vh} docW={docW} docH={docH}
       vertical={flow === "v"} moving={moving} label={spotLabel(L, spotSpread, activeIdx, pages.length)}
-      pulse={jump.n} onEnd={scrubEnd} onAskPage={props.onAskPage}
+      pulse={jump.n} onEnd={scrubEnd} onAskPage={props.onAskPage} blocks={[one, pinch]}
     />
     </StylusView>
   );
@@ -879,10 +879,12 @@ export function PageCanvas(props: Props) {
 /** 지금 보는 자리: 움직이는 동안(그리고 쪽 단추로 건너뛴 뒤 잠깐) 막대(문서 전체에서 화면이 있는 곳)와 쪽 번호를 보이고, 멈추면 1초 뒤 사라진다.
  *  보이는 동안에는 막대를 손가락으로 잡고 끌어 빨리 넘기고, '3 / 12'를 누르면 쪽 번호를 넣어 간다 (삼성 노트·내 파일의 빠른 스크롤처럼).
  *  안 보일 때는 손을 받지 않아 가장자리에 쓰는 것을 막지 않는다 */
-function ScrollSpot({ tx, ty, scale, vw, vh, docW, docH, vertical, moving, label, pulse, onEnd, onAskPage }: {
+function ScrollSpot({ tx, ty, scale, vw, vh, docW, docH, vertical, moving, label, pulse, onEnd, onAskPage, blocks }: {
   tx: SharedValue<number>; ty: SharedValue<number>; scale: SharedValue<number>; vw: SharedValue<number>; vh: SharedValue<number>;
   docW: SharedValue<number>; docH: SharedValue<number>; vertical: boolean; moving: SharedValue<boolean>; label: string;
   pulse: number; onEnd: () => void; onAskPage?: () => void;
+  /** 막대를 잡은 동안 막을 그림판 제스처 (안드로이드에서는 아래의 그림판 끌기가 먼저 잡아 막대가 안 움직였다) */
+  blocks: NonNullable<Parameters<typeof usePanGesture>[0]>["block"];
 }) {
   const show = useSharedValue(0);
   useAnimatedReaction(() => moving.value, (m, prev) => {
@@ -942,6 +944,7 @@ function ScrollSpot({ tx, ty, scale, vw, vh, docW, docH, vertical, moving, label
   const ask = useCallback(() => onAskPage?.(), [onAskPage]);
   const pan = usePanGesture({
     minDistance: 0,
+    block: blocks,
     onActivate: (e) => {
       "worklet";
       cancelAnimation(tx);

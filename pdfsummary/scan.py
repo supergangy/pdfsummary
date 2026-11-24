@@ -55,7 +55,9 @@ def find_highlights(page: pymupdf.Page, page_index: int) -> list[Mark]:
         rgb = tuple(float(v) for v in region.mean(axis=0)) if len(region) else (1, 1, 0)
         rect: Rect = (px0 / zoom, py0 / zoom, px1 / zoom, py1 / zoom)
         marks.append(Mark(page_index, HIGHLIGHT, rect, SRC_SCAN, color=_saturate(rgb), parts=[rect]))
-    return _merge_lines(marks)
+    # 가로로 긴 쪽 = 책 두 쪽을 펼쳐 한 장에 스캔한 것 → 왼쪽·오른쪽 쪽의 형광펜은 같은 높이라도 잇지 않는다
+    r = page.rect
+    return _merge_lines(marks, spread_mid=(r.x0 + r.x1) / 2 if r.width > r.height * 1.15 else None)
 
 
 def looks_like_highlighter(img: np.ndarray, mask: np.ndarray, box, size, zoom: float) -> bool:
@@ -145,20 +147,33 @@ def _saturate(rgb):
     return tuple((c - m) / (M - m) * 0.9 + 0.1 for c in (r, g, b))
 
 
-def _merge_lines(marks: list[Mark]) -> list[Mark]:
-    """같은 색으로 이어서 칠한 여러 줄을 한 덩어리로."""
+def _same_column(a: Rect, b: Rect, spread_mid: float | None) -> bool:
+    """두 칠한 줄이 같은 단(段)에 있는지: 가로로 겹치면 같은 단. 펼친 두 쪽 스캔이면 가운데의 같은 쪽에 있어야 한다.
+    (겹치지 않아도 같은 단일 수 있다 — 윗줄 끝에서 아랫줄 처음으로 이어 칠한 경우)"""
+    if min(a[2], b[2]) > max(a[0], b[0]):
+        return True
+    if spread_mid is None:
+        return True
+    return ((a[0] + a[2]) / 2 < spread_mid) == ((b[0] + b[2]) / 2 < spread_mid)
+
+
+def _merge_lines(marks: list[Mark], spread_mid: float | None = None) -> list[Mark]:
+    """같은 색으로 이어서 칠한 여러 줄을 한 덩어리로. 같은 단의 바로 윗줄에만 잇는다
+    (펼친 두 쪽 스캔에서 왼쪽 쪽과 오른쪽 쪽의 같은 높이 형광펜이 한 덩어리가 되어 두 쪽 글이 뒤섞였다)."""
     marks.sort(key=lambda m: (m.rect[1], m.rect[0]))
     out: list[Mark] = []
     for m in marks:
-        if out:
-            p = out[-1]
-            line_h = p.rect[3] - p.rect[1]
+        for p in reversed(out[-8:]):
+            last = p.parts[-1] if p.parts else p.rect
+            line_h = last[3] - last[1]
             if (
                 color_key(p.color) == color_key(m.color)
-                and 0 <= m.rect[1] - p.rect[3] <= max(8, 0.8 * line_h)
+                and 0 <= m.rect[1] - last[3] <= max(8, 0.8 * line_h)
+                and _same_column(last, m.rect, spread_mid)
             ):
                 p.rect = (min(p.rect[0], m.rect[0]), p.rect[1], max(p.rect[2], m.rect[2]), m.rect[3])
                 p.parts.extend(m.parts)
-                continue
-        out.append(m)
+                break
+        else:
+            out.append(m)
     return out

@@ -105,3 +105,30 @@ def test_bullet_dots_are_not_handwriting(tmp_path):
 
     ss = strokes_from_drawings(pymupdf.open(path)[0], [], SRC_DRAWING)
     assert len(ss) == 1 and ss[0].rect[0] >= 99
+
+
+def test_scan_merge_keeps_spread_pages_apart():
+    """펼친 두 쪽 스캔: 왼쪽 쪽과 오른쪽 쪽의 같은 높이 형광펜은 잇지 않고, 한 단 안에서 다음 줄로 이어 칠한 것은 잇는다"""
+    from pdfsummary.models import HIGHLIGHT, SRC_SCAN, Mark
+    from pdfsummary.scan import _merge_lines
+
+    yellow = (1.0, 0.95, 0.2)
+
+    def mk(r):
+        return Mark(0, HIGHLIGHT, r, SRC_SCAN, color=yellow, parts=[r])
+
+    marks = [
+        mk((100, 300, 600, 320)),    # 왼쪽 쪽 1줄
+        mk((1200, 300, 1900, 320)),  # 오른쪽 쪽 같은 높이
+        mk((1200, 326, 1500, 346)),  # 오른쪽 쪽 다음 줄 (이어 칠함)
+        mk((80, 326, 160, 346)),     # 왼쪽 쪽 다음 줄 처음 (윗줄 끝에서 이어 칠함, 가로로는 안 겹침)
+    ]
+    out = _merge_lines(marks, spread_mid=1080)
+    assert len(out) == 2
+    left = next(m for m in out if m.rect[0] < 1080)
+    right = next(m for m in out if m.rect[0] >= 1080)
+    assert len(left.parts) == 2 and all(p[2] < 1080 for p in left.parts)
+    assert len(right.parts) == 2 and all(p[0] > 1080 for p in right.parts)
+    # 한 쪽짜리(세로) 쪽은 예전처럼: 이어 칠한 다음 줄은 가로로 안 겹쳐도 잇는다
+    one = _merge_lines([mk((300, 300, 500, 320)), mk((60, 326, 100, 346))])
+    assert len(one) == 1

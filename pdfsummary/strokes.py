@@ -115,6 +115,11 @@ def strokes_from_drawings(page: pymupdf.Page, skip_rects: list[Rect], source: st
             continue
 
         if is_fill:
+            # 아주 작고 동그스름한 불투명 채우기 = 책의 글머리 점(•)·작은 아이콘. 손글씨로 보지 않는다
+            # (꾸민 정리 PDF에서 갈색 글머리 점 120개가 모두 '손글씨'로 잡혔다). 점 하나는 요약할 글도 아니다
+            bw, bh = r[2] - r[0], r[3] - r[1]
+            if not translucent and max(bw, bh) <= 8 and 0.5 <= bw / max(bh, 0.01) <= 2:
+                continue
             w = _polygon_width(pts)
             out.append(Stroke(pts, r, w, tuple(color), opacity, source, polygon=True))
         else:

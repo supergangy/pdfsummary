@@ -4,8 +4,7 @@
   ],
   "android": {
     "modules": [
-      "expo.modules.stylus.StylusModule",
-      "expo.modules.stylus.TooltipModule"
+      "expo.modules.stylus.StylusModule"
     ]
   }
 }

@@ -1,10 +1,10 @@
 // 필기 화면: 도구 모음 + 쪽 그리기 + 자동 저장
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type Ref, type RefObject } from "react";
 import { ActivityIndicator, Alert, AppState, BackHandler, Modal, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View, type HostInstance } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { pageText } from "../../modules/pdf-pages";
-import { TooltipView } from "../../modules/stylus";
+import { StylusView } from "../../modules/stylus";
 import { Button, floating, radius, styles as ui, type, useTheme, type Theme } from "../ui";
 import { clampPage, isHighlighterTap, justAfter, otherPage, pageBg, penSwap, swatchEdge, type BgCache, type SwapSaved } from "./editor-logic";
 import { bounds, eraseFrom, fitHighlight, hitAlong, straighten, thin, type CharBox } from "./geometry";
@@ -52,6 +52,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const [panel, setPanel] = useState(false); // 도구 설정 창
   const [panelAt, setPanelAt] = useState<{ top: number; left: number } | null>(null); // 설정 창 자리 (도구 모음 바로 밑)
   const barRef = useRef<HostInstance>(null); // 도구 모음
+  const rootRef = useRef<HostInstance>(null); // 화면 전체 (이름표 자리 계산용)
   const toolRefs = useRef<Partial<Record<ToolName, HostInstance | null>>>({}); // 도구 단추들
   const [grid, setGrid] = useState(false);
   const [selection, setSelection] = useState<Selection>(null);
@@ -77,6 +78,87 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const metaDirty = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [, bump] = useState(0); // 되돌리기 단추 상태 갱신용
+
+  // ── 도구 모음 단추 이름표 ─────────────────────────────────
+  // 그림뿐인 단추 위에 S펜(웹은 마우스)을 띄우면 잠시 뒤 이름이 단추 밑에 뜬다. 손가락으로 길게 눌러도 뜬다.
+  // (안드로이드 기본 툴팁은 갤럭시탭에서 뜨지 않아서, 도구 모음을 감싼 S펜 뷰가 펜 자리를 알려 주면 여기서 단추를 찾는다)
+  const [tip, setTip] = useState<{ label: string; x: number; y: number } | null>(null);
+  const tipBtns = useRef(new Map<number, { label: string; ref: RefObject<HostInstance | null> }>());
+  const tipGeo = useRef<{ at: number; root: number[] | null; bar: number[] | null; items: { label: string; r: number[] }[] }>({ at: 0, root: null, bar: null, items: [] });
+  const tipMeasure = useRef<Promise<void> | null>(null);
+  const tipTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tipOver = useRef<string | null>(null); // 펜이 떠 있는 단추
+  const tipShown = useRef(false);
+  const tipCtx = useMemo(() => {
+    let next = 0;
+    return {
+      add: (label: string, ref: RefObject<HostInstance | null>) => {
+        const k = next++;
+        tipBtns.current.set(k, { label, ref });
+        tipGeo.current.at = 0; // 단추가 바뀌었으니 다음에 다시 잰다
+        return () => {
+          tipBtns.current.delete(k);
+          tipGeo.current.at = 0;
+        };
+      },
+      press: (label: string, ref: RefObject<HostInstance | null>) => {
+        void Promise.all([winOf(rootRef.current), winOf(ref.current)]).then(([root, r]) => {
+          if (!root || !r) return;
+          placeTip(label, r, root);
+          if (tipTimer.current) clearTimeout(tipTimer.current);
+          tipTimer.current = setTimeout(hideTip, 1500);
+        });
+      },
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const placeTip = (label: string, r: number[], root: number[]) => {
+    tipShown.current = true;
+    setTip({ label, x: r[0] + r[2] / 2 - root[0], y: r[1] + r[3] + 6 - root[1] });
+  };
+  const hideTip = () => {
+    if (tipTimer.current) clearTimeout(tipTimer.current);
+    tipTimer.current = null;
+    tipShown.current = false;
+    setTip(null);
+  };
+  const measureTips = () => {
+    tipMeasure.current ??= (async () => {
+      const [root, bar] = await Promise.all([winOf(rootRef.current), winOf(barRef.current)]);
+      const items = await Promise.all([...tipBtns.current.values()].map(async (b) => ({ label: b.label, r: await winOf(b.ref.current) })));
+      tipGeo.current = { at: Date.now(), root, bar, items: items.filter((i): i is { label: string; r: number[] } => !!i.r) };
+    })().finally(() => {
+      tipMeasure.current = null;
+    });
+    return tipMeasure.current;
+  };
+  const onBarHover = useCallback(async (x: number, y: number, exit: boolean) => {
+    if (exit) {
+      tipOver.current = null;
+      return hideTip();
+    }
+    if (Date.now() - tipGeo.current.at > 1000) await measureTips(); // 옆으로 밀었거나 도구가 바뀌었을 수 있다
+    const g = tipGeo.current;
+    if (!g.bar || !g.root) return;
+    const wx = g.bar[0] + x, wy = g.bar[1] + y;
+    const hit = g.items.find((i) => wx >= i.r[0] && wx <= i.r[0] + i.r[2] && wy >= i.r[1] - 4 && wy <= i.r[1] + i.r[3] + 4);
+    const label = hit?.label ?? null;
+    if (label === tipOver.current) return;
+    tipOver.current = label;
+    if (tipTimer.current) clearTimeout(tipTimer.current);
+    if (!hit) {
+      // 단추 사이를 지나는 중: 이미 떠 있던 이름표는 잠깐 두었다가 닫는다 (다음 단추로 옮겨 가면 바로 바뀌게)
+      tipTimer.current = setTimeout(hideTip, 250);
+      return;
+    }
+    const root = g.root;
+    if (tipShown.current) placeTip(hit.label, hit.r, root);
+    else tipTimer.current = setTimeout(() => placeTip(hit.label, hit.r, root), 350);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => () => {
+    if (tipTimer.current) clearTimeout(tipTimer.current);
+  }, []);
 
   // ── 불러오기 ────────────────────────────────────────────
   useEffect(() => {
@@ -720,7 +802,9 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const penName = PENS.find((x) => x.id === prefs.penBrush)?.label ?? "펜";
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }} edges={["top", "left", "right"]}>
+    <TipCtx.Provider value={tipCtx}>
+    <SafeAreaView ref={rootRef} style={{ flex: 1, backgroundColor: t.bg }} edges={["top", "left", "right"]}>
+      <StylusView onHover={onBarHover}>
       {/* 한 줄 도구 모음: 돌아가기 · 도구(그림) · 설정 · 색 · 굵기 · 보정 · 손가락 · 확대 · 되돌리기 · 쪽 · 더 보기 · 요약.
           노트 이름은 자리를 차지하지 않게 ⋯ 메뉴의 '이름 바꾸기'로. 좁으면 가운데 부분만 옆으로 민다 */}
       <View ref={barRef} collapsable={false} style={[sx.toolBar, { borderColor: t.lineSoft, backgroundColor: t.bg, paddingHorizontal: pad }]}>
@@ -788,6 +872,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         <IconBtn icon="more" onPress={() => setMenu(true)} label="더 보기" />
         <Button kind="primary" small label="요약" accessibilityLabel="요약 만들기" onPress={quick} />
       </View>
+      </StylusView>
 
       <PageCanvas
         pages={nb.pages}
@@ -835,6 +920,13 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         </View>
       )}
 
+      {tip && (
+        <View pointerEvents="none" testID="tool-tip" style={[sx.tipWrap, { top: tip.y, left: Math.max(4, Math.min(win.width - 204, tip.x - 100)) }]}>
+          <View style={[sx.tip, { backgroundColor: t.ink }]}>
+            <Text style={[type.caption, { color: t.bg }]}>{tip.label}</Text>
+          </View>
+        </View>
+      )}
       {!!toast && (
         <View pointerEvents="none" style={sx.toastWrap}>
           <View style={[floating(t), sx.toast, { backgroundColor: t.ink, borderColor: t.ink }]}>
@@ -902,10 +994,30 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         />
       )}
     </SafeAreaView>
+    </TipCtx.Provider>
   );
 }
 
 // ── 창과 작은 부품 ────────────────────────────────────────────────
+
+/** 화면(창) 기준 [x, y, 폭, 높이] */
+function winOf(r: HostInstance | null): Promise<number[] | null> {
+  return new Promise((res) => (r ? r.measureInWindow((x, y, w, h) => res([x, y, w, h])) : res(null)));
+}
+
+/** 도구 모음 단추 이름표: 단추가 자기 이름과 자리를 알린다 */
+const TipCtx = createContext<{ add: (label: string, ref: RefObject<HostInstance | null>) => () => void; press: (label: string, ref: RefObject<HostInstance | null>) => void } | null>(null);
+function useTip(label: string, outer?: Ref<HostInstance>) {
+  const ctx = useContext(TipCtx);
+  const own = useRef<HostInstance | null>(null);
+  useEffect(() => (label ? ctx?.add(label, own) : undefined), [ctx, label]);
+  const ref = (v: HostInstance | null) => {
+    own.current = v;
+    if (typeof outer === "function") outer(v);
+    else if (outer) (outer as { current: HostInstance | null }).current = v;
+  };
+  return { ref, onLongPress: ctx ? () => ctx.press(label, own) : undefined };
+}
 
 /** 창 뒤를 덮는 반투명 바탕: 가운데 뜨는 창용 / 메뉴처럼 가볍게 뜨는 것용 (쪽이 조금 더 보이게) */
 const backdrop = (t: Theme) => (t.dark ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.25)");
@@ -998,9 +1110,12 @@ function RenameDialog({ value, onDone }: { value: string | null; onDone: (v: str
 /** 글자 하나짜리 단추 (‹ › ⋯ − ＋ ⚙︎ ✕): 바탕 없이 회색 글자만 */
 function IconBtn({ glyph, icon, onPress, disabled, label, big, compact }: { glyph?: string; icon?: IconName; onPress: () => void; disabled?: boolean; label: string; big?: boolean; compact?: boolean }) {
   const t = useTheme();
-  const btn = (
+  const tip = useTip(icon ? label : "");
+  return (
     <Pressable
+      ref={icon ? tip.ref : undefined}
       onPress={onPress}
+      onLongPress={icon ? tip.onLongPress : undefined}
       disabled={disabled}
       accessibilityRole="button"
       accessibilityLabel={label}
@@ -1014,8 +1129,6 @@ function IconBtn({ glyph, icon, onPress, disabled, label, big, compact }: { glyp
       )}
     </Pressable>
   );
-  // 그림뿐인 단추는 S펜을 위에 띄우면(또는 길게 누르면) 이름이 뜬다
-  return icon ? <TooltipView text={label}>{btn}</TooltipView> : btn;
 }
 
 /** 낱말 단추 (맞춤, 지우기): 바탕 없이 글자만. danger는 빨간 글자 */
@@ -1034,25 +1147,24 @@ function TextBtn({ label, onPress, label2, danger }: { label: string; onPress: (
   );
 }
 
-/** 도구 단추: 고른 것은 검은 알약. chip은 켜고 끄는 단추라 꺼져 있어도 옅은 회색 바탕 */
 /** 도구 단추: 그림 아이콘. 고른 도구는 검은 바탕. 이름(label)은 화면에 쓰지 않고(한 줄에 들어가게)
  *  접근성 이름표와, S펜을 위에 띄우면(또는 길게 누르면) 뜨는 이름표로 */
 function ToolBtn({ label, icon, on, onPress, hint, ref }: { label: string; icon: IconName; on: boolean; onPress: () => void; hint?: string; ref?: Ref<HostInstance> }) {
   const t = useTheme();
+  const tip = useTip(label, ref);
   return (
-    <TooltipView text={label}>
-      <Pressable
-        ref={ref}
-        onPress={onPress}
-        accessibilityRole="button"
-        accessibilityLabel={hint ? `${label} (${hint})` : label}
-        accessibilityState={{ selected: on }}
-        hitSlop={2}
-        style={({ pressed }) => [sx.toolBtn, { backgroundColor: on ? t.ink : "transparent", opacity: pressed ? 0.7 : 1 }]}
-      >
-        <ToolIcon name={icon} color={on ? t.bg : t.sub} />
-      </Pressable>
-    </TooltipView>
+    <Pressable
+      ref={tip.ref}
+      onPress={onPress}
+      onLongPress={tip.onLongPress}
+      accessibilityRole="button"
+      accessibilityLabel={hint ? `${label} (${hint})` : label}
+      accessibilityState={{ selected: on }}
+      hitSlop={2}
+      style={({ pressed }) => [sx.toolBtn, { backgroundColor: on ? t.ink : "transparent", opacity: pressed ? 0.7 : 1 }]}
+    >
+      <ToolIcon name={icon} color={on ? t.bg : t.sub} />
+    </Pressable>
   );
 }
 
@@ -1155,6 +1267,9 @@ const sx = StyleSheet.create({
   // 좁은 폰: 설명 글을 윗줄에 두고 단추는 아랫줄에 (한 줄에 다 들어가지 않아서)
   selBarNarrow: { left: 16, right: 16, alignSelf: "auto", flexWrap: "wrap", justifyContent: "center", rowGap: 2, borderRadius: radius.xl, paddingLeft: 12, paddingTop: 10 },
   selTextNarrow: { width: "100%", textAlign: "center", marginRight: 0 },
+  // 단추 이름표: 단추 가운데 밑에 작은 검은 말풍선 (폭 200 상자 가운데에)
+  tipWrap: { position: "absolute", width: 200, alignItems: "center", zIndex: 20 },
+  tip: { borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 5 },
   toastWrap: { position: "absolute", bottom: 32, left: 16, right: 16, alignItems: "center" },
   toast: { maxWidth: 560, borderRadius: radius.xl, paddingHorizontal: 18, paddingVertical: 10 },
   toastText: { fontSize: 14, lineHeight: 20, fontWeight: "500", textAlign: "center", letterSpacing: -0.2 },

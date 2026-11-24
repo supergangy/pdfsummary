@@ -104,6 +104,17 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await page.waitForTimeout(1500);
     const box = await canvas.boundingBox();
     const x0 = box.x + 150, y0 = box.y + 200;
+    // 그림 단추 이름표: 펜(웹은 마우스)을 단추 위에 띄우면 이름이 단추 밑에 뜨고, 벗어나면 닫힌다
+    const eraserBox = await page.getByLabel(/한 번 더 누르면 지우개 설정/).boundingBox();
+    await page.mouse.move(eraserBox.x + eraserBox.width / 2, eraserBox.y + eraserBox.height / 2, { steps: 3 });
+    const tipEl = page.getByTestId("tool-tip");
+    await tipEl.waitFor({ timeout: 3000 }).catch(() => fail("지우개 단추 위에 띄웠는데 이름표가 뜨지 않음"));
+    if ((await tipEl.innerText()).trim() !== "지우개") fail("이름표 글이 '지우개'가 아님: " + (await tipEl.innerText()));
+    const tipBox = await tipEl.boundingBox();
+    if (tipBox.y < eraserBox.y + eraserBox.height || Math.abs(tipBox.x + tipBox.width / 2 - (eraserBox.x + eraserBox.width / 2)) > 4) fail("이름표가 단추 바로 밑 가운데에 있지 않음");
+    await page.mouse.move(x0, y0, { steps: 3 });
+    await tipEl.waitFor({ state: "detached", timeout: 3000 }).catch(() => fail("단추에서 벗어났는데 이름표가 닫히지 않음"));
+    console.log("✓ 그림 단추 이름표: 위에 띄우면 '지우개'가 단추 밑에, 벗어나면 닫힘");
     await page.mouse.move(x0, y0);
     await page.mouse.down();
     for (let i = 1; i <= 20; i++) await page.mouse.move(x0 + i * 10, y0 + (i % 2 ? 15 : 0), { steps: 2 });

@@ -1,29 +1,31 @@
-// S펜 옆 단추 감싸개·단추 이름표 감싸개. 안드로이드는 네이티브 뷰가 단추 상태를 알리고(이름표는 펜을 띄우면 뜨고), 그 밖에서는 그냥 View.
+// S펜 감싸개. 안드로이드는 네이티브 뷰가 펜 옆 단추 상태와 펜이 떠 있는 자리를 알리고, 그 밖에서는 그냥 View.
 import { requireNativeView, requireOptionalNativeModule } from "expo";
 import type { ComponentType } from "react";
 import { View, type ViewProps } from "react-native";
 
-/** hover: 펜이 화면에 닿지 않고 떠 있을 때 바뀐 것인지 */
-export type StylusViewProps = ViewProps & { onButton?: (pressed: boolean, hover: boolean) => void };
+/** hover: 펜이 화면에 닿지 않고 떠 있을 때 바뀐 것인지.
+ *  onHover: 펜(마우스)이 이 뷰 위에 떠 있는 자리 (이 뷰 기준 dp), 떠났으면 exit */
+export type StylusViewProps = ViewProps & {
+  onButton?: (pressed: boolean, hover: boolean) => void;
+  onHover?: (x: number, y: number, exit: boolean) => void;
+};
 
-type NativeProps = ViewProps & { onButton?: (e: { nativeEvent: { pressed: boolean; hover?: boolean } }) => void };
+type NativeProps = ViewProps & {
+  onButton?: (e: { nativeEvent: { pressed: boolean; hover?: boolean } }) => void;
+  onHover?: (e: { nativeEvent: { x: number; y: number; exit: boolean } }) => void;
+  hoverEvents?: boolean;
+};
 
 const Native: ComponentType<NativeProps> | null = requireOptionalNativeModule("Stylus") ? requireNativeView<NativeProps>("Stylus") : null;
 
-export function StylusView({ onButton, ...rest }: StylusViewProps) {
+export function StylusView({ onButton, onHover, ...rest }: StylusViewProps) {
   if (!Native) return <View {...rest} />;
-  return <Native {...rest} onButton={onButton ? (e) => onButton(e.nativeEvent.pressed, !!e.nativeEvent.hover) : undefined} />;
-}
-
-/** 단추 이름표: S펜을 단추 위에 띄우거나 길게 누르면 text가 뜬다 (안드로이드 기본 툴팁) */
-export type TooltipViewProps = ViewProps & { text: string };
-
-const NativeTip: ComponentType<TooltipViewProps> | null = requireOptionalNativeModule("Tooltip") ? requireNativeView<TooltipViewProps>("Tooltip") : null;
-
-export function TooltipView(props: TooltipViewProps) {
-  if (!NativeTip) {
-    const { text: _text, ...rest } = props;
-    return <View {...rest} />;
-  }
-  return <NativeTip {...props} />;
+  return (
+    <Native
+      {...rest}
+      onButton={onButton ? (e) => onButton(e.nativeEvent.pressed, !!e.nativeEvent.hover) : undefined}
+      hoverEvents={!!onHover}
+      onHover={onHover ? (e) => onHover(e.nativeEvent.x, e.nativeEvent.y, e.nativeEvent.exit) : undefined}
+    />
+  );
 }

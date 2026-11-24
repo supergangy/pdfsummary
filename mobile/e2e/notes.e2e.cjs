@@ -877,6 +877,52 @@ open(sys.argv[1], "wb").write(png); print(base64.b64encode(png).decode())`, pngP
     await page.waitForTimeout(900);
     imgs = await images();
     if (imgs.length !== 2 || !String(imgs[1].img).startsWith("data:image/png")) fail("그림 스티커 '별'이 PNG 그림으로 들어가지 않음");
+    // 스티커 손잡이: 오른쪽 아래를 끌면 커지고, 위 손잡이를 돌리면 돌아간다 / 누르기만 해도 고르고, 끌어 옮긴다
+    {
+      const cb = await canvas.boundingBox();
+      const k = Math.min((cb.width - 24) / 595.28, 6);
+      const ox = cb.x + 12 + Math.max(0, (cb.width - 24 - 595.28 * k) / 2), oy = cb.y + 12;
+      const scr = (x, y) => [ox + x * k, oy + y * k];
+      const star = async () => (await images())[1];
+      const drag = async (pts) => {
+        await page.mouse.move(pts[0][0], pts[0][1]);
+        await page.mouse.down();
+        for (const [x, y] of pts.slice(1)) await page.mouse.move(x, y, { steps: 3 });
+        await page.mouse.up();
+        await page.waitForTimeout(900);
+      };
+      let st = await star();
+      const w0 = st.pts[3] - st.pts[0];
+      const [hx, hy] = scr(st.pts[3] + 4, st.pts[4] + 4);
+      await drag([[hx, hy], [hx + 25, hy + 25], [hx + 50, hy + 50]]);
+      st = await star();
+      const w1 = st.pts[3] - st.pts[0];
+      if (!(w1 > w0 * 1.3)) fail(`크기 손잡이를 끌었는데 스티커가 커지지 않음 (폭 ${w0.toFixed(1)} → ${w1.toFixed(1)})`);
+      // 돌리기 손잡이: 위 가운데에서 시계 방향으로 4분의 1 바퀴 → 90도 (90도 근처는 딱 맞춘다)
+      const cx = (st.pts[0] + st.pts[3]) / 2, cy = (st.pts[1] + st.pts[4]) / 2;
+      const [ccx, ccy] = scr(cx, cy);
+      const top = scr(cx, st.pts[1] - 4)[1] - 30;
+      const rad = ccy - top;
+      const arc = [];
+      for (let a = 0; a <= 90; a += 10) arc.push([ccx + rad * Math.sin((a * Math.PI) / 180), ccy - rad * Math.cos((a * Math.PI) / 180)]);
+      await drag(arc);
+      st = await star();
+      if (st.rot !== 90) fail(`돌리기 손잡이로 4분의 1 바퀴 돌렸는데 각도가 ${st.rot}`);
+      if (Math.abs(st.pts[3] - st.pts[0] - w1) > 0.5) fail("돌렸는데 스티커 크기가 바뀜");
+      // 빈 곳을 누르면 고르기가 풀리고, 스티커를 누르기만 해도 다시 골라진다 → 끌어 옮기기
+      const [ex, ey] = scr(30, 30);
+      await page.mouse.click(ex, ey);
+      await page.waitForTimeout(600);
+      if ((await page.getByLabel("고르기 끝내기").count()) !== 0) fail("빈 곳을 눌렀는데 고르기가 풀리지 않음");
+      await page.mouse.click(ccx, ccy);
+      await page.waitForTimeout(600);
+      if ((await page.getByLabel("고르기 끝내기").count()) !== 1) fail("스티커를 눌렀는데 골라지지 않음");
+      await drag([[ccx, ccy], [ccx + 30, ccy + 15], [ccx + 60, ccy + 30]]);
+      const moved = await star();
+      const mx = (moved.pts[0] + moved.pts[3]) / 2 - cx, my = (moved.pts[1] + moved.pts[4]) / 2 - cy;
+      if (Math.abs(mx - 60 / k) > 2 || Math.abs(my - 30 / k) > 2) fail(`누른 스티커를 끌었는데 그만큼 옮겨지지 않음 (${mx.toFixed(1)}, ${my.toFixed(1)})`);
+      if (moved.rot !== 90) fail("옮겼더니 돌린 각도가 없어짐");
+    }
     // 웹은 Ctrl+V(붙여넣기)로 복사한 그림도
     await page.evaluate((b64) => {
       const bin = atob(b64);
@@ -895,7 +941,7 @@ open(sys.argv[1], "wb").write(png); print(base64.b64encode(png).decode())`, pngP
     await dl2.saveAs(out2);
     const pdfInfo = execFileSync("python3", ["-c", "import sys, pymupdf; p = pymupdf.open(sys.argv[1])[0]; print(len(set(x[0] for x in p.get_images()))); print(p.get_text())", out2], { encoding: "utf8" });
     if (Number(pdfInfo.trim().split(/\s+/)[0]) < 2 || !pdfInfo.includes("중요")) fail("내보낸 PDF에 사진·스티커가 없음: " + pdfInfo.slice(0, 80));
-    console.log("✓ 사진 고르기·크게, 도장·그림 스티커, Ctrl+V 붙여넣기, PDF 내보내기에 사진·도장");
+    console.log("✓ 사진 고르기·크게, 도장·그림 스티커(손잡이로 키우기·90도 돌리기, 눌러 고르고 끌어 옮기기), Ctrl+V 붙여넣기, PDF 내보내기에 사진·도장");
 
     // ── 강의 녹음: 녹음하며 쓴 필기에 녹음 시각, '필기 눌러 듣기'로 그때부터 ──
     await page.getByLabel(/^글상자 \(/).click();

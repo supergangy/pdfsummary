@@ -3,7 +3,7 @@
 import fontkit from "@pdf-lib/fontkit";
 import { BlendMode, LineCapStyle, PDFDocument, degrees, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 
-import { penOutline, strokeDraw } from "./geometry.ts";
+import { penOutline, spin, strokeDraw } from "./geometry.ts";
 import { type Ink, type Notebook, type Paper, type Stroke } from "./model.ts";
 import { paperHasText, paperMarks } from "./paperTemplates.ts";
 
@@ -60,6 +60,9 @@ function drawStroke(page: PDFPage, s: Stroke, crop: Box, rot: number) {
   });
 }
 
+/** pdf-lib에 줄 회전 각도: 쪽 회전만큼 돌리고, 화면에서 시계 방향으로 돌린 상자(rot)만큼 반대로 */
+const turn = (rot: number, s: Stroke) => degrees((((rot - (s.rot ?? 0)) % 360) + 360) % 360);
+
 /** 글상자: 폭 안에서 줄을 나눠 위에서부터 쓴다 (한글 글꼴을 넣어서) */
 function drawText(page: PDFPage, s: Stroke, crop: Box, rot: number, font: PDFFont) {
   const [x0, y0, x1] = [s.pts[0], s.pts[1], s.pts[3]];
@@ -78,8 +81,9 @@ function drawText(page: PDFPage, s: Stroke, crop: Box, rot: number, font: PDFFon
   lines.forEach((line, i) => {
     if (!line) return;
     // 줄의 글자 바탕선 왼쪽 끝 (화면 좌표) → PDF 좌표
-    const [X, Y] = toUser(x0, y0 + i * lh + size * 1.05, crop, rot);
-    page.drawText(line, { x: X, y: Y, size, font, color: hex(s.color), rotate: degrees(((rot % 360) + 360) % 360) });
+    const [u, v] = spin(s, x0, y0 + i * lh + size * 1.05); // 돌린 글상자면 돌린 자리
+    const [X, Y] = toUser(u, v, crop, rot);
+    page.drawText(line, { x: X, y: Y, size, font, color: hex(s.color), rotate: turn(rot, s) });
   });
 }
 
@@ -103,19 +107,21 @@ export function dataUriBytes(uri: string): Uint8Array {
 /** 사진·그림 스티커: 상자 왼쪽 아래를 기준으로 쪽 회전만큼 돌려 그린다 */
 function drawImageBox(page: PDFPage, img: PDFImage, s: Stroke, crop: Box, rot: number) {
   const [x0, y0, , x1, y1] = s.pts;
-  const [X, Y] = toUser(x0, y1, crop, rot);
-  page.drawImage(img, { x: X, y: Y, width: x1 - x0, height: y1 - y0, rotate: degrees(((rot % 360) + 360) % 360) });
+  const [u, v] = spin(s, x0, y1); // 돌린 사진이면 왼쪽 아래 모서리도 돌린 자리
+  const [X, Y] = toUser(u, v, crop, rot);
+  page.drawImage(img, { x: X, y: Y, width: x1 - x0, height: y1 - y0, rotate: turn(rot, s) });
 }
 
 /** 도장 스티커: 테두리 + 옅은 바탕 상자, 가운데에 굵게 글 */
 function drawStamp(page: PDFPage, s: Stroke, crop: Box, rot: number, font: PDFFont) {
   const [x0, y0, , x1, y1] = s.pts;
-  const box = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const box = [spin(s, x0, y0), spin(s, x1, y0), spin(s, x1, y1), spin(s, x0, y1)];
   page.drawSvgPath(svgUser(box, crop, rot, true), { x: 0, y: 0, color: hex(s.color), opacity: 0.12, borderColor: hex(s.color), borderWidth: Math.max(1, s.width * 0.1) });
   const text = s.text ?? "";
   const tw = font.widthOfTextAtSize(text, s.width);
-  const [X, Y] = toUser(x0 + (x1 - x0 - tw) / 2, (y0 + y1) / 2 + s.width * 0.36, crop, rot);
-  page.drawText(text, { x: X, y: Y, size: s.width, font, color: hex(s.color), rotate: degrees(((rot % 360) + 360) % 360) });
+  const [u, v] = spin(s, x0 + (x1 - x0 - tw) / 2, (y0 + y1) / 2 + s.width * 0.36);
+  const [X, Y] = toUser(u, v, crop, rot);
+  page.drawText(text, { x: X, y: Y, size: s.width, font, color: hex(s.color), rotate: turn(rot, s) });
 }
 
 /** 빈 쪽의 속지 무늬·서식 (화면과 같은 목록을 그린다). 칸 이름 글은 글꼴이 있을 때만 */

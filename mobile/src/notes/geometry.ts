@@ -118,8 +118,36 @@ export function strokeSvg(s: Stroke): string {
 
 const r = (v: number) => Math.round(v * 100) / 100;
 
+/** 글상자·사진(상자)을 상자 가운데를 축으로 deg도(시계 방향) 돌린 자리. 화면 좌표(아래로 +y) */
+export function spin(s: Stroke, x: number, y: number, deg = s.rot ?? 0): [number, number] {
+  if (!deg) return [x, y];
+  const cx = (s.pts[0] + s.pts[3]) / 2, cy = (s.pts[1] + s.pts[4]) / 2;
+  const a = (deg * Math.PI) / 180, c = Math.cos(a), si = Math.sin(a);
+  const dx = x - cx, dy = y - cy;
+  return [cx + dx * c - dy * si, cy + dx * si + dy * c];
+}
+
+/** 상자(글상자·사진)인지 */
+export const isBoxStroke = (s: Stroke) => (s.tool === "text" || s.tool === "image") && s.pts.length === 6;
+
+/** 이 점에 있는 맨 위의 사진·스티커·도장 (돌린 것도). 없으면 null — 누르기만 해도 고르게 */
+export function objectAt(strokes: Stroke[], x: number, y: number, pad = 0): Stroke | null {
+  for (let i = strokes.length - 1; i >= 0; i--) {
+    const s = strokes[i];
+    if (!isBoxStroke(s) || (s.tool === "text" && !s.stamp)) continue;
+    if (hits(s, x, y, pad)) return s;
+  }
+  return null;
+}
+
 export function bounds(s: Stroke): Box {
-  if (s.tool === "text" || s.tool === "image") return [s.pts[0], s.pts[1], s.pts[3], s.pts[4]]; // 글상자·사진은 상자
+  if (s.tool === "text" || s.tool === "image") {
+    // 글상자·사진은 상자 (돌렸으면 돌린 네 모서리를 감싸는 상자)
+    const [x0, y0, , x1, y1] = s.pts;
+    if (!s.rot) return [x0, y0, x1, y1];
+    const cs = [spin(s, x0, y0), spin(s, x1, y0), spin(s, x1, y1), spin(s, x0, y1)];
+    return [Math.min(...cs.map((c) => c[0])), Math.min(...cs.map((c) => c[1])), Math.max(...cs.map((c) => c[0])), Math.max(...cs.map((c) => c[1]))];
+  }
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (let i = 0; i < s.pts.length; i += 3) {
     const x = s.pts[i], y = s.pts[i + 1];
@@ -145,6 +173,7 @@ function segDist2(px: number, py: number, ax: number, ay: number, bx: number, by
 export function hits(s: Stroke, x: number, y: number, radius: number): boolean {
   if (s.tool === "text" || s.tool === "image") {
     const [x0, y0, x1, y1] = [s.pts[0], s.pts[1], s.pts[3], s.pts[4]];
+    if (s.rot) [x, y] = spin(s, x, y, -s.rot); // 돌린 상자: 점을 거꾸로 돌려 원래 상자와 비교
     return x >= x0 - radius && x <= x1 + radius && y >= y0 - radius && y <= y1 + radius;
   }
   const reach = radius + s.width / 2;

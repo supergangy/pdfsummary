@@ -9,7 +9,7 @@ import { pageText } from "../../modules/pdf-pages";
 import { StylusView } from "../../modules/stylus";
 import { Button, floating, radius, styles as ui, type, useTheme, type Theme } from "../ui";
 import { clampPage, openingPage, parsePageInput, colorName, isHighlighterTap, justAfter, otherPage, pageBg, penSwap, swatchEdge, widthName, type BgCache, type SwapSaved } from "./editor-logic";
-import { bounds, eraseFrom, fitHighlight, hitAlong, straighten, thin, type CharBox } from "./geometry";
+import { bounds, eraseFrom, fitHighlight, hitAlong, objectAt, straighten, thin, type CharBox } from "./geometry";
 import { History, removal, type Op } from "./history";
 import {
   HIGHLIGHT_COLORS, HIGHLIGHT_OPACITY, HIGHLIGHT_WIDTHS, PEN_COLORS, PEN_WIDTHS, PENS, TEXT_SIZES, insertPage, makeImage, makeStamp, makeTextBox, newId, removePage,
@@ -24,7 +24,7 @@ import { loadPrefs, savePrefs, type Prefs } from "./prefs";
 import { clock, fadeStep, pageAt, seekFor, timedStrokeAt } from "./audioSync";
 import { PlayerBar, useLectureAudio } from "./LectureAudio";
 import { clipboardPicture, fileToDataUri, pickPhoto, shrinkDataUri, stickerPicture, type Picture } from "./insertImage";
-import { lassoSelect, moved, scaled, snapShape } from "./shapes";
+import { lassoSelect, moved, scaled, snapShape, transformed } from "./shapes";
 import { STAMPS, STICKERS, type Sticker } from "./stickers";
 import { ToolIcon, type IconName } from "./ToolIcon";
 import { ToolPanel } from "./ToolPanel";
@@ -663,6 +663,17 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     const page = activate(pageId);
     if (!page) return;
     const cur = inkRef.current[page.id] ?? [];
+    let lx0 = Infinity, ly0 = Infinity, lx1 = -Infinity, ly1 = -Infinity;
+    for (let i = 0; i < pts.length; i += 3) {
+      lx0 = Math.min(lx0, pts[i]);
+      lx1 = Math.max(lx1, pts[i]);
+      ly0 = Math.min(ly0, pts[i + 1]);
+      ly1 = Math.max(ly1, pts[i + 1]);
+    }
+    if (lx1 - lx0 < 8 && ly1 - ly0 < 8) {
+      const o = pts.length ? objectAt(cur, pts[0], pts[1], 2) : null;
+      return setSelection(o ? { page: page.id, ids: new Set([o.id]), box: selBox([o]) } : null);
+    }
     const ids = lassoSelect(cur, pts, prefs?.lassoPartial ?? false);
     if (!ids.size) return setSelection(null);
     setSelection({ page: page.id, ids, box: selBox(cur.filter((s) => ids.has(s.id))) });
@@ -691,6 +702,25 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     replaceSelected((s) => moved(s, dx, dy));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection]);
+  /** 손잡이로 크기·각도를 바꿈: 고른 상자 가운데를 축으로 */
+  const onTransformSelection = useCallback((dx: number, dy: number, k: number, deg: number) => {
+    if (!selection) return;
+    const [x0, y0, x1, y1] = selection.box;
+    replaceSelected((s) => transformed(s, dx, dy, k, deg, (x0 + x1) / 2, (y0 + y1) / 2));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection]);
+  /** 손가락으로 사진·스티커·도장을 톡 누름 → 그것을 골라 바로 옮기고·키우고·돌릴 수 있게 (도구는 올가미로) */
+  const onObjectTap = useCallback((x: number, y: number, pageId: string) => {
+    const o = objectAt(inkRef.current[pageId] ?? [], x, y, 2);
+    if (!o) {
+      if (selection) setSelection(null); // 빈 곳을 누르면 고르기를 푼다
+      return;
+    }
+    activate(pageId);
+    if (prefs?.tool !== "lasso") setP({ tool: "lasso" });
+    setSelection({ page: pageId, ids: new Set([o.id]), box: selBox([o]) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selection, prefs?.tool]);
   const deleteSelected = () => {
     if (!selection) return;
     const op = removal(inkRef.current, selection.page, selection.ids);
@@ -1252,6 +1282,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         selection={selection}
         onLasso={onLasso}
         onMoveSelection={onMoveSelection}
+        onTransformSelection={onTransformSelection}
+        onObjectTap={onObjectTap}
         onTextTap={onTextTap}
         onPenDouble={onPenDouble}
         onShown={onShown}

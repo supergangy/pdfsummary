@@ -70,7 +70,13 @@ export function inkPicture(strokes: Stroke[], hidden: Set<string>, w: number, h:
       const img = strokeImage(s);
       if (!img) continue;
       const [x0, y0, , x1, y1] = s.pts;
+      // 돌린 사진·스티커: 상자 가운데를 축으로 돌려 그린다
+      if (s.rot) {
+        c.save();
+        c.rotate(s.rot, (x0 + x1) / 2, (y0 + y1) / 2);
+      }
       c.drawImageRectOptions(img, Skia.XYWHRect(0, 0, img.width(), img.height()), Skia.XYWHRect(x0, y0, x1 - x0, y1 - y0), FilterMode.Linear, MipmapMode.Linear, ip);
+      if (s.rot) c.restore();
     }
     // 형광펜은 글씨 밑에 깔리게 먼저
     for (const s of strokes) if (s.tool === "highlighter" && !hidden.has(s.id)) paintOne(s);

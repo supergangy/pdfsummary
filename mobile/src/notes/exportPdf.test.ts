@@ -158,3 +158,21 @@ test("붙인 사진은 그 자리에 그림으로, 도장 스티커는 글로 �
   assert.equal(out.trim().split(/\s+/)[0], "1", "같은 그림은 한 번만 넣는다");
   assert.match(out, /중요/);
 });
+
+test("돌린 사진·도장은 PDF에도 돌린 모양 그대로", async () => {
+  const { readFileSync } = await import("node:fs");
+  const font = new Uint8Array(readFileSync(new URL("../../assets/fonts/NanumGothic-Regular.ttf", import.meta.url)));
+  const { makeImage, makeStamp } = await import("./model.ts");
+  const nb = blankNotebook("돌린 사진", "plain", 1);
+  const p = nb.pages[0];
+  // 120×80 사진을 가운데(160, 140)를 축으로 90도 → 세워져 x 120~200, y 80~200
+  const ink = { [p.id]: [{ ...makeImage("i", 100, 100, 120, 80, BLACK_PNG), rot: 90 }, { ...makeStamp("s", 300, 500, "중요", "#D7263D"), rot: 30 }] };
+  const pdf = await buildPdf(nb, ink, null, font);
+  // 돌린 뒤에만 덮이는 곳(160, 190)은 칠해지고, 돌리기 전에만 덮이던 곳(110, 140)은 비어 있다
+  assert.deepEqual(inkAt(pdf, 0, [[160, 140], [160, 190], [110, 140]]), [true, true, false]);
+  const dir = mkdtempSync(join(tmpdir(), "nb-"));
+  const f = join(dir, "r.pdf");
+  writeFileSync(f, pdf);
+  const out = execFileSync("python3", ["-c", "import sys, pymupdf; p = pymupdf.open(sys.argv[1])[0]; print(p.get_text())", f], { encoding: "utf8" });
+  assert.match(out, /중요/, "돌린 도장도 글로 들어간다");
+});

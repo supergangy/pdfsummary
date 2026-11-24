@@ -20,6 +20,7 @@ export type Stroke = {
   dash?: LineDash; // 펜만
   opacity?: number; // 형광펜만 (0~1, 없으면 HIGHLIGHT_OPACITY)
   img?: string; // 사진·그림 스티커만: 그림 자체 (data:image/jpeg|png;base64,…). 줄여서 넣으므로 동기화 쓰기 하나에 같이 간다
+  rot?: number; // 글상자·사진·스티커만: 상자 가운데를 축으로 시계 방향으로 돌린 각도(도). 없으면 0
   stamp?: boolean; // 글상자 중 '도장 스티커'(중요·암기 등): 둥근 테두리 + 옅은 바탕으로 그린다
   rec?: string; // 강의 녹음 중에 썼으면 그 녹음 id (audioSync.ts)
   rt?: number; // 그 녹음 시작부터 몇 ms에 썼는지
@@ -164,7 +165,8 @@ export function parseStrokes(raw: unknown): Stroke[] {
       !!s && typeof s.id === "string" &&
       (s.tool === "pen" || s.tool === "highlighter" || (s.tool === "text" && typeof s.text === "string" && s.pts?.length === 6) ||
         (s.tool === "image" && typeof s.img === "string" && s.img.startsWith("data:image/") && s.pts?.length === 6)) &&
-      typeof s.color === "string" && (s.tool === "image" || s.width > 0) && Array.isArray(s.pts) && s.pts.length >= 3 && s.pts.length % 3 === 0,
+      typeof s.color === "string" && (s.tool === "image" || s.width > 0) && Array.isArray(s.pts) && s.pts.length >= 3 && s.pts.length % 3 === 0 &&
+      (s.rot === undefined || (typeof s.rot === "number" && Number.isFinite(s.rot))),
   );
 }
 

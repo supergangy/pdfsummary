@@ -70,6 +70,10 @@ type Props = {
   selection?: Selection;
   onLasso?: (pts: number[], pageId: string) => void; // 올가미를 다 그렸을 때
   onMoveSelection?: (dx: number, dy: number) => void; // 고른 것을 끌어 옮겼을 때
+  /** 고른 것의 손잡이로 크기·각도를 바꿨을 때: 고른 상자 가운데를 축으로 k배, deg도(시계 방향) */
+  onTransformSelection?: (dx: number, dy: number, k: number, deg: number) => void;
+  /** 손가락으로 화면을 옮기는 중에 톡 눌렀을 때 (사진·스티커를 누르면 고르게) */
+  onObjectTap?: (x: number, y: number, pageId: string) => void;
   onTextTap?: (x: number, y: number, pageId: string) => void; // 글상자 도구로 쪽을 눌렀을 때
   onViewWidth?: (pagePx: number) => void; // 쪽이 화면에서 몇 픽셀 폭인지 (바탕 그림 해상도용)
   onPenDouble?: () => void; // S펜 옆 단추를 펜을 띄운 채 두 번 눌렀을 때
@@ -119,6 +123,8 @@ export function PageCanvas(props: Props) {
   const emitTextTap = useCallback((x: number, y: number, i: number) => cb.current.onTextTap?.(x, y, idOf(i)), []);
   const emitLasso = useCallback((pts: number[], i: number) => cb.current.onLasso?.(pts, idOf(i)), []);
   const emitMove = useCallback((dx: number, dy: number) => cb.current.onMoveSelection?.(dx, dy), []);
+  const emitTransform = useCallback((dx: number, dy: number, k: number, deg: number) => cb.current.onTransformSelection?.(dx, dy, k, deg), []);
+  const emitObjTap = useCallback((x: number, y: number, i: number) => cb.current.onObjectTap?.(x, y, idOf(i)), []);
   const emitScale = useCallback((s: number) => {
     const p = cb.current.pages.find((x) => x.id === cb.current.active) ?? cb.current.pages[0];
     if (p) cb.current.onViewWidth?.(s * p.w);
@@ -294,18 +300,24 @@ export function PageCanvas(props: Props) {
   const selPage = useSharedValue(-1);
   const dragX = useSharedValue(0);
   const dragY = useSharedValue(0);
+  const selK = useSharedValue(1); // 크기 손잡이로 바꾸는 중인 배율
+  const selR = useSharedValue(0); // 돌리기 손잡이로 돌리는 중인 각도 (도, 시계 방향)
   useEffect(() => {
     hasSel.value = !!sel && sel.ids.size > 0 && selIdx >= 0;
     selPage.value = selIdx;
     if (sel) selBox.value = [...sel.box];
     dragX.value = 0;
     dragY.value = 0;
-  }, [sel, selIdx, hasSel, selPage, selBox, dragX, dragY]);
+    selK.value = 1;
+    selR.value = 0;
+  }, [sel, selIdx, hasSel, selPage, selBox, dragX, dragY, selK, selR]);
   useEffect(() => {
     fingerSV.value = fingerDraw;
   }, [fingerDraw, fingerSV]);
 
-  const mode = useSharedValue(0); // 0 없음, 1 쓰기, 2 손가락으로 옮기기, 3 지우기, 4 취소됨, 5 고른 것 끌기, 6 올가미 그리기, 7 글상자 누름
+  const mode = useSharedValue(0); // 0 없음, 1 쓰기, 2 손가락으로 옮기기, 3 지우기, 4 취소됨, 5 고른 것 끌기, 6 올가미 그리기, 7 글상자 누름, 8 크기 손잡이, 9 돌리기 손잡이
+  const tapAt = useSharedValue({ x: 0, y: 0, i: -1, at: 0 }); // 손가락으로 옮기기 시작한 자리 (톡 누르기였는지 보려고)
+  const panFar = useSharedValue(0); // 손가락으로 옮기며 가장 멀리 간 거리 (화면 px)
   const started = useSharedValue(0);
   const stylus = useSharedValue(false);
   const touch = useSharedValue(false); // 지금 획을 손가락으로 쓰고 있는지
@@ -411,6 +423,29 @@ export function PageCanvas(props: Props) {
     cancelAnimation(ty);
   };
 
+  /** 고른 것의 손잡이: 0 없음, 1 크기(오른쪽 아래 모서리), 2 돌리기(위 가운데 위). 쪽 좌표 x·y, 화면 배율 s */
+  const handleAt = (x: number, y: number, s: number) => {
+    "worklet";
+    const b = selBox.value;
+    const r = HANDLE_HIT / s;
+    if ((x - (b[2] + 4)) ** 2 + (y - (b[3] + 4)) ** 2 <= r * r) return 1;
+    if ((x - (b[0] + b[2]) / 2) ** 2 + (y - (b[1] - 4 - ROT_GAP / s)) ** 2 <= r * r) return 2;
+    return 0;
+  };
+  /** 고른 것을 집기: 손잡이면 크기·돌리기, 상자 안이면 끌기. 집었으면 true */
+  const grabSelection = (x: number, y: number, i: number, s: number) => {
+    "worklet";
+    if (!hasSel.value || i !== selPage.value) return false;
+    const h = handleAt(x, y, s);
+    const b = selBox.value;
+    const pad = 10 / s;
+    if (!h && !(x >= b[0] - pad && x <= b[2] + pad && y >= b[1] - pad && y <= b[3] + pad)) return false;
+    mode.value = h === 1 ? 8 : h === 2 ? 9 : 5;
+    sx.value = x;
+    sy.value = y;
+    return true;
+  };
+
   /** 손가락으로 화면 옮기기 시작 */
   const startPan = () => {
     "worklet";
@@ -432,7 +467,25 @@ export function PageCanvas(props: Props) {
       "worklet";
       stopFling();
       const finger = e.pointerType === PointerType.TOUCH;
-      if (finger && !fingerSV.value) return startPan();
+      if (finger && !fingerSV.value) {
+        // 손가락은 화면 옮기기지만, 고른 것(사진·스티커 등)을 잡으면 그것을 옮기고·키우고·돌린다
+        const s0 = scale.value;
+        const qx = (e.x - tx.value) / s0, qy = (e.y - ty.value) / s0;
+        const qi = pageAt(rects.value, qx, qy);
+        if (qi >= 0) {
+          const R0 = rects.value;
+          const px = qx - R0[qi * 4], py = qy - R0[qi * 4 + 1];
+          if (grabSelection(px, py, qi, s0)) {
+            cur.value = qi;
+            offX.value = R0[qi * 4];
+            offY.value = R0[qi * 4 + 1];
+            return;
+          }
+          tapAt.value = { x: px, y: py, i: qi, at: Date.now() };
+        } else tapAt.value = { x: 0, y: 0, i: -1, at: 0 };
+        panFar.value = 0;
+        return startPan();
+      }
       moving.value = pinching.value;
       const s = scale.value;
       const dx = (e.x - tx.value) / s, dy = (e.y - ty.value) / s;
@@ -458,14 +511,7 @@ export function PageCanvas(props: Props) {
         return;
       }
       if (toolSV.value === 3) {
-        const b = selBox.value;
-        const pad = 10 / s;
-        if (hasSel.value && i === selPage.value && x >= b[0] - pad && x <= b[2] + pad && y >= b[1] - pad && y <= b[3] + pad) {
-          mode.value = 5;
-          sx.value = x;
-          sy.value = y;
-          return;
-        }
+        if (grabSelection(x, y, i, s)) return;
         mode.value = 6;
         sx.value = x;
         sy.value = y;
@@ -490,6 +536,8 @@ export function PageCanvas(props: Props) {
     onUpdate: (e) => {
       "worklet";
       if (mode.value === 2) {
+        const far = Math.abs(e.translationX) + Math.abs(e.translationY);
+        if (far > panFar.value) panFar.value = far;
         let nx = sx.value + e.translationX;
         let ny = sy.value + e.translationY;
         if (paging.value) {
@@ -518,6 +566,22 @@ export function PageCanvas(props: Props) {
       if (mode.value === 5) {
         dragX.value = x - sx.value;
         dragY.value = y - sy.value;
+        return;
+      }
+      if (mode.value === 8 || mode.value === 9) {
+        const b = selBox.value;
+        const cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2;
+        if (mode.value === 8) {
+          // 크기: 가운데에서 손가락까지 거리의 비율 (너무 작게·크게는 막는다)
+          const d0 = Math.hypot(sx.value - cx, sy.value - cy), d1 = Math.hypot(x - cx, y - cy);
+          selK.value = d0 > 0.5 ? Math.max(0.15, Math.min(8, d1 / d0)) : 1;
+        } else {
+          // 돌리기: 가운데를 축으로 손가락이 돈 각도. 0·90·180·270도 근처(5도 안)는 딱 맞춘다
+          let deg = ((Math.atan2(y - cy, x - cx) - Math.atan2(sy.value - cy, sx.value - cx)) * 180) / Math.PI;
+          deg = ((deg % 360) + 540) % 360 - 180;
+          const snap = Math.round(deg / 90) * 90;
+          selR.value = Math.abs(deg - snap) < 5 ? snap : deg;
+        }
         return;
       }
       if (mode.value === 6) {
@@ -588,12 +652,21 @@ export function PageCanvas(props: Props) {
         scheduleOnRN(emitTextTap, sx.value, sy.value, cur.value);
       } else if (mode.value === 5) {
         scheduleOnRN(emitMove, dragX.value, dragY.value);
+      } else if (mode.value === 8 || mode.value === 9) {
+        if (Math.abs(selK.value - 1) < 0.01 && Math.abs(selR.value) < 0.5) {
+          selK.value = 1;
+          selR.value = 0;
+        } else scheduleOnRN(emitTransform, 0, 0, selK.value, selR.value);
       } else if (mode.value === 6) {
         const pts = live.value.slice();
         live.value = [];
         scheduleOnRN(emitLasso, pts, cur.value);
       } else if (mode.value === 2 && !flings.value && !pinching.value) {
         stopMoving(); // 미끄러지지 않고 그대로 멈췄다
+      }
+      // 손가락으로 톡 눌렀다(거의 안 움직이고 금방 뗌) → 그 자리의 사진·스티커를 고르게 알린다
+      if (mode.value === 2 && !pinching.value && tapAt.value.i >= 0 && panFar.value < 10 && Date.now() - tapAt.value.at < 400) {
+        scheduleOnRN(emitObjTap, tapAt.value.x, tapAt.value.y, tapAt.value.i);
       }
       mode.value = 0;
     },
@@ -663,7 +736,28 @@ export function PageCanvas(props: Props) {
     const p = pages[selIdx];
     return inkPicture(selStrokes.filter((s) => sel.ids.has(s.id)), new Set(), p.w, p.h, paths.current);
   }, [selStrokes, sel, selIdx, pages]);
-  const dragT = useDerivedValue(() => [{ translateX: dragX.value }, { translateY: dragY.value }]);
+  // 고른 상자 가운데를 축으로 크기·각도를 바꾸고 끈 만큼 옮긴 모습
+  const dragT = useDerivedValue(() => {
+    const b = selBox.value;
+    const cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2;
+    return [
+      { translateX: dragX.value + cx }, { translateY: dragY.value + cy },
+      { rotate: (selR.value * Math.PI) / 180 }, { scale: selK.value },
+      { translateX: -cx }, { translateY: -cy },
+    ];
+  });
+  // 손잡이: 화면에서 늘 같은 크기로 (크기 미리 보기 배율도 되돌려서)
+  const hR = useDerivedValue(() => HANDLE_R / scale.value / selK.value);
+  const hW = useDerivedValue(() => 1.5 / scale.value / selK.value);
+  const sizeX = useDerivedValue(() => selBox.value[2] + 4);
+  const sizeY = useDerivedValue(() => selBox.value[3] + 4);
+  const rotX = useDerivedValue(() => (selBox.value[0] + selBox.value[2]) / 2);
+  const rotY = useDerivedValue(() => selBox.value[1] - 4 - ROT_GAP / scale.value / selK.value);
+  const rotStem = usePathValue((p) => {
+    "worklet";
+    p.moveTo(rotX.value, selBox.value[1] - 4);
+    p.lineTo(rotX.value, rotY.value);
+  });
   const selRect = useDerivedValue(() => {
     const b = selBox.value;
     return { x: b[0] - 4, y: b[1] - 4, width: b[2] - b[0] + 8, height: b[3] - b[1] + 8 };
@@ -719,6 +813,12 @@ export function PageCanvas(props: Props) {
                   <Rect rect={selRect} style="stroke" strokeWidth={1} color="#2F6FDE">
                     <DashPathEffect intervals={[5, 4]} />
                   </Rect>
+                  {/* 손잡이: 오른쪽 아래 = 크기, 위 가운데 = 돌리기 */}
+                  <Path path={rotStem} style="stroke" strokeWidth={hW} color="#2F6FDE" />
+                  <Circle cx={rotX} cy={rotY} r={hR} color="#FFFFFF" />
+                  <Circle cx={rotX} cy={rotY} r={hR} style="stroke" strokeWidth={hW} color="#2F6FDE" />
+                  <Circle cx={sizeX} cy={sizeY} r={hR} color="#2F6FDE" />
+                  <Circle cx={sizeX} cy={sizeY} r={hR} style="stroke" strokeWidth={hW} color="#FFFFFF" />
                 </Group>
               </Group>
             ) : null}
@@ -743,7 +843,7 @@ export function PageCanvas(props: Props) {
           <TextLayer key={pages[i].id} strokes={ink[pages[i].id] ?? NO_STROKES} hidden={hiddenAll} page={pages[i]} ox={L.rects[i * 4]} oy={L.rects[i * 4 + 1]} tx={tx} ty={ty} scale={scale} />
         ))}
         {selIdx >= 0 && sel ? (
-          <TextLayer strokes={selStrokes.filter((s) => sel.ids.has(s.id))} hidden={hidden} page={pages[selIdx]} ox={selX} oy={selY} tx={tx} ty={ty} scale={scale} dx={dragX} dy={dragY} />
+          <TextLayer strokes={selStrokes.filter((s) => sel.ids.has(s.id))} hidden={hidden} page={pages[selIdx]} ox={selX} oy={selY} tx={tx} ty={ty} scale={scale} dx={dragX} dy={dragY} k={selK} r={selR} box={selBox} />
         ) : null}
         <ScrollSpot tx={tx} ty={ty} scale={scale} vw={vw} vh={vh} docW={docW} docH={docH} vertical={flow === "v"} moving={moving} label={spotLabel(L, spotSpread, activeIdx, pages.length)} />
       </View>
@@ -943,19 +1043,33 @@ function PageLayer({ page, x, y, strokes, hidden, bg, paths, fade, dark, moving,
   );
 }
 
+// 고른 것 손잡이: 화면에서 반지름(px), 누르는 자리 반지름(px), 돌리기 손잡이가 상자 위로 떨어진 거리(px)
+const HANDLE_R = 9;
+const HANDLE_HIT = 22;
+const ROT_GAP = 30;
+
 /** 글상자: 화면 확대·이동을 그대로 따라가는 글자 층 (손가락·펜 입력은 아래 그림판으로 통과). ox·oy: 쪽의 자리(문서 좌표) */
-function TextLayer({ strokes, hidden, page, ox, oy, tx, ty, scale, dx, dy }: {
+function TextLayer({ strokes, hidden, page, ox, oy, tx, ty, scale, dx, dy, k, r, box }: {
   strokes: Stroke[]; hidden: Set<string>; page: Page; ox: number; oy: number;
   tx: SharedValue<number>; ty: SharedValue<number>; scale: SharedValue<number>; dx?: SharedValue<number>; dy?: SharedValue<number>;
+  /** 고른 것: 상자(box) 가운데를 축으로 k배·r도 미리 보기 */
+  k?: SharedValue<number>; r?: SharedValue<number>; box?: SharedValue<number[]>;
 }) {
   const texts = strokes.filter((s) => s.tool === "text" && !hidden.has(s.id));
-  const style = useAnimatedStyle(() => ({
-    transform: [
-      { translateX: tx.value + (ox + (dx ? dx.value : 0)) * scale.value },
-      { translateY: ty.value + (oy + (dy ? dy.value : 0)) * scale.value },
-      { scale: scale.value },
-    ],
-  }));
+  const style = useAnimatedStyle(() => {
+    const b = box ? box.value : [0, 0, 0, 0];
+    const cx = (b[0] + b[2]) / 2, cy = (b[1] + b[3]) / 2;
+    return {
+      transform: [
+        { translateX: tx.value + (ox + (dx ? dx.value : 0) + cx) * scale.value },
+        { translateY: ty.value + (oy + (dy ? dy.value : 0) + cy) * scale.value },
+        { rotate: `${r ? r.value : 0}deg` },
+        { scale: scale.value * (k ? k.value : 1) },
+        { translateX: -cx },
+        { translateY: -cy },
+      ],
+    };
+  });
   if (!texts.length) return null;
   return (
     <Animated.View pointerEvents="none" style={[{ position: "absolute", left: 0, top: 0, width: page.w, height: page.h, transformOrigin: "0 0" }, style]}>
@@ -965,6 +1079,7 @@ function TextLayer({ strokes, hidden, page, ox, oy, tx, ty, scale, dx, dy }: {
           key={s.id}
           style={{
             position: "absolute", left: s.pts[0], top: s.pts[1], width: s.pts[3] - s.pts[0], height: s.pts[4] - s.pts[1],
+            ...(s.rot ? { transform: [{ rotate: `${s.rot}deg` }] } : null), // 돌린 도장 (상자 가운데 축)
             borderRadius: s.width * 0.45, borderWidth: Math.max(1.5, s.width * 0.1), borderColor: s.color, backgroundColor: s.color + "1F",
             alignItems: "center", justifyContent: "center",
           }}
@@ -975,7 +1090,7 @@ function TextLayer({ strokes, hidden, page, ox, oy, tx, ty, scale, dx, dy }: {
         <Text
           key={s.id}
           allowFontScaling={false} // 기기의 '글자 크기' 설정에 따라 커지면 저장된 글상자(글에 맞춘 폭)보다 넓어진다
-          style={{ position: "absolute", left: s.pts[0], top: s.pts[1], width: s.pts[3] - s.pts[0], fontSize: s.width, lineHeight: s.width * 1.4, color: s.color }}
+          style={{ position: "absolute", left: s.pts[0], top: s.pts[1], width: s.pts[3] - s.pts[0], height: s.pts[4] - s.pts[1], fontSize: s.width, lineHeight: s.width * 1.4, color: s.color, ...(s.rot ? { transform: [{ rotate: `${s.rot}deg` }] } : null) }}
         >
           {s.text}
         </Text>

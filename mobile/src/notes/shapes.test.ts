@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { History } from "./history.ts";
-import type { Stroke } from "./model.ts";
-import { lassoSelect, moved, snapShape } from "./shapes.ts";
+import { bounds, hits, objectAt } from "./geometry.ts";
+import { makeImage, makeStamp, parseStrokes, type Stroke } from "./model.ts";
+import { lassoSelect, moved, snapShape, transformed } from "./shapes.ts";
 
 const S = (id: string, pts: number[]): Stroke => ({ id, tool: "pen", color: "#000000", width: 2, pts });
 const wob = (pts: [number, number][], j = 1.2) => pts.flatMap(([x, y], i) => [x + ((i * 7) % 3 - 1) * j * 0.5, y + ((i * 5) % 3 - 1) * j * 0.5, 0.5]);
@@ -76,4 +77,54 @@ test("shape snapping", () => {
   const scrib = [0, 0, 0.5, 10, 20, 0.5, 20, 0, 0.5, 30, 20, 0.5, 40, 0, 0.5, 50, 25, 0.5, 30, 40, 0.5];
   assert.equal(snapShape(scrib), null);
   assert.equal(snapShape([0, 0, 0.5, 3, 3, 0.5, 5, 5, 0.5, 6, 6, 0.5]), null, "너무 작으면 그대로");
+});
+
+// ── 사진·스티커 옮기기·크기·돌리기 ──
+const near = (a: number[], b: number[], eps = 0.05) => a.length === b.length && a.every((v, i) => Math.abs(v - b[i]) <= eps);
+
+test("스티커 돌리기·크기: 상자 가운데는 축 둘레로, 크기는 k배, 각도는 rot에 (90도 돌리면 테두리 상자가 눕는다)", () => {
+  const img = makeImage("i", 100, 100, 40, 20, "data:image/png;base64,AAAA"); // 가운데 (120, 110)
+  // 자기 가운데를 축으로 90도
+  const r = transformed(img, 0, 0, 1, 90, 120, 110);
+  assert.equal(r.rot, 90);
+  assert.ok(near(r.pts, [100, 100, 0, 140, 120, 0]), "상자 자체(돌리기 전 모양)는 그대로");
+  assert.ok(near(bounds(r), [110, 90, 130, 130]), "돌린 테두리: 폭 20, 높이 40");
+  // 다른 축(쪽 0,0)을 축으로 2배: 가운데가 (240, 220)으로, 크기 80×40
+  const k = transformed(img, 5, -5, 2, 0, 0, 0);
+  assert.ok(near(k.pts, [205, 195, 0, 285, 235, 0]));
+  assert.equal(k.rot, undefined);
+  // 네 번 90도면 각도는 사라진다 (0도)
+  let z = img;
+  for (let i = 0; i < 4; i++) z = transformed(z, 0, 0, 1, 90, 120, 110);
+  assert.equal(z.rot, undefined);
+  // 펜 획은 점 하나하나를 돌리고, 굵기는 k배
+  const pen: Stroke = { id: "p", tool: "pen", color: "#000000", width: 2, pts: [10, 0, 0.5, 20, 0, 0.5] };
+  const pr = transformed(pen, 0, 0, 1.5, 90, 0, 0);
+  assert.ok(near(pr.pts, [0, 15, 0.5, 0, 30, 0.5]));
+  assert.equal(pr.width, 3);
+  // 도장(글상자)은 글자 크기도 k배
+  const st = makeStamp("s", 200, 200, "중요", "#D7263D", 18);
+  assert.equal(transformed(st, 0, 0, 2, 0, 200, 200).width, 36);
+});
+
+test("돌린 스티커: 누른 자리 판정·올가미 고르기·누르기만으로 고르기", () => {
+  const img = { ...makeImage("i", 100, 100, 40, 20, "data:image/png;base64,AAAA"), rot: 90 }; // 세워진 모양: x 110~130, y 90~130
+  assert.ok(hits(img, 120, 92, 0), "돌린 뒤 위쪽 끝");
+  assert.ok(!hits(img, 102, 110, 0), "돌리기 전 왼쪽 끝은 이제 빈 곳");
+  // 올가미: 세워진 모양을 감싸면 골라진다
+  assert.ok(lassoSelect([img], [108, 88, 0, 132, 88, 0, 132, 132, 0, 108, 132, 0]).has("i"));
+  // 누르기만으로: 맨 위의 사진·도장만 (그냥 글상자·펜 획은 아님)
+  const pen: Stroke = { id: "p", tool: "pen", color: "#000000", width: 2, pts: [0, 0, 0.5, 300, 300, 0.5] };
+  const text: Stroke = { id: "t", tool: "text", color: "#000000", width: 16, pts: [0, 0, 0, 300, 300, 0], text: "글" };
+  const stamp = makeStamp("s", 120, 110, "암기", "#1E4FD8");
+  assert.equal(objectAt([img, pen, text], 120, 92)?.id, "i");
+  assert.equal(objectAt([img, stamp], 120, 110)?.id, "s", "겹치면 나중에 넣은 것(위)");
+  assert.equal(objectAt([pen, text], 150, 150), null);
+});
+
+test("각도(rot)는 선택 칸: 예전 노트·다른 기기와 그대로 오가고, 이상한 값은 버린다", () => {
+  const img = makeImage("i", 0, 0, 10, 10, "data:image/png;base64,AAAA");
+  assert.equal(parseStrokes([img]).length, 1);
+  assert.equal(parseStrokes([{ ...img, rot: 33.5 }])[0].rot, 33.5);
+  assert.equal(parseStrokes([{ ...img, rot: "90" }]).length, 0);
 });

@@ -1,4 +1,5 @@
 // 올가미 선택과 도형 펴기
+import { spin } from "./geometry.ts";
 import type { Stroke } from "./model.ts";
 
 /** 점이 다각형(x, y, x, y, …) 안에 있는지 */
@@ -22,7 +23,12 @@ function lassoPoints(s: Stroke, step = 3): number[] {
   if ((s.tool === "text" || s.tool === "image") && p.length === 6) {
     // 글상자·사진은 상자 안을 고르게 채운 점으로
     const nx = Math.max(1, Math.min(40, Math.ceil((p[3] - p[0]) / 4))), ny = Math.max(1, Math.min(12, Math.ceil((p[4] - p[1]) / 4)));
-    for (let i = 0; i <= nx; i++) for (let j = 0; j <= ny; j++) out.push(p[0] + ((p[3] - p[0]) * i) / nx, p[1] + ((p[4] - p[1]) * j) / ny);
+    for (let i = 0; i <= nx; i++) {
+      for (let j = 0; j <= ny; j++) {
+        const [x, y] = spin(s, p[0] + ((p[3] - p[0]) * i) / nx, p[1] + ((p[4] - p[1]) * j) / ny); // 돌린 상자는 돌린 자리로
+        out.push(x, y);
+      }
+    }
     return out;
   }
   out.push(p[0], p[1]);
@@ -73,6 +79,31 @@ export function moved(s: Stroke, dx: number, dy: number): Stroke {
 }
 
 /** 고른 것 크게·작게: (cx, cy)를 가운데로 k배. 펜·형광펜 굵기와 글자 크기도 같이 */
+/** 고른 것 옮기기·크기·돌리기를 한 번에: (cx, cy)를 축으로 k배·deg도(시계 방향) 돌린 뒤 (dx, dy)만큼 옮긴다.
+ *  펜·형광펜은 점을 하나하나 옮기고, 글상자·사진은 상자 가운데만 옮기고 크기를 k배, 각도(rot)를 더한다 */
+export function transformed(s: Stroke, dx: number, dy: number, k: number, deg: number, cx: number, cy: number): Stroke {
+  const a = (deg * Math.PI) / 180, c = Math.cos(a), si = Math.sin(a);
+  const map = (x: number, y: number): [number, number] => {
+    const ux = (x - cx) * k, uy = (y - cy) * k;
+    return [Math.round((cx + ux * c - uy * si + dx) * 100) / 100, Math.round((cy + ux * si + uy * c + dy) * 100) / 100];
+  };
+  const w = s.tool === "image" ? s.width : Math.round(s.width * k * 100) / 100;
+  if ((s.tool === "text" || s.tool === "image") && s.pts.length === 6) {
+    const [x0, y0, , x1, y1] = s.pts;
+    const [mx, my] = map((x0 + x1) / 2, (y0 + y1) / 2);
+    const hw = ((x1 - x0) * k) / 2, hh = ((y1 - y0) * k) / 2;
+    const r = ((((s.rot ?? 0) + deg) % 360) + 360) % 360;
+    const rot = Math.abs(r) < 0.05 || Math.abs(r - 360) < 0.05 ? undefined : Math.round(r * 100) / 100;
+    const out: Stroke = { ...s, width: w, pts: [mx - hw, my - hh, 0, mx + hw, my + hh, 0].map((v) => Math.round(v * 100) / 100) };
+    if (rot === undefined) delete out.rot;
+    else out.rot = rot;
+    return out;
+  }
+  const pts = s.pts.slice();
+  for (let i = 0; i < pts.length; i += 3) [pts[i], pts[i + 1]] = map(pts[i], pts[i + 1]);
+  return { ...s, pts, width: w };
+}
+
 export function scaled(s: Stroke, k: number, cx: number, cy: number): Stroke {
   const pts = s.pts.slice();
   for (let i = 0; i < pts.length; i += 3) {

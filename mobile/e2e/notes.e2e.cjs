@@ -358,17 +358,37 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     await page.getByLabel("쪽 모아보기 닫기").click();
     await page.getByLabel("노트 목록으로").click();
 
-    // ── 폴더 ──
+    // ── 폴더 (디렉터리처럼: 폴더 안의 폴더, 왼쪽 나무, 위 경로, 폴더·노트 네모 칸) ──
     await page.getByText("＋ 폴더").click();
-    await page.getByLabel("새 폴더").fill("수학");
+    await page.getByLabel("새 폴더", { exact: true }).fill("수학");
     await page.getByText("만들기", { exact: true }).click();
     await page.getByText("이 폴더에 노트가 없어요", { exact: false }).waitFor();
-    await page.getByText(/^전체/).click();
+    await page.getByText("＋ 폴더").click();
+    await page.getByLabel("'수학' 안에 새 폴더").fill("미적분");
+    await page.getByText("만들기", { exact: true }).click();
+    await page.getByLabel("경로: 미적분").waitFor({ timeout: 5000 });
+    await page.getByLabel("경로: 수학").waitFor({ timeout: 3000 });
+    await page.getByLabel("모든 노트", { exact: true }).click();
     await page.getByLabel("시험 노트 더 보기").click();
     await page.getByText("폴더로 옮기기").click();
-    await page.getByText("수학", { exact: true }).click();
-    await page.getByText("수학 1").waitFor({ timeout: 5000 });
-    console.log("✓ 폴더 만들기·노트 옮기기, 쪽 모아보기");
+    await page.getByLabel("'수학/미적분'(으)로 옮기기").click();
+    await page.getByLabel("미적분 폴더, 노트 1개").waitFor({ timeout: 5000 }).catch(() => fail("왼쪽 폴더 나무에 '미적분 1'이 없음"));
+    // 맨 위 → 수학 폴더 칸 → 미적분 폴더 칸 → 노트
+    await page.getByLabel("맨 위 폴더").click();
+    await page.getByLabel("수학 폴더 열기").click();
+    await page.getByLabel("미적분 폴더 열기").click();
+    await page.getByLabel("시험 노트 열기").waitFor({ timeout: 5000 }).catch(() => fail("미적분 폴더 안에 옮긴 노트가 없음"));
+    const tile = await page.getByLabel("시험 노트 열기").boundingBox();
+    // 폴더 이름 바꾸기: 안의 노트도 따라간다
+    await page.getByText("폴더 ⋯").click();
+    await page.getByText("이름 바꾸기", { exact: true }).click();
+    await page.getByLabel("폴더 이름 바꾸기").fill("적분");
+    await page.getByText("바꾸기", { exact: true }).click();
+    await page.getByLabel("경로: 적분").waitFor({ timeout: 5000 });
+    await page.getByLabel("시험 노트 열기").waitFor({ timeout: 5000 }).catch(() => fail("폴더 이름을 바꾸니 안의 노트가 사라짐"));
+    await page.getByLabel("모든 노트", { exact: true }).click();
+    await page.waitForTimeout(500);
+    console.log(`✓ 폴더: 수학 안에 미적분, 왼쪽 나무·경로·폴더 칸으로 들어가기, 이름 바꾸기 (노트 칸 ${tile.width.toFixed(0)}×${tile.height.toFixed(0)})`);
 
     // ── 노트 파일로 내보냈다가 다시 가져오기 (다른 기기로 옮기기) ──
     await page.getByLabel("시험 노트 더 보기").click();

@@ -1,6 +1,8 @@
-// 노트 목록: PDF 가져오기, 새 노트(속지 고르기), 열기·이름 바꾸기·지우기
+// 노트 목록: PDF 가져오기, 새 노트(속지 고르기), 열기·이름 바꾸기·지우기.
+// 폴더는 디렉터리처럼: 넓은 화면은 왼쪽에 폴더 나무(폴더 안의 폴더, 접고 펴기), 위에 경로(폴더 › 공부 › NCS),
+// 가운데에 그 폴더의 아래 폴더와 노트를 네모 칸 바둑판으로. 폴더 계산은 folders.ts
 import * as DocumentPicker from "expo-document-picker";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Alert, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -12,6 +14,7 @@ import { importPdf } from "./importPdf";
 import { PACK_EXT, packNotebook, unpackNotebook } from "./pack";
 import { readPicked } from "./readPicked";
 import { shareFile } from "./shareFile";
+import { allFolders, ALL_NOTES, childrenOf, cleanName, crumbs, isWithin, joinPath, nameOf, parentOf, renamePath, treeRows } from "./folders";
 import { blankNotebook, type Notebook, type Paper } from "./model";
 import { pageImage } from "./pageImage";
 import type { SyncStatus } from "./sync/engine";
@@ -26,7 +29,7 @@ type Props = {
   onSummaryTool: () => void; // PDF만 넣어 요약하는 화면 (예전 방식)
   onSettings: () => void;
   refresh: number;
-  folder: string | null; // 지금 보는 폴더 (null = 전체). 노트를 열었다 돌아와도 남게 App이 들고 있다
+  folder: string | null; // 지금 보는 폴더 경로 (null = 맨 위 폴더, ALL_NOTES = 모든 노트). 노트를 열었다 돌아와도 남게 App이 들고 있다
   onFolder: (f: string | null) => void;
 };
 
@@ -40,7 +43,8 @@ const PAPERS: { value: Paper; label: string }[] = [
 /** 화면 크기에 따른 여백: 넓은 화면(태블릿)은 넉넉하게, 폰은 조금 좁게 */
 const WIDE = 700;
 const MAX_W = 1200; // 아주 넓은 화면에서는 가운데로 모은다
-const MIN_CARD = 180; // 노트 카드의 가장 좁은 너비
+const MIN_CARD = 160; // 노트·폴더 칸의 가장 좁은 너비
+const SIDE = 840; // 이보다 넓으면 왼쪽에 폴더 나무
 
 /** 창 뒤를 덮는 옅은 그늘 (어두운 모드는 조금 더 진하게) */
 const backdrop = (t: Theme) => (t.dark ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.25)");
@@ -54,8 +58,11 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
   const [newOpen, setNewOpen] = useState(false);
   const [actions, setActions] = useState<Notebook | null>(null);
   const [folders, setFolders] = useState<string[]>([]);
-  const [folderDialog, setFolderDialog] = useState(false);
+  const [newIn, setNewIn] = useState<string | null | undefined>(undefined); // 새 폴더 창: 어느 폴더 안에 (undefined = 닫힘)
+  const [renaming, setRenaming] = useState<string | null>(null); // 이름 바꿀 폴더
+  const [folderMenu, setFolderMenu] = useState<string | null>(null); // ⋯ 메뉴를 연 폴더
   const [moving, setMoving] = useState<Notebook | null>(null);
+  const [open, setOpen] = useState<Set<string>>(new Set()); // 왼쪽 나무에서 펼친 폴더
   const folderRef = useRef(folder);
   folderRef.current = folder;
   const reloadNo = useRef(0);
@@ -67,7 +74,13 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
       setFolders(fs);
       // 보던 폴더가 그사이 지워졌으면(다른 기기에서 지운 경우 등) '전체'로.
       // 가장 최근에 읽은 목록으로만 판단한다 (방금 만든 폴더가 아직 없는 옛 목록 때문에 선택이 풀리지 않게)
-      if (no === reloadNo.current && keepFolder(folderRef.current, fs) !== folderRef.current) setFolder(null);
+      // (노트가 들어 있는 폴더는 목록에 없어도 있는 것으로: 다른 기기에서 아직 폴더 목록이 안 온 경우)
+      if (no === reloadNo.current) {
+        store.list().then((l) => {
+          const all = allFolders(fs, l.map((nb) => nb.folder));
+          if (keepFolder(folderRef.current, all) !== folderRef.current) setFolder(null);
+        }).catch(() => {});
+      }
     }).catch(() => {});
   }, [store, setFolder]);
   useEffect(reload, [reload, refresh]);
@@ -83,6 +96,19 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
       if (t) clearTimeout(t);
     };
   }, [store, reload]);
+
+  /** 지금 보는 진짜 폴더 (맨 위·모든 노트면 null) */
+  const here = folder && folder !== ALL_NOTES ? folder : null;
+  const tree = useMemo(() => allFolders(folders, (list ?? []).map((nb) => nb.folder)), [folders, list]);
+  // 지금 폴더의 윗 폴더들은 나무에서 펼쳐 둔다
+  useEffect(() => {
+    if (!here) return;
+    setOpen((o) => {
+      const n = new Set(o);
+      for (let p = parentOf(here); p; p = parentOf(p)) n.add(p);
+      return n.size === o.size ? o : n;
+    });
+  }, [here]);
 
   async function pickPdf() {
     setErr("");
@@ -100,7 +126,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
     setBusy("노트 파일을 가져오는 중…");
     try {
       const nb = await store.importUnpacked(unpackNotebook(await readPicked({ uri: a.uri, webFile: a.file })));
-      if (folder) await store.moveTo(nb.id, folder);
+      if (here) await store.moveTo(nb.id, here);
       reload();
       onOpen(nb.id);
     } catch (e) {
@@ -129,7 +155,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
     setBusy("PDF를 가져오는 중…");
     try {
       const nb = await importPdf(store, p);
-      if (folder) await store.moveTo(nb.id, folder);
+      if (here) await store.moveTo(nb.id, here);
       onOpen(nb.id);
     } catch (e) {
       setErr((e as Error).message);
@@ -141,7 +167,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
   async function createBlank(paper: Paper, title: string) {
     setNewOpen(false);
     const nb = blankNotebook(title.trim() || "새 노트", paper, 1);
-    if (folder) nb.folder = folder;
+    if (here) nb.folder = here;
     await store.create(nb);
     onOpen(nb.id);
   }
@@ -162,12 +188,14 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
     }
   }
 
-  async function addFolder(name: string) {
-    setFolderDialog(false);
-    const n = name.trim();
+  async function addFolder(parent: string | null, name: string) {
+    setNewIn(undefined);
+    const n = cleanName(name);
     if (!n) return;
-    await store.saveFolders([...folders, n]);
-    setFolder(n);
+    const path = joinPath(parent, n);
+    if (!tree.includes(path)) await store.saveFolders([...tree, path]);
+    if (parent) setOpen((o) => new Set(o).add(parent));
+    setFolder(path);
     reload();
   }
 
@@ -177,13 +205,44 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
     reload();
   }
 
-  function deleteFolder(name: string) {
-    const doIt = async () => {
-      await store.removeFolder(name);
-      setFolder(null);
+  /** 폴더 이름 바꾸기: 아래 폴더와 노트의 경로도 함께 */
+  async function renameFolder(from: string, name: string) {
+    setRenaming(null);
+    const n = cleanName(name);
+    if (!n) return;
+    const to = joinPath(parentOf(from), n);
+    if (to === from) return;
+    if (tree.includes(to)) {
+      setErr(`'${n}' 폴더가 이미 있어요.`);
+      return;
+    }
+    setBusy("폴더 이름을 바꾸는 중…");
+    try {
+      for (const nb of list ?? []) if (nb.folder && isWithin(nb.folder, from)) await store.moveTo(nb.id, renamePath(nb.folder, from, to));
+      await store.saveFolders(tree.map((f) => renamePath(f, from, to)));
+      if (folder && isWithin(folder, from)) setFolder(renamePath(folder, from, to));
       reload();
+    } finally {
+      setBusy("");
+    }
+  }
+
+  /** 폴더 지우기: 안의 폴더도 지우고, 안의 노트는 지우지 않고 윗 폴더(맨 위면 폴더 밖)로 옮긴다 */
+  function deleteFolder(path: string) {
+    setFolderMenu(null);
+    const up = parentOf(path);
+    const doIt = async () => {
+      setBusy("폴더를 지우는 중…");
+      try {
+        for (const nb of list ?? []) if (isWithin(nb.folder, path)) await store.moveTo(nb.id, up ?? undefined);
+        await store.saveFolders(tree.filter((f) => !isWithin(f, path)));
+        if (folder && isWithin(folder, path)) setFolder(up);
+        reload();
+      } finally {
+        setBusy("");
+      }
     };
-    const msg = `'${name}' 폴더를 지울까요? 안의 노트는 지우지 않고 폴더 밖으로 옮겨요.`;
+    const msg = `'${nameOf(path)}' 폴더를 지울까요? 안의 폴더도 함께 지워요. 노트는 지우지 않고 ${up ? `'${nameOf(up)}' 폴더로` : "폴더 밖으로"} 옮겨요.`;
     if (Platform.OS === "web") {
       if (globalThis.confirm?.(msg) ?? true) void doIt();
     } else {
@@ -191,15 +250,25 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
     }
   }
 
-  const shown = list?.filter((nb) => folder === null || nb.folder === folder) ?? null;
-  const counts = new Map<string, number>();
+  const all = folder === ALL_NOTES;
+  const shown = list?.filter((nb) => all || (nb.folder ?? null) === here) ?? null;
+  const subFolders = all ? [] : childrenOf(tree, here);
+  const counts = new Map<string, number>(); // 폴더 → 바로 안의 노트 수
   for (const nb of list ?? []) if (nb.folder) counts.set(nb.folder, (counts.get(nb.folder) ?? 0) + 1);
+  const toggle = (f: string) => setOpen((o) => {
+    const n = new Set(o);
+    if (n.has(f)) n.delete(f);
+    else n.add(f);
+    return n;
+  });
 
-  // 넓은 화면은 여백·간격을 넉넉하게. 카드 너비는 줄마다 꼭 맞게 나눈다
+  // 넓은 화면은 여백·간격을 넉넉하게. 칸 너비는 줄마다 꼭 맞게 나눈다 (왼쪽 폴더 나무만큼 빼고)
   const wide = width >= WIDE;
+  const side = width >= SIDE;
+  const sideW = side ? Math.min(300, Math.round(width * 0.22)) : 0;
   const pad = wide ? 24 : 16;
-  const gap = wide ? 24 : 16;
-  const inner = Math.min(width, MAX_W) - pad * 2;
+  const gap = wide ? 20 : 14;
+  const inner = Math.min(width - sideW, MAX_W) - pad * 2;
   const cols = Math.max(2, Math.min(6, Math.floor((inner + gap) / (MIN_CARD + gap))));
   const cardW = Math.floor((inner - (cols - 1) * gap) / cols);
 
@@ -216,9 +285,44 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
   // 폰에서는 단추 네 개를 두 줄로 반씩 나눠 가지런히
   const actionStyle = wide ? undefined : s.actionHalf;
 
+  const sideBar = (
+    <ScrollView style={[s.side, { width: sideW, borderColor: t.lineSoft, backgroundColor: t.sunken }]} contentContainerStyle={s.sideIn}>
+      <SideRow label="모든 노트" count={list?.length} on={all} onPress={() => setFolder(ALL_NOTES)} a11y="모든 노트" icon="all" />
+      <View style={[s.sideLine, { backgroundColor: t.lineSoft }]} />
+      <View style={s.sideHead}>
+        <View style={{ flex: 1 }}>
+          <SideRow label="폴더" on={folder === null} onPress={() => setFolder(null)} a11y="맨 위 폴더" icon="folder" />
+        </View>
+        <Pressable onPress={() => setNewIn(null)} accessibilityRole="button" accessibilityLabel="새 폴더 만들기" hitSlop={8} style={({ pressed }) => [s.sidePlus, pressed && { backgroundColor: t.bg }]}>
+          <Text style={{ color: t.sub, fontSize: 20, lineHeight: 22 }}>＋</Text>
+        </Pressable>
+      </View>
+      {treeRows(tree, open).map((r) => (
+        <SideRow
+          key={r.path}
+          label={nameOf(r.path)}
+          count={counts.get(r.path) ?? 0}
+          depth={r.depth + 1}
+          on={folder === r.path}
+          kids={r.hasKids ? open.has(r.path) : undefined}
+          onToggle={() => toggle(r.path)}
+          onPress={() => {
+            setFolder(r.path);
+            if (r.hasKids && !open.has(r.path)) toggle(r.path);
+          }}
+          onLongPress={() => setFolderMenu(r.path)}
+          a11y={`${nameOf(r.path)} 폴더, 노트 ${counts.get(r.path) ?? 0}개`}
+          icon="folder"
+        />
+      ))}
+    </ScrollView>
+  );
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: t.bg }}>
-      <ScrollView contentContainerStyle={[s.page, { paddingHorizontal: pad, paddingTop: wide ? 32 : 20 }]}>
+      <View style={s.body}>
+      {side && sideBar}
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={[s.page, { paddingHorizontal: pad, paddingTop: wide ? 32 : 20 }]}>
         {wide ? (
           <ScreenTitle title="필기 노트" sub={subText} right={topButtons} />
         ) : (
@@ -235,25 +339,39 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
           <Button label="PDF만 넣어 요약하기" onPress={onSummaryTool} style={actionStyle} />
         </View>
 
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: wide ? 28 : 24 }} contentContainerStyle={s.chips}>
-          <Chip role="button" label={`전체 ${list?.length ?? ""}`} on={folder === null} onPress={() => setFolder(null)} />
-          {folders.map((f) => (
-            <Chip key={f} role="button" label={`${f} ${counts.get(f) ?? 0}`} on={folder === f} onPress={() => setFolder(f)} onLongPress={() => deleteFolder(f)} />
-          ))}
-          <GhostPill label="＋ 폴더" onPress={() => setFolderDialog(true)} />
-          {folder !== null && <GhostPill label="폴더 지우기" onPress={() => deleteFolder(folder)} />}
-        </ScrollView>
+        {/* 경로: 폴더 › 공부 › NCS (누르면 그 폴더로). 끝에 새 폴더·이 폴더 ⋯ */}
+        <View style={[s.pathRow, { marginTop: wide ? 28 : 22, backgroundColor: t.sunken }]}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.crumbs} style={{ flex: 1 }}>
+            {all ? (
+              <Text style={[type.label, { color: t.ink, fontWeight: "700" }]}>모든 노트</Text>
+            ) : (
+              <>
+                <Crumb label="폴더" on={!here} onPress={() => setFolder(null)} />
+                {crumbs(here).map((c) => (
+                  <View key={c.path} style={s.crumbStep}>
+                    <Text style={{ color: t.muted, fontSize: 16 }}>›</Text>
+                    <Crumb label={c.name} on={c.path === here} onPress={() => setFolder(c.path)} />
+                  </View>
+                ))}
+              </>
+            )}
+          </ScrollView>
+          {!side && !all && <GhostPill label="모든 노트" onPress={() => setFolder(ALL_NOTES)} />}
+          {!side && all && <GhostPill label="폴더 보기" onPress={() => setFolder(null)} />}
+          {!all && <GhostPill label="＋ 폴더" onPress={() => setNewIn(here)} />}
+          {here && <GhostPill label="폴더 ⋯" onPress={() => setFolderMenu(here)} />}
+        </View>
         {!pdfAvailable && <Hint style={{ marginTop: 12 }}>이 앱(Expo Go 등)에서는 PDF를 열 수 없어요. 개발용 빌드에서 쓸 수 있어요. 빈 노트는 쓸 수 있어요.</Hint>}
         {!!err && <Hint color={t.bad} style={{ marginTop: 12 }}>{err}</Hint>}
 
         <View style={{ marginTop: wide ? 24 : 20 }}>
           {shown === null ? (
             <ActivityIndicator color={t.muted} style={{ marginTop: 48 }} />
-          ) : shown.length === 0 && folder !== null ? (
+          ) : shown.length === 0 && subFolders.length === 0 && here !== null ? (
             <Empty>
-              <Text style={[type.body, { color: t.muted, textAlign: "center" }]}>이 폴더에 노트가 없어요. 노트의 ⋯ → '폴더로 옮기기'로 넣을 수 있어요.</Text>
+              <Text style={[type.body, { color: t.muted, textAlign: "center" }]}>이 폴더에 노트가 없어요. 노트의 ⋯ → '폴더로 옮기기'로 넣거나, 이 폴더를 연 채로 PDF를 가져오세요.</Text>
             </Empty>
-          ) : shown.length === 0 ? (
+          ) : shown.length === 0 && subFolders.length === 0 ? (
             <Empty>
               <Text style={[type.title, { color: t.ink, textAlign: "center" }]}>아직 노트가 없어요</Text>
               <Text style={[type.body, { color: t.muted, textAlign: "center" }]}>
@@ -261,7 +379,18 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
               </Text>
             </Empty>
           ) : (
-            <View style={[s.grid, { columnGap: gap, rowGap: wide ? 32 : 24 }]}>
+            <View style={[s.grid, { columnGap: gap, rowGap: wide ? 28 : 22 }]}>
+              {subFolders.map((f) => (
+                <FolderCard
+                  key={f}
+                  name={nameOf(f)}
+                  notes={counts.get(f) ?? 0}
+                  folders={childrenOf(tree, f).length}
+                  width={cardW}
+                  onPress={() => setFolder(f)}
+                  onMore={() => setFolderMenu(f)}
+                />
+              ))}
               {shown.map((nb) => (
                 <NoteCard key={nb.id} nb={nb} store={store} width={cardW} onPress={() => onOpen(nb.id)} onMore={() => setActions(nb)} />
               ))}
@@ -269,6 +398,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
           )}
         </View>
       </ScrollView>
+      </View>
 
       {!!busy && (
         <View style={[s.busyWrap, { backgroundColor: backdrop(t) }]}>
@@ -280,16 +410,52 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
       )}
 
       <NewNoteDialog visible={newOpen} onCancel={() => setNewOpen(false)} onCreate={createBlank} />
-      <NameDialog visible={folderDialog} title="새 폴더" placeholder="폴더 이름 (예: 정보처리기사)" onCancel={() => setFolderDialog(false)} onDone={addFolder} />
+      <NameDialog
+        visible={newIn !== undefined}
+        title={newIn ? `'${nameOf(newIn)}' 안에 새 폴더` : "새 폴더"}
+        placeholder="폴더 이름 (예: 정보처리기사)"
+        onCancel={() => setNewIn(undefined)}
+        onDone={(v) => addFolder(newIn ?? null, v)}
+      />
+      <NameDialog
+        visible={renaming !== null}
+        title="폴더 이름 바꾸기"
+        initial={renaming ? nameOf(renaming) : ""}
+        action="바꾸기"
+        placeholder="폴더 이름"
+        onCancel={() => setRenaming(null)}
+        onDone={(v) => renaming && renameFolder(renaming, v)}
+      />
+      <Modal visible={folderMenu !== null} transparent animationType="fade" onRequestClose={() => setFolderMenu(null)}>
+        <Pressable style={[s.backdrop, { backgroundColor: backdrop(t) }]} onPress={() => setFolderMenu(null)}>
+          <Pressable style={[floating(t), s.menu]} onPress={() => {}}>
+            <Text style={[type.heading, s.menuHead, { color: t.ink }]} numberOfLines={1}>{folderMenu ? nameOf(folderMenu) : ""}</Text>
+            <MenuItem label="열기" onPress={() => { if (folderMenu) setFolder(folderMenu); setFolderMenu(null); }} />
+            <MenuItem label="안에 새 폴더" onPress={() => { setNewIn(folderMenu); setFolderMenu(null); }} />
+            <MenuItem label="이름 바꾸기" onPress={() => { setRenaming(folderMenu); setFolderMenu(null); }} />
+            <View style={[s.menuLine, { backgroundColor: t.lineSoft }]} />
+            <MenuItem label="폴더 지우기" danger onPress={() => folderMenu && deleteFolder(folderMenu)} />
+          </Pressable>
+        </Pressable>
+      </Modal>
       <Modal visible={!!moving} transparent animationType="fade" onRequestClose={() => setMoving(null)}>
         <Pressable style={[s.backdrop, { backgroundColor: backdrop(t) }]} onPress={() => setMoving(null)}>
           <Pressable style={[floating(t), s.menu]} onPress={() => {}}>
             <Text style={[type.heading, s.menuHead, { color: t.ink }]}>어느 폴더로 옮길까요?</Text>
-            {folders.map((f) => (
-              <MenuItem key={f} label={`${f}${moving?.folder === f ? " (지금)" : ""}`} muted={moving?.folder === f} onPress={() => moving && moveNote(moving, f)} />
-            ))}
+            <ScrollView style={{ maxHeight: 420 }}>
+              {treeRows(tree, new Set(tree)).map((r) => (
+                <MenuItem
+                  key={r.path}
+                  label={`${nameOf(r.path)}${moving?.folder === r.path ? " (지금)" : ""}`}
+                  indent={r.depth}
+                  a11y={`'${r.path}'(으)로 옮기기`}
+                  muted={moving?.folder === r.path}
+                  onPress={() => moving && moveNote(moving, r.path)}
+                />
+              ))}
+            </ScrollView>
             <MenuItem label="폴더 밖으로" onPress={() => moving && moveNote(moving, undefined)} />
-            {!folders.length && <Text style={[type.caption, s.menuNote, { color: t.muted }]}>먼저 '＋ 폴더'로 폴더를 만들어 주세요.</Text>}
+            {!tree.length && <Text style={[type.caption, s.menuNote, { color: t.muted }]}>먼저 '＋ 폴더'로 폴더를 만들어 주세요.</Text>}
           </Pressable>
         </Pressable>
       </Modal>
@@ -326,7 +492,7 @@ function NoteCard({ nb, store, width, onPress, onMore }: { nb: Notebook; store: 
       alive = false;
     };
   }, [nb.id, nb.hasPdf, first?.pdf, store]);
-  const h = width * Math.min(1.5, (first?.h ?? 842) / (first?.w ?? 595));
+  const ratio = (first?.h ?? 842) / (first?.w ?? 595); // 쪽 그림은 칸 폭에 맞추고 위쪽부터 보인다 (네모 칸)
   const date = new Date(nb.updated);
   return (
     <Pressable
@@ -337,9 +503,9 @@ function NoteCard({ nb, store, width, onPress, onMore }: { nb: Notebook; store: 
       style={({ pressed }) => ({ width, opacity: pressed ? 0.85 : 1 })}
     >
       {/* 쪽 그림은 종이라서 어두운 모드에서도 흰 바탕 */}
-      <View style={[s.thumb, { width, height: h, borderColor: t.lineSoft }]}>
+      <View style={[s.thumb, { width, height: width, borderColor: t.lineSoft }]}>
         {thumb ? (
-          <Image source={{ uri: thumb }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+          <Image source={{ uri: thumb }} style={{ position: "absolute", top: 0, left: 0, width, height: width * ratio }} resizeMode="stretch" />
         ) : (
           <PaperThumb paper={first?.paper} />
         )}
@@ -361,6 +527,88 @@ function NoteCard({ nb, store, width, onPress, onMore }: { nb: Notebook; store: 
           <Text style={{ color: t.muted, fontSize: 18, lineHeight: 20 }}>⋯</Text>
         </Pressable>
       </View>
+    </Pressable>
+  );
+}
+
+/** 폴더 칸: 노트 칸과 같은 네모에 큰 폴더 모양, 밑에 이름과 안에 든 것 수 */
+function FolderCard({ name, notes, folders, width, onPress, onMore }: { name: string; notes: number; folders: number; width: number; onPress: () => void; onMore: () => void }) {
+  const t = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      onLongPress={onMore}
+      accessibilityRole="button"
+      accessibilityLabel={`${name} 폴더 열기`}
+      style={({ pressed }) => ({ width, opacity: pressed ? 0.85 : 1 })}
+    >
+      <View style={[s.thumb, s.folderBox, { width, height: width, borderColor: t.lineSoft, backgroundColor: t.sunken }]}>
+        <FolderGlyph size={width * 0.42} color={t.muted} />
+      </View>
+      <View style={s.cardFoot}>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={[type.label, s.cardTitle, { color: t.ink }]} numberOfLines={1}>{name}</Text>
+          <Text style={[type.caption, { color: t.muted }]}>{folders ? `폴더 ${folders} · ` : ""}노트 {notes}</Text>
+        </View>
+        <Pressable
+          onPress={onMore}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel={`${name} 폴더 더 보기`}
+          style={({ pressed }) => [s.more, pressed && { backgroundColor: t.sunken }]}
+        >
+          <Text style={{ color: t.muted, fontSize: 18, lineHeight: 20 }}>⋯</Text>
+        </Pressable>
+      </View>
+    </Pressable>
+  );
+}
+
+/** 폴더 모양 (탭이 달린 둥근 네모) */
+function FolderGlyph({ size, color, filled }: { size: number; color: string; filled?: boolean }) {
+  const w = size, h = size * 0.78, tab = size * 0.42, th = size * 0.14, bw = Math.max(1.5, size * 0.07);
+  return (
+    <View style={{ width: w, height: h + th * 0.6 }}>
+      <View style={{ position: "absolute", left: 0, top: 0, width: tab, height: th * 1.6, borderTopLeftRadius: th * 0.5, borderTopRightRadius: th * 0.5, borderWidth: bw, borderColor: color, backgroundColor: filled ? color : "transparent" }} />
+      <View style={{ position: "absolute", left: 0, top: th * 0.6, width: w, height: h, borderRadius: size * 0.1, borderWidth: bw, borderColor: color, backgroundColor: filled ? color : "transparent" }} />
+    </View>
+  );
+}
+
+/** 왼쪽 나무의 한 줄: 펼치기 꺾쇠(아래 폴더가 있을 때) · 폴더 모양 · 이름 · 노트 수 */
+function SideRow({ label, count, on, depth = 0, kids, onToggle, onPress, onLongPress, a11y, icon }: {
+  label: string; count?: number; on: boolean; depth?: number; kids?: boolean; onToggle?: () => void; onPress: () => void; onLongPress?: () => void; a11y: string; icon: "folder" | "all";
+}) {
+  const t = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      onLongPress={onLongPress}
+      accessibilityRole="button"
+      accessibilityLabel={a11y}
+      accessibilityState={{ selected: on }}
+      style={({ pressed }) => [s.sideRow, { paddingLeft: 8 + depth * 16, backgroundColor: on ? t.bg : pressed ? t.bg : "transparent" }]}
+    >
+      <Pressable onPress={onToggle} disabled={kids === undefined} hitSlop={6} accessibilityLabel={kids === undefined ? undefined : `${label} ${kids ? "접기" : "펼치기"}`} style={s.chev}>
+        {kids !== undefined && <Text style={{ color: t.muted, fontSize: 14, transform: [{ rotate: kids ? "90deg" : "0deg" }] }}>›</Text>}
+      </Pressable>
+      {icon === "folder" ? (
+        <FolderGlyph size={18} color={on ? t.ink : t.sub} filled={on} />
+      ) : (
+        <View style={[s.allGlyph, { borderColor: on ? t.ink : t.sub }]} />
+      )}
+      <Text style={[type.body, { color: t.ink, flex: 1, fontWeight: on ? "700" : "400" }]} numberOfLines={1}>{label}</Text>
+      {count !== undefined && <Text style={[type.caption, { color: t.muted }]}>{count}</Text>}
+    </Pressable>
+  );
+}
+
+/** 경로 단추 하나 (지금 폴더는 굵게) */
+function Crumb({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
+  const t = useTheme();
+  return (
+    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={`경로: ${label}`} hitSlop={6} style={({ pressed }) => [s.crumb, pressed && { opacity: 0.6 }]}>
+      <Text style={[type.label, { color: on ? t.ink : t.sub, fontWeight: on ? "700" : "500" }]}>{label}</Text>
     </Pressable>
   );
 }
@@ -456,12 +704,14 @@ function NewNoteDialog({ visible, onCancel, onCreate }: { visible: boolean; onCa
   );
 }
 
-function NameDialog({ visible, title, placeholder, onCancel, onDone }: { visible: boolean; title: string; placeholder: string; onCancel: () => void; onDone: (v: string) => void }) {
+function NameDialog({ visible, title, placeholder, initial = "", action = "만들기", onCancel, onDone }: {
+  visible: boolean; title: string; placeholder: string; initial?: string; action?: string; onCancel: () => void; onDone: (v: string) => void;
+}) {
   const t = useTheme();
   const [v, setV] = useState("");
   useEffect(() => {
-    if (visible) setV("");
-  }, [visible]);
+    if (visible) setV(initial);
+  }, [visible, initial]);
   return (
     <Dialog visible={visible} onCancel={onCancel} title={title} maxWidth={420}>
       <TextInput
@@ -476,7 +726,7 @@ function NameDialog({ visible, title, placeholder, onCancel, onDone }: { visible
       />
       <View style={s.dialogButtons}>
         <Button label="취소" onPress={onCancel} />
-        <Button kind="primary" label="만들기" onPress={() => onDone(v)} />
+        <Button kind="primary" label={action} onPress={() => onDone(v)} />
       </View>
     </Dialog>
   );
@@ -498,10 +748,10 @@ function Dialog({ visible, onCancel, title, maxWidth, children }: { visible: boo
 }
 
 /** 메뉴 한 줄. danger = 지우기처럼 되돌릴 수 없는 일, muted = 지금 상태라 고를 필요 없는 것 */
-function MenuItem({ label, onPress, danger, muted }: { label: string; onPress: () => void; danger?: boolean; muted?: boolean }) {
+function MenuItem({ label, onPress, danger, muted, indent = 0, a11y }: { label: string; onPress: () => void; danger?: boolean; muted?: boolean; indent?: number; a11y?: string }) {
   const t = useTheme();
   return (
-    <Pressable onPress={onPress} accessibilityRole="menuitem" style={({ pressed }) => [s.menuItem, pressed && { backgroundColor: t.sunken }]}>
+    <Pressable onPress={onPress} accessibilityRole="menuitem" accessibilityLabel={a11y} style={({ pressed }) => [s.menuItem, { paddingLeft: 12 + indent * 18 }, pressed && { backgroundColor: t.sunken }]}>
       <Text style={[type.body, { color: danger ? t.bad : muted ? t.muted : t.ink }]}>{label}</Text>
     </Pressable>
   );
@@ -529,6 +779,22 @@ function Empty({ children }: { children: ReactNode }) {
 
 const s = StyleSheet.create({
   page: { paddingBottom: 64, width: "100%", maxWidth: MAX_W, alignSelf: "center" },
+  body: { flex: 1, flexDirection: "row" },
+  // 왼쪽 폴더 나무
+  side: { flexGrow: 0, borderRightWidth: 1 },
+  sideIn: { paddingTop: 28, paddingBottom: 40, paddingHorizontal: 10, gap: 2 },
+  sideRow: { flexDirection: "row", alignItems: "center", gap: 8, paddingRight: 10, paddingVertical: 10, borderRadius: radius.md },
+  sideHead: { flexDirection: "row", alignItems: "center" },
+  sidePlus: { width: 34, height: 34, borderRadius: radius.sm, alignItems: "center", justifyContent: "center" },
+  sideLine: { height: 1, marginVertical: 10, marginHorizontal: 8 },
+  chev: { width: 14, alignItems: "center" },
+  allGlyph: { width: 16, height: 18, borderWidth: 1.6, borderRadius: 3 },
+  // 경로 줄
+  pathRow: { flexDirection: "row", alignItems: "center", gap: 6, borderRadius: radius.xl, paddingVertical: 6, paddingLeft: 16, paddingRight: 6 },
+  crumbs: { alignItems: "center", gap: 6 },
+  crumbStep: { flexDirection: "row", alignItems: "center", gap: 6 },
+  crumb: { paddingVertical: 6, paddingHorizontal: 4 },
+  folderBox: { borderWidth: 1 },
   topButtons: { flexDirection: "row", gap: 8, alignSelf: "center" },
   actions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   actionHalf: { flexGrow: 1, flexBasis: "40%", paddingHorizontal: 10 },

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { backTarget, exitOnSecondBack, keepFolder, tooSoon } from "./app-nav.ts";
+import { ALL_NOTES } from "./folders.ts";
 
 type Scr = { name: string; id?: string; page?: number; backTo?: Scr };
 const LIB: Scr = { name: "library" };
@@ -28,6 +29,7 @@ test("화면이 뜬 직후(0.4초 안)의 누름만 무시한다", () => {
 test("고른 폴더가 지워졌으면 '전체'로, 있으면 그대로", () => {
   assert.equal(keepFolder("과학", ["수학", "과학"]), "과학");
   assert.equal(keepFolder("과학", ["수학"]), null);
+  assert.equal(keepFolder(ALL_NOTES, []), ALL_NOTES); // '모든 노트' 보기는 폴더가 없어도 그대로
   assert.equal(keepFolder("과학", []), null);
   assert.equal(keepFolder(null, ["수학"]), null);
 });

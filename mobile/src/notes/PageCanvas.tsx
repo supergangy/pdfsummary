@@ -223,7 +223,15 @@ export function PageCanvas(props: Props) {
     const s = Math.max(minS.value, Math.min(maxS.value, scale.value * f));
     const cx = vw.value / 2, cy = vh.value / 2;
     const ax = (cx - tx.value) / scale.value, ay = (cy - ty.value) / scale.value;
-    const [x, y] = clampXY(s, cx - ax * s, cy - ay * s, docW.value, docH.value, vw.value, vh.value);
+    let [x, y] = clampXY(s, cx - ax * s, cy - ay * s, docW.value, docH.value, vw.value, vh.value);
+    // 좌우 넘기기: 문서 전체가 아니라 지금 쪽(묶음) 안으로 — 쪽이 화면보다 작으면 가운데에
+    // (문서 전체로 맞추면 첫 쪽에서 줄였을 때 쪽이 왼쪽 끝에 붙었다)
+    if (!flowV.value) {
+      const sp = spreads.value;
+      const si = nearestSpread(sp, (cx - x) / s, (cy - y) / s);
+      const sx0 = sp[si * 4], sw = sp[si * 4 + 2] * s;
+      x = sw + MARGIN * 2 <= vw.value ? (vw.value - sw) / 2 - sx0 * s : Math.min(MARGIN - sx0 * s, Math.max(vw.value - sw - sx0 * s - MARGIN, x));
+    }
     scale.value = s;
     tx.value = x;
     ty.value = y;
@@ -560,9 +568,9 @@ export function PageCanvas(props: Props) {
         let ny = sy.value + e.translationY;
         if (paging.value) {
           // 좌우 넘기기: 처음 민 방향으로 묶는다 (가로면 쪽 넘기기, 세로면 그 쪽 안에서 위아래)
-          if (axis.value === 0 && Math.abs(e.translationX) + Math.abs(e.translationY) > 10) {
-            axis.value = Math.abs(e.translationX) > Math.abs(e.translationY) ? 1 : 2;
-          }
+          // 옆으로 넘기기는 확실히 옆으로 민 때만 (위아래로 밀다 처음에 조금 옆으로 틀어져도 다음 쪽으로 넘어가 '왼쪽으로 간다'고 느꼈다)
+          const ax = Math.abs(e.translationX), ay = Math.abs(e.translationY);
+          if (axis.value === 0 && ax + ay > 16) axis.value = ax > ay * 1.4 ? 1 : 2;
           if (axis.value === 1) ny = sy.value;
           else if (axis.value === 2) nx = sx.value;
         }

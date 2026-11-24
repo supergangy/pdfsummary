@@ -765,6 +765,33 @@ print(json.dumps([len(ys), (max(ys) - min(ys)) / k if ys else 0]))`, liveShot], 
       console.log(`✓ 위치 막대: 건너뛸 때 잠깐 보이고, 잡고 끌면 ${all}쪽까지, 멈추면 사라짐 / 'N / 전체'를 누르면 쪽 번호로 가기 / 닫았다 열면 마지막에 보던 쪽에서`);
     }
 
+    // ── 키보드 단축키: Ctrl+F 찾기(누르면 그 쪽으로), Ctrl+G 쪽으로 가기, → 다음 쪽, H 형광펜, Ctrl+/ 목록 ──
+    {
+      await page.mouse.move(10, 10);
+      await page.keyboard.press("ArrowRight");
+      await page.waitForTimeout(600);
+      if (!(await pageNo()).startsWith("2 /")) fail("→ 키를 눌렀는데 다음 쪽으로 가지 않음: " + (await pageNo()));
+      await page.keyboard.press("Control+f");
+      await page.getByLabel("찾을 말").fill("경쟁적저해제"); // 띄어쓰기 없이 넣어도
+      await page.getByLabel("1쪽으로 (1곳)").waitFor({ timeout: 8000 });
+      await page.getByLabel("1쪽으로 (1곳)").click();
+      await page.waitForTimeout(700);
+      if (!(await pageNo()).startsWith("1 /")) fail("찾기 결과를 눌렀는데 그 쪽으로 가지 않음: " + (await pageNo()));
+      await page.keyboard.press("Control+g");
+      await page.getByLabel("갈 쪽 번호").waitFor({ timeout: 3000 });
+      await page.getByText("취소", { exact: true }).click();
+      await page.waitForTimeout(400);
+      await page.keyboard.press("h");
+      await page.waitForTimeout(300);
+      if (!(await page.getByLabel(/한 번 더 누르면 형광펜 설정/).count())) fail("H 키를 눌렀는데 형광펜이 골라지지 않음");
+      await page.keyboard.press("p");
+      await page.keyboard.press("Control+/");
+      await page.getByText("키보드 단축키", { exact: true }).waitFor({ timeout: 3000 });
+      await page.getByText("닫기", { exact: true }).last().click();
+      await page.waitForTimeout(400);
+      console.log("✓ 키보드 단축키: → 다음 쪽, Ctrl+F 찾기(띄어쓰기 무시, 누르면 그 쪽으로), Ctrl+G 쪽으로 가기, H·P 도구, Ctrl+/ 목록");
+    }
+
     // ── PDF 노트 내보내기: 원본 PDF를 그대로 두고 필기만 끝에 덧붙인다 (큰 PDF도 되게) ──
     {
       await page.getByLabel("더 보기").click();
@@ -1096,6 +1123,10 @@ d.save(sys.argv[1])`, other]);
       await page.waitForTimeout(1200);
       await page.getByLabel("요약 만들기").click();
       await page.getByText("다른 앱에서 칠한 형광펜 찾기", { exact: true }).click({ timeout: 20000 });
+      // 찾을 쪽 범위 (1~1쪽)
+      await page.getByText("어느 쪽에서 찾을까요?").waitFor({ timeout: 5000 });
+      if ((await page.getByLabel("끝 쪽").inputValue()) !== "1") fail("쪽 범위의 끝 쪽이 노트 쪽 수로 미리 들어 있지 않음");
+      await page.getByText("이 범위에서 찾기", { exact: true }).click();
       await page.getByText("찾은 형광펜 색").waitFor({ timeout: 30000 });
       if (!(await page.getByLabel(/^노랑 형광펜 1곳/).count())) fail("쪽 그림의 노랑 형광펜을 찾지 못함");
       if (!(await page.getByText(/정확하지 않을 수 있어요/).count())) fail("다른 앱 형광펜이 정확하지 않을 수 있다는 안내가 없음");

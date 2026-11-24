@@ -2,7 +2,10 @@ package expo.modules.stylus
 
 import android.content.Context
 import android.os.SystemClock
+import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.Window
+import android.widget.EditText
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -17,12 +20,66 @@ import expo.modules.kotlin.views.ExpoView
 class StylusModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("Stylus")
+    // 키보드(블루투스·북커버 키보드) 단축키: 창의 키 입력을 엿보아 JS로 알린다.
+    // React Native에는 전체 키 이벤트가 없어서 창의 Window.Callback을 감싼다 (MainActivity를 고치지 않아도 된다).
+    // 글 쓰는 칸(EditText)에 입력 중이면 건드리지 않는다
+    Events("onKey")
+    Function("listenKeys") {
+      val act = appContext.currentActivity ?: return@Function false
+      act.runOnUiThread {
+        val w = act.window
+        val base = w.callback
+        if (base !is KeyTap) {
+          w.callback = KeyTap(base) { ev ->
+            if (act.currentFocus is EditText) return@KeyTap false
+            val name = keyName(ev) ?: return@KeyTap false
+            val ctrl = ev.isCtrlPressed || ev.isMetaPressed
+            if (ev.action == KeyEvent.ACTION_DOWN) {
+              sendEvent("onKey", mapOf("key" to name, "ctrl" to ctrl, "shift" to ev.isShiftPressed, "alt" to ev.isAltPressed, "repeat" to (ev.repeatCount > 0)))
+            }
+            // 앱이 쓰는 키는 안드로이드 기본 동작(단추 사이 초점 옮기기 등)으로 넘기지 않는다
+            consumes(name, ctrl)
+          }
+        }
+      }
+      true
+    }
     View(StylusView::class) {
       Events("onButton", "onHover")
       Prop("hoverEvents") { view: StylusView, on: Boolean -> view.hoverEvents = on }
     }
   }
 }
+
+/** 창의 키 입력을 먼저 본다. on이 true면 그 키는 여기서 끝 */
+class KeyTap(private val base: Window.Callback, private val on: (KeyEvent) -> Boolean) : Window.Callback by base {
+  override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+    if (on(event)) return true
+    return base.dispatchKeyEvent(event)
+  }
+}
+
+/** 키 이름: 글자·숫자는 소문자 한 글자, 그 밖에는 이름 (앱이 쓰지 않는 키는 null) */
+fun keyName(ev: KeyEvent): String? = when (ev.keyCode) {
+  KeyEvent.KEYCODE_PAGE_UP -> "PageUp"
+  KeyEvent.KEYCODE_PAGE_DOWN -> "PageDown"
+  KeyEvent.KEYCODE_DPAD_LEFT -> "ArrowLeft"
+  KeyEvent.KEYCODE_DPAD_RIGHT -> "ArrowRight"
+  KeyEvent.KEYCODE_MOVE_HOME -> "Home"
+  KeyEvent.KEYCODE_MOVE_END -> "End"
+  KeyEvent.KEYCODE_DEL -> "Backspace"
+  KeyEvent.KEYCODE_FORWARD_DEL -> "Delete"
+  KeyEvent.KEYCODE_EQUALS, KeyEvent.KEYCODE_PLUS, KeyEvent.KEYCODE_NUMPAD_ADD -> "+"
+  KeyEvent.KEYCODE_MINUS, KeyEvent.KEYCODE_NUMPAD_SUBTRACT -> "-"
+  KeyEvent.KEYCODE_SLASH -> "/"
+  in KeyEvent.KEYCODE_A..KeyEvent.KEYCODE_Z -> ((ev.keyCode - KeyEvent.KEYCODE_A) + 97).toChar().toString()
+  in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> ((ev.keyCode - KeyEvent.KEYCODE_0) + 48).toChar().toString()
+  else -> null
+}
+
+/** 앱이 쓰는 키: Ctrl 조합은 모두, 그 밖에는 쪽 넘기기·지우기·도구 글자 */
+fun consumes(name: String, ctrl: Boolean): Boolean =
+  ctrl || name in setOf("PageUp", "PageDown", "ArrowLeft", "ArrowRight", "Home", "End", "Backspace", "Delete", "p", "h", "e", "l", "t")
 
 class StylusView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
   private val onButton by EventDispatcher()

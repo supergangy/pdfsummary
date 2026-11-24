@@ -83,6 +83,12 @@ function mul(m: number[], n: number[]): number[] {
 }
 
 /** pdf.js 글자 조각 → 글자 상자 (조각 폭을 글자 수로 나눔). 가로쓰기만. */
+/** 쪽의 글만 (찾기용) */
+export async function pagePlainText(uri: string, index: number): Promise<string | null> {
+  const cs = await pageText(uri, index);
+  return cs ? cs.map((c) => c[0]).join("") : null;
+}
+
 export async function pageText(uri: string, index: number): Promise<PdfChar[] | null> {
   const page = await (await open(uri)).getPage(index + 1);
   const vp = page.getViewport({ scale: 1 });

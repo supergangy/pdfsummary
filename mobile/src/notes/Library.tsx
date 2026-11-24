@@ -13,6 +13,7 @@ import { Button, Chip, floating, Hint, radius, ScreenTitle, Segmented, styles as
 import { keepFolder } from "./app-nav";
 import { importPdf } from "./importPdf";
 import { makeWrongNote } from "./makeWrongNote";
+import { useKeys } from "./keys";
 import { PACK_EXT, packNotebook, unpackNotebook } from "./pack";
 import { bigPdfMessage } from "./net-errors";
 import { readPicked } from "./readPicked";
@@ -59,6 +60,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
   const [newOpen, setNewOpen] = useState(false);
   const [wrongOpen, setWrongOpen] = useState(false); // 오답 노트 만들기 창
   const [wrongBusy, setWrongBusy] = useState("");
+  const [noteFind, setNoteFind] = useState(false); // 노트 이름으로 찾기 (Ctrl+F)
   const [settingsOpen, setSettingsOpen] = useState(false); // 설정 창 (화면 테마 · 요약 서버 설정으로)
   const [actions, setActions] = useState<Notebook | null>(null);
   const [folders, setFolders] = useState<string[]>([]);
@@ -129,6 +131,16 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
       return n.size === o.size ? o : n;
     });
   }, [here]);
+
+  // 키보드: Ctrl+N 새 노트, Ctrl+O PDF 가져오기, Ctrl+F 노트 찾기 (창이 떠 있으면 창에 맡긴다)
+  useKeys((k) => {
+    if (!k.ctrl || newOpen || wrongOpen || noteFind || settingsOpen) return false;
+    if (k.key === "n") setNewOpen(true);
+    else if (k.key === "o" && pdfAvailable) void pickPdf();
+    else if (k.key === "f") setNoteFind(true);
+    else return false;
+    return true;
+  });
 
   async function pickPdf() {
     setErr("");
@@ -633,6 +645,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
         </View>
       )}
 
+      <NoteFindDialog visible={noteFind} notes={(list ?? []).filter((n) => !n.trashed)} onCancel={() => setNoteFind(false)} onOpen={(id) => { setNoteFind(false); onOpen(id); }} />
       <NewNoteDialog visible={newOpen} onCancel={() => setNewOpen(false)} onCreate={createBlank} />
       <WrongNoteDialog
         visible={wrongOpen}
@@ -1031,6 +1044,44 @@ function TemplateThumb({ paper }: { paper: Paper }) {
 const PAPER_LINE = "#CFDDEB";
 const PAPER_GRID = "#E1E7EE";
 const PAPER_DOT = "#B9C3CD";
+
+/** 노트 이름으로 찾기 (Ctrl+F). 띄어쓰기·대소문자는 가리지 않는다 */
+function NoteFindDialog({ visible, notes, onCancel, onOpen }: { visible: boolean; notes: Notebook[]; onCancel: () => void; onOpen: (id: string) => void }) {
+  const t = useTheme();
+  const [q, setQ] = useState("");
+  useEffect(() => {
+    if (visible) setQ("");
+  }, [visible]);
+  const norm = (x: string) => x.toLowerCase().replace(/s+/g, "");
+  const hits = q.trim() ? notes.filter((n) => norm(n.title).includes(norm(q))) : notes.slice(0, 30);
+  return (
+    <Dialog visible={visible} onCancel={onCancel} title="노트 찾기" maxWidth={520}>
+      <TextInput
+        value={q}
+        onChangeText={setQ}
+        autoFocus
+        placeholder="노트 이름"
+        placeholderTextColor={t.muted}
+        accessibilityLabel="찾을 노트 이름"
+        returnKeyType="go"
+        onSubmitEditing={() => hits[0] && onOpen(hits[0].id)}
+        style={[ui.input, { borderColor: t.line, color: t.ink, backgroundColor: t.card }]}
+      />
+      <ScrollView style={{ maxHeight: 340, marginTop: 8 }} keyboardShouldPersistTaps="handled">
+        {hits.map((nb) => (
+          <Pressable key={nb.id} onPress={() => onOpen(nb.id)} accessibilityRole="button" accessibilityLabel={`${nb.title} 열기 (찾기)`} style={({ pressed }) => [s.wrongRow, { borderColor: t.lineSoft, backgroundColor: pressed ? t.sunken : "transparent" }]}>
+            <Text style={[type.body, { color: t.ink, flex: 1 }]} numberOfLines={1}>{nb.title}</Text>
+            <Text style={[type.caption, { color: t.muted }]}>{nb.pages.length}쪽</Text>
+          </Pressable>
+        ))}
+        {!hits.length && <Text style={[type.caption, { color: t.muted }]}>그런 이름의 노트가 없어요.</Text>}
+      </ScrollView>
+      <View style={s.dialogButtons}>
+        <Button label="닫기" onPress={onCancel} />
+      </View>
+    </Dialog>
+  );
+}
 
 /** 오답 노트 만들기: 문제지 노트를 여러 개 고르면, 빨간 펜 사선(／)을 그은 문제만 모아 새 노트로 */
 function WrongNoteDialog({ visible, notes, busy, onCancel, onMake }: { visible: boolean; notes: Notebook[]; busy: string; onCancel: () => void; onMake: (ids: string[]) => void }) {

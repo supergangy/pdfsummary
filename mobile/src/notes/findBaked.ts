@@ -14,9 +14,10 @@ export type BakedScan = { pages: Map<number, BakedMark[]>; scanned: number; tota
 const widthFor = (pageW: number) => Math.round(Math.max(800, Math.min(1600, pageW * 1.39)));
 
 /** PDF 쪽을 하나씩 그려 형광펜 색 덩어리를 찾는다. shouldStop이 참이면 거기까지만 */
-export async function scanBaked(nb: Notebook, pdfUri: string, onProgress: (done: number, total: number) => void, shouldStop: () => boolean): Promise<BakedScan> {
+/** range: 찾을 쪽 범위 [처음, 끝] (노트 쪽 번호, 0부터). 없으면 전체 */
+export async function scanBaked(nb: Notebook, pdfUri: string, onProgress: (done: number, total: number) => void, shouldStop: () => boolean, range?: [number, number]): Promise<BakedScan> {
   const pages = new Map<number, BakedMark[]>();
-  const todo = nb.pages.map((p, i) => ({ p, i })).filter(({ p }) => p.pdf !== undefined);
+  const todo = nb.pages.map((p, i) => ({ p, i })).filter(({ p, i }) => p.pdf !== undefined && (!range || (i >= range[0] && i <= range[1])));
   let done = 0;
   for (const { p, i } of todo) {
     if (shouldStop()) break;

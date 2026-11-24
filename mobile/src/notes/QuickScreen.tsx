@@ -1,13 +1,13 @@
 // 서버 없이 기기에서 바로 만드는 요약 화면
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import * as DeviceAi from "../../modules/device-ai";
 import { inkAvailable, inkStatus, prepareInk, recognizeInk } from "../../modules/ink-recognizer";
 import { pageText } from "../../modules/pdf-pages";
 import { ResultView } from "../platform/ResultView";
-import { Bar, Button, floating, Hint, radius, type, useTheme } from "../ui";
+import { Bar, Button, floating, Hint, radius, styles as ui, type, useTheme } from "../ui";
 import { COLOR_INFO, type ColorKey } from "./bakedHighlights";
 import { addBakedToSummary, bakedColors, scanBaked, type BakedScan } from "./findBaked";
 import { tooSoon } from "./app-nav";
@@ -33,6 +33,10 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary, onOpenNot
   const [bakedPick, setBakedPick] = useState<Set<ColorKey>>(new Set());
   const [bakedBusy, setBakedBusy] = useState(false);
   const stopBaked = useRef(false);
+  const [rangeOpen, setRangeOpen] = useState(false); // 찾을 쪽 범위 고르는 창
+  const [rFrom, setRFrom] = useState("1");
+  const [rTo, setRTo] = useState(String(nb.pages.length));
+  const [rangeErr, setRangeErr] = useState("");
   const alive = useRef(true);
   // 노트의 '요약' 단추를 빠르게 두 번 누르면 두 번째 누름이 같은 자리에 뜨는 '서버로 자세히'를 눌렀다 → 막 떴을 때의 누름은 넘긴다
   const openedAt = useRef(Date.now());
@@ -98,14 +102,31 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary, onOpenNot
   }
 
   /** 다른 앱에서 칠한 형광펜: 쪽마다 그려 색을 찾고, 찾은 색을 고르게 한다 */
-  async function findBakedMarks() {
+  /** 쪽 범위를 정해 찾기 시작 (전체면 range 없이) */
+  function startRange(all: boolean) {
+    const n = nb.pages.length;
+    if (all) {
+      setRangeOpen(false);
+      void findBakedMarks();
+      return;
+    }
+    const a = parseInt(rFrom.replace(/[^0-9]/g, ""), 10), b = parseInt(rTo.replace(/[^0-9]/g, ""), 10);
+    if (!(a >= 1 && b >= a && a <= n)) {
+      setRangeErr(`1부터 ${n} 사이로, 처음 쪽이 끝 쪽보다 크지 않게 넣어 주세요.`);
+      return;
+    }
+    setRangeOpen(false);
+    void findBakedMarks([a - 1, Math.min(n, b) - 1]);
+  }
+
+  async function findBakedMarks(range?: [number, number]) {
     if (!nb.hasPdf) return;
     stopBaked.current = false;
     setBakedBusy(true);
     setNote("");
     try {
       const uri = await store.pdfUri(nb.id);
-      const res = await scanBaked(nb, uri, (d, n) => alive.current && setProg({ label: `쪽 그림에서 형광펜 색을 찾는 중… ${d}/${n}쪽`, ratio: n ? d / n : 1 }), () => stopBaked.current || !alive.current);
+      const res = await scanBaked(nb, uri, (d, n) => alive.current && setProg({ label: `쪽 그림에서 형광펜 색을 찾는 중… ${d}/${n}쪽`, ratio: n ? d / n : 1 }), () => stopBaked.current || !alive.current, range);
       if (!alive.current) return;
       setProg(null);
       const cs = bakedColors(res);
@@ -204,7 +225,7 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary, onOpenNot
             disabled={!q}
             onMessage={(m, bad) => (bad ? setErr(m) : setNote(m))}
           />
-          {nb.hasPdf && <Button small label="다른 앱에서 칠한 형광펜 찾기" onPress={findBakedMarks} disabled={!q || !!prog || bakedBusy} />}
+          {nb.hasPdf && <Button small label="다른 앱에서 칠한 형광펜 찾기" onPress={() => { setRangeErr(""); setRangeOpen(true); }} disabled={!q || !!prog || bakedBusy} />}
           <Button small label="서버로 자세히" onPress={serverSummary} />
           {/* 손글씨를 다 읽은 뒤에 (읽는 중에 만들면 메모가 빠진다) */}
           <Button small kind="primary" label="나만의 노트" onPress={() => setMaking(true)} disabled={!q || !!prog} />
@@ -219,6 +240,27 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary, onOpenNot
           <Bar ratio={prog.ratio} />
         </View>
       )}
+      {/* 찾을 쪽 범위 */}
+      <Modal visible={rangeOpen} transparent animationType="fade" onRequestClose={() => setRangeOpen(false)}>
+        <View style={[s.back, { backgroundColor: t.dark ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.32)" }]}>
+          <View style={[floating(t), s.sheet]}>
+            <Text style={[type.title, { color: t.ink }]}>어느 쪽에서 찾을까요?</Text>
+            <Text style={[type.caption, { color: t.sub }]}>{`쪽마다 그림으로 그려 색을 찾아서 쪽당 0.5초쯤 걸려요 (전체 ${nb.pages.length}쪽이면 약 ${Math.max(1, Math.round((nb.pages.length * 0.5) / 60))}분). 단원만 찾으면 금방 끝나요.`}</Text>
+            <View style={s.rangeRow}>
+              <TextInput value={rFrom} onChangeText={(v) => { setRFrom(v); setRangeErr(""); }} keyboardType="number-pad" selectTextOnFocus accessibilityLabel="처음 쪽" style={[ui.input, s.rangeInput, { borderColor: t.line, color: t.ink, backgroundColor: t.card }]} />
+              <Text style={[type.body, { color: t.sub }]}>쪽부터</Text>
+              <TextInput value={rTo} onChangeText={(v) => { setRTo(v); setRangeErr(""); }} keyboardType="number-pad" selectTextOnFocus accessibilityLabel="끝 쪽" style={[ui.input, s.rangeInput, { borderColor: t.line, color: t.ink, backgroundColor: t.card }]} />
+              <Text style={[type.body, { color: t.sub }]}>쪽까지</Text>
+            </View>
+            {!!rangeErr && <Text style={[type.caption, { color: t.bad }]}>{rangeErr}</Text>}
+            <View style={s.sheetButtons}>
+              <Button label="취소" onPress={() => setRangeOpen(false)} />
+              <Button label={`전체 ${nb.pages.length}쪽`} onPress={() => startRange(true)} />
+              <Button kind="primary" label="이 범위에서 찾기" onPress={() => startRange(false)} />
+            </View>
+          </View>
+        </View>
+      </Modal>
       {/* 찾은 형광펜 색 고르기 */}
       <Modal visible={!!baked} transparent animationType="fade" onRequestClose={() => setBaked(null)}>
         <View style={[s.back, { backgroundColor: t.dark ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.32)" }]}>
@@ -284,5 +326,7 @@ const s = StyleSheet.create({
   colorRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12, paddingHorizontal: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderRadius: 8 },
   check: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, alignItems: "center", justifyContent: "center" },
   swatch: { width: 28, height: 14, borderRadius: 4 },
+  rangeRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  rangeInput: { width: 84, textAlign: "center", fontSize: 18, fontWeight: "700" },
   msg: { paddingTop: 12 },
 });

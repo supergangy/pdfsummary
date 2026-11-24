@@ -19,6 +19,8 @@ import { pageImage } from "./pageImage";
 import { PageCanvas, type JumpCmd, type Selection, type ToolName, type ViewSpot, type ZoomCmd } from "./PageCanvas";
 import { PageGrid } from "./PageGrid";
 import { loadLastPage, saveLastPage } from "./lastPage";
+import { FindPanel } from "./FindPanel";
+import { useKeys } from "./keys";
 import { loadPrefs, savePrefs, type Prefs } from "./prefs";
 import { clock, fadeStep, pageAt, seekFor, timedStrokeAt } from "./audioSync";
 import { PlayerBar, useLectureAudio } from "./LectureAudio";
@@ -186,6 +188,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   floatSizeRef.current = floatSize;
   const [tbEdit, setTbEdit] = useState(false); // 도구 모음 편집 창
   const [goOpen, setGoOpen] = useState(false); // 쪽 번호를 넣어 그 쪽으로 가는 창
+  const [findOpen, setFindOpen] = useState(false); // 노트에서 찾기 (Ctrl+F)
+  const [keysHelp, setKeysHelp] = useState(false); // 키보드 단축키 보기
   /** 도구 모음 집어 옮기기: 시작·움직임·놓기 (손잡이 끌기와 도구 모음 꾹 누르기가 함께 쓴다) */
   const tbDrag = useMemo(() => {
     const last = { x: 0, y: 0, x0: 0, y0: 0, dock: "" };
@@ -971,24 +975,54 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     return () => globalThis.removeEventListener?.("paste", onPaste);
   }, []);
 
-  // 키보드(웹·키보드 달린 태블릿의 웹판): Ctrl+Z 되돌리기, Ctrl+Shift+Z·Ctrl+Y 다시 하기. 글 쓰는 칸 안에서는 그 칸의 되돌리기를 그대로 둔다
-  const keys = useRef({ undo, redo });
-  keys.current = { undo, redo };
-  useEffect(() => {
-    if (Platform.OS !== "web") return;
-    const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
-      const el = e.target as HTMLElement | null;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-      const k = e.key.toLowerCase();
-      if (k === "z" && !e.shiftKey) keys.current.undo();
-      else if (k === "y" || (k === "z" && e.shiftKey)) keys.current.redo();
-      else return;
-      e.preventDefault();
-    };
-    globalThis.addEventListener?.("keydown", onKey);
-    return () => globalThis.removeEventListener?.("keydown", onKey);
-  }, []);
+  // 키보드 단축키 (블루투스·북커버 키보드, 웹). 글 쓰는 칸에 입력 중이면 오지 않는다. 목록은 KEY_HELP
+  const keyRef = useRef<(k: import("./keys").KeyPress) => boolean>(() => false);
+  keyRef.current = (k) => {
+    if (!nb) return false;
+    if (goOpen || findOpen || keysHelp || renaming !== null || tbEdit) return false; // 창이 떠 있으면 창에 맡긴다
+    const last = nb.pages.length - 1;
+    if (k.ctrl) {
+      if (k.key === "z" && !k.shift) undo();
+      else if (k.key === "y" || (k.key === "z" && k.shift)) redo();
+      else if (k.key === "f") setFindOpen(true);
+      else if (k.key === "g") setGoOpen(true);
+      else if (k.key === "s") void flush().then(() => say("저장했어요."));
+      else if (k.key === "e") void exportPdf();
+      else if (k.key === "+") setZoom((z) => ({ kind: "in", n: z.n + 1 }));
+      else if (k.key === "-") setZoom((z) => ({ kind: "out", n: z.n + 1 }));
+      else if (k.key === "0") setZoom((z) => ({ kind: "fit", n: z.n + 1 }));
+      else if (k.key === "/") setKeysHelp(true);
+      else return false;
+      return true;
+    }
+    switch (k.key) {
+      case "PageUp":
+      case "ArrowLeft":
+        go(pi - 1);
+        return true;
+      case "PageDown":
+      case "ArrowRight":
+        go(Math.min(last, pi + 1));
+        return true;
+      case "Home":
+        go(0);
+        return true;
+      case "End":
+        go(last);
+        return true;
+      case "Backspace":
+      case "Delete":
+        if (!selection) return false;
+        deleteSelected();
+        return true;
+    }
+    if (k.repeat || k.shift || k.alt) return false;
+    const tool = ({ p: "pen", h: "highlighter", e: "eraser", l: "lasso", t: "text" } as const)[k.key as "p"];
+    if (!tool) return false;
+    setP({ tool });
+    return true;
+  };
+  useKeys((k) => keyRef.current(k));
 
   // 안드로이드 '뒤로': 열린 창이나 고른 것이 있으면 그것부터 닫고, 없으면 저장한 뒤 노트 목록으로 (앱 밖으로 나가지 않게)
   const onBack = useRef(() => {});
@@ -1405,6 +1439,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
               <MenuItem label="서버로 자세히 요약 (요약집·AI)" onPress={summarize} />
               <MenuSep />
               <MenuItem label="쪽 모아보기" onPress={() => { setMenu(false); setGrid(true); }} />
+              <MenuItem label="노트에서 찾기 (Ctrl+F)" onPress={() => { setMenu(false); setFindOpen(true); }} />
               <MenuItem label="PDF로 내보내기 (필기 포함)" onPress={exportPdf} />
               <MenuSep />
               <MenuItem label="좌우로 넘기기 (한 쪽씩)" checked={prefs.flow === "h"} onPress={() => { setMenu(false); setP({ flow: "h" }); }} />
@@ -1416,12 +1451,38 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
               <MenuItem label="＋ 뒤에 모눈 쪽" onPress={() => addPage("grid")} />
               <MenuSep />
               <MenuItem label="노트 이름 바꾸기" onPress={() => { setMenu(false); setRenaming(nb.title); }} />
+              <MenuItem label="키보드 단축키 (Ctrl+/)" onPress={() => { setMenu(false); setKeysHelp(true); }} />
               <MenuItem label="이 쪽 지우기" onPress={deletePage} disabled={nb.pages.length <= 1} danger />
             </ScrollView>
           </Pressable>
         </Pressable>
       </Modal>
 
+      <FindPanel
+        open={findOpen}
+        nb={nb}
+        ink={ink}
+        pdfUri={pdfUri}
+        onClose={() => setFindOpen(false)}
+        onGo={(i) => {
+          setFindOpen(false);
+          showPage(i);
+        }}
+      />
+      <Dialog open={keysHelp} title="키보드 단축키" maxWidth={460} onClose={() => setKeysHelp(false)}>
+        <ScrollView style={{ maxHeight: 420 }}>
+          {KEY_HELP.map(([k, what]) => (
+            <View key={k} style={sx.keyRow}>
+              <Text style={[type.label, sx.keyCap, { color: t.ink, backgroundColor: t.sunken, borderColor: t.line }]}>{k}</Text>
+              <Text style={[type.body, { color: t.sub, flex: 1 }]}>{what}</Text>
+            </View>
+          ))}
+        </ScrollView>
+        <View style={sx.actions}>
+          <View style={{ flex: 1 }} />
+          <Button kind="primary" label="닫기" onPress={() => setKeysHelp(false)} />
+        </View>
+      </Dialog>
       <GoToPageDialog
         open={goOpen}
         count={nb.pages.length}
@@ -1770,6 +1831,23 @@ function TextDialog({ open, initial, size, editing, onCancel, onSave }: { open: 
   );
 }
 
+/** 키보드 단축키 목록 (보기 창·설명용) */
+export const KEY_HELP: [string, string][] = [
+  ["Ctrl+F", "노트에서 찾기"],
+  ["Ctrl+G", "쪽 번호로 가기"],
+  ["Ctrl+Z", "되돌리기"],
+  ["Ctrl+Y · Ctrl+Shift+Z", "다시 하기"],
+  ["Ctrl+S", "지금 저장"],
+  ["Ctrl+E", "PDF로 내보내기 (필기 포함)"],
+  ["Ctrl++ · Ctrl+-", "확대 · 축소"],
+  ["Ctrl+0", "쪽 폭에 맞추기"],
+  ["← → · PageUp PageDown", "이전 쪽 · 다음 쪽"],
+  ["Home · End", "첫 쪽 · 마지막 쪽"],
+  ["P · H · E · L · T", "펜 · 형광펜 · 지우개 · 올가미 · 글상자"],
+  ["Delete · Backspace", "올가미로 고른 것 지우기"],
+  ["Ctrl+/", "이 목록 보기"],
+];
+
 /** 쪽 번호를 넣어 그 쪽으로 바로 가기 (움직일 때 오른쪽에 나오는 'N / 전체'를 누르면) */
 function GoToPageDialog({ open, count, current, onClose, onGo }: { open: boolean; count: number; current: number; onClose: () => void; onGo: (i: number) => void }) {
   const t = useTheme();
@@ -2036,6 +2114,8 @@ const sx = StyleSheet.create({
   stickerWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   stamp: { borderWidth: 2, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 8 },
   stickerCell: { width: 64, height: 64, borderRadius: radius.md, alignItems: "center", justifyContent: "center" },
+  keyRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 7 },
+  keyCap: { minWidth: 150, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderWidth: 1, overflow: "hidden", fontSize: 13 },
   stepRow: { flexDirection: "row", alignItems: "center", gap: 10 },
   stepBtn: { width: 52, height: 52, borderRadius: 26, borderWidth: 1, alignItems: "center", justifyContent: "center" },
   stepText: { fontSize: 24, fontWeight: "600", lineHeight: 28 },

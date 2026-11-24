@@ -12,6 +12,7 @@ import type { Picked } from "../platform/types";
 import { Button, Chip, floating, Hint, radius, ScreenTitle, Segmented, styles as ui, type, useTheme, useThemeMode, type Theme, type ThemeMode } from "../ui";
 import { keepFolder } from "./app-nav";
 import { importPdf } from "./importPdf";
+import { makeWrongNote } from "./makeWrongNote";
 import { PACK_EXT, packNotebook, unpackNotebook } from "./pack";
 import { bigPdfMessage } from "./net-errors";
 import { readPicked } from "./readPicked";
@@ -56,6 +57,8 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [newOpen, setNewOpen] = useState(false);
+  const [wrongOpen, setWrongOpen] = useState(false); // 오답 노트 만들기 창
+  const [wrongBusy, setWrongBusy] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false); // 설정 창 (화면 테마 · 요약 서버 설정으로)
   const [actions, setActions] = useState<Notebook | null>(null);
   const [folders, setFolders] = useState<string[]>([]);
@@ -523,6 +526,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
           <Button label="＋ 새 노트" onPress={() => setNewOpen(true)} style={actionStyle} />
           <Button label="노트 파일 가져오기" onPress={pickPack} style={actionStyle} />
           <Button label="PDF만 넣어 요약하기" onPress={onSummaryTool} style={actionStyle} />
+          <Button label="오답 노트 만들기" onPress={() => setWrongOpen(true)} style={actionStyle} />
         </View>
 
         {/* 경로: 폴더 › 공부 › NCS (누르면 그 폴더로). 끝에 새 폴더·이 폴더 ⋯ */}
@@ -630,6 +634,30 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
       )}
 
       <NewNoteDialog visible={newOpen} onCancel={() => setNewOpen(false)} onCreate={createBlank} />
+      <WrongNoteDialog
+        visible={wrongOpen}
+        notes={(list ?? []).filter((n) => !n.trashed)}
+        busy={wrongBusy}
+        onCancel={() => !wrongBusy && setWrongOpen(false)}
+        onMake={async (ids) => {
+          setWrongBusy("빨간 사선을 찾는 중…");
+          try {
+            const picked = (list ?? []).filter((n) => ids.includes(n.id));
+            const r = await makeWrongNote(store, picked, (d, all) => setWrongBusy(`표시한 쪽을 살펴보는 중… ${d}/${all}`));
+            if (!r) {
+              setWrongBusy("");
+              say("빨간 펜 사선(／)으로 표시한 문제를 찾지 못했어요.");
+              return;
+            }
+            setWrongBusy("");
+            setWrongOpen(false);
+            onOpen(r.id);
+          } catch (e) {
+            setWrongBusy("");
+            say(`오답 노트를 만들지 못했어요: ${(e as Error).message}`);
+          }
+        }}
+      />
       <SettingsDialog visible={settingsOpen} onClose={() => setSettingsOpen(false)} onMore={() => { setSettingsOpen(false); onSettings(); }} />
       <NameDialog
         visible={newIn !== undefined}
@@ -1004,6 +1032,58 @@ const PAPER_LINE = "#CFDDEB";
 const PAPER_GRID = "#E1E7EE";
 const PAPER_DOT = "#B9C3CD";
 
+/** 오답 노트 만들기: 문제지 노트를 여러 개 고르면, 빨간 펜 사선(／)을 그은 문제만 모아 새 노트로 */
+function WrongNoteDialog({ visible, notes, busy, onCancel, onMake }: { visible: boolean; notes: Notebook[]; busy: string; onCancel: () => void; onMake: (ids: string[]) => void }) {
+  const t = useTheme();
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (visible) setSel(new Set());
+  }, [visible]);
+  const toggle = (id: string) =>
+    setSel((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  return (
+    <Dialog visible={visible} onCancel={onCancel} title="오답 노트 만들기" maxWidth={520}>
+      <Text style={[type.body, { color: t.sub, marginBottom: 12 }]}>문제를 풀며 틀린 문제에 빨간 펜으로 사선(／)을 그어 두세요. 고른 노트에서 그 문제만 잘라 새 노트로 모아요.</Text>
+      <ScrollView style={{ maxHeight: 340 }}>
+        {notes.length ? (
+          notes.map((nb) => {
+            const on = sel.has(nb.id);
+            return (
+              <Pressable
+                key={nb.id}
+                onPress={() => toggle(nb.id)}
+                disabled={!!busy}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: on }}
+                accessibilityLabel={`${nb.title} 고르기`}
+                style={({ pressed }) => [s.wrongRow, { borderColor: t.lineSoft, backgroundColor: pressed ? t.sunken : "transparent" }]}
+              >
+                <View style={[s.check, { borderColor: on ? t.accent : t.line, backgroundColor: on ? t.accent : "transparent" }]}>
+                  {on && <Text style={{ color: t.accentInk, fontWeight: "700", fontSize: 13 }}>✓</Text>}
+                </View>
+                <Text style={[type.body, { color: t.ink, flex: 1 }]} numberOfLines={1}>{nb.title}</Text>
+                <Text style={[type.caption, { color: t.muted }]}>{nb.pages.length}쪽</Text>
+              </Pressable>
+            );
+          })
+        ) : (
+          <Text style={[type.caption, { color: t.muted }]}>노트가 없어요.</Text>
+        )}
+      </ScrollView>
+      {!!busy && <Text style={[type.caption, { color: t.sub, marginTop: 12 }]}>{busy}</Text>}
+      <View style={s.dialogButtons}>
+        <Button label="취소" onPress={onCancel} disabled={!!busy} />
+        <Button kind="primary" label={sel.size ? `만들기 (${sel.size}개)` : "만들기"} disabled={!sel.size || !!busy} busy={!!busy} onPress={() => onMake([...sel])} />
+      </View>
+    </Dialog>
+  );
+}
+
 function NewNoteDialog({ visible, onCancel, onCreate }: { visible: boolean; onCancel: () => void; onCreate: (p: Paper, title: string) => void }) {
   const t = useTheme();
   const [paper, setPaper] = useState<Paper>("lined");
@@ -1192,6 +1272,8 @@ const s = StyleSheet.create({
   backdrop: { flex: 1, alignItems: "center", justifyContent: "center", padding: 20 },
   dialog: { borderRadius: radius.xl, padding: 24, width: "100%" },
   dialogButtons: { flexDirection: "row", justifyContent: "flex-end", gap: 8, marginTop: 28 },
+  wrongRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12, paddingHorizontal: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderRadius: 8 },
+  check: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, alignItems: "center", justifyContent: "center" },
   papers: { flexDirection: "row", gap: 12 },
   templates: { flexWrap: "wrap" },
   paperPick: { flex: 1, alignItems: "center", gap: 8 },

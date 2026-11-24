@@ -1011,6 +1011,55 @@ open(sys.argv[1], "wb").write(png); print(base64.b64encode(png).decode())`, pngP
     await page.getByLabel("재생 막대 닫기").click();
     console.log(`✓ 강의 녹음: 녹음하며 쓴 필기에 시각(${timed.map((x) => (x.rt / 1000).toFixed(1)).join("초, ")}초), 필기를 누르면 ${shown.split("/")[0].trim()}부터 재생`);
 
+    // ── 오답 노트: 두 단 시험지의 2번에 빨간 사선 → 고른 노트에서 그 문제만 잘라 '오답 노트' 서식 쪽에 ──
+    {
+      const exam = path.join(TMP, "exam.pdf");
+      execFileSync("python3", ["-c", `
+import sys, pymupdf
+d = pymupdf.open(); p = d.new_page(width=595, height=842)
+for x, y, n in [(40, 80, 1), (40, 300, 2), (320, 80, 3), (320, 300, 4)]:
+    p.insert_text((x, y), f"{n}. Question number {n} text", fontsize=11)
+    for k in range(3): p.insert_text((x + 10, y + 22 + k * 18), f"({k + 1}) choice {n}-{k + 1}", fontsize=10)
+d.save(sys.argv[1])`, exam]);
+      await page.getByLabel("노트 목록으로").click();
+      const [fce] = await Promise.all([page.waitForEvent("filechooser"), page.getByText("PDF 가져오기").click()]);
+      await fce.setFiles(exam);
+      await canvas.waitFor({ timeout: 20000 });
+      await page.waitForTimeout(1500);
+      await page.getByLabel(/^글상자 \(/).click();
+      await page.getByLabel(/한 번 더 누르면 펜 설정/).click();
+      await page.getByLabel("색 #D7263D", { exact: true }).click();
+      await page.waitForTimeout(300);
+      const cb = await canvas.boundingBox();
+      const k = Math.min((cb.width - 24) / 595, 6);
+      const ox = cb.x + 12 + Math.max(0, (cb.width - 24 - 595 * k) / 2), oy = cb.y + 12;
+      // 2번(왼쪽 단 y 300) 번호 위에 ／
+      await page.mouse.move(ox + 45 * k, oy + 318 * k);
+      await page.mouse.down();
+      await page.mouse.move(ox + 80 * k, oy + 283 * k, { steps: 8 });
+      await page.mouse.up();
+      await page.waitForTimeout(1200);
+      await page.getByLabel("노트 목록으로").click();
+      await page.getByText("오답 노트 만들기", { exact: true }).click();
+      await page.getByLabel("exam 고르기").click();
+      await page.getByText("만들기 (1개)", { exact: true }).click();
+      await canvas.waitFor({ timeout: 30000 });
+      await page.waitForTimeout(1200);
+      const files = await idb(page);
+      const wn = Object.entries(files).filter(([kk, v]) => kk.endsWith("/notebook.json") && v).map(([, v]) => JSON.parse(v)).find((n) => /^오답 노트/.test(n.title));
+      if (!wn) fail("오답 노트가 만들어지지 않음");
+      if (wn.pages.length !== 1 || wn.pages[0].paper !== "wrong") fail(`오답 노트 쪽이 1개('오답 노트' 서식)가 아님: ${JSON.stringify(wn.pages.map((p) => p.paper))}`);
+      const wink = JSON.parse(files[Object.keys(files).find((kk) => kk.includes(`${wn.id}/ink/${wn.pages[0].id}`))] ?? "[]");
+      const pic = wink.find((s) => s.tool === "image");
+      if (!pic || !String(pic.img).startsWith("data:image/jpeg")) fail("오답 노트에 잘라 낸 문제 그림이 없음");
+      if (!wink.some((s) => s.text === "exam · 1쪽 · 2번")) fail("오답 노트에 어디서 온 문제인지(exam · 1쪽 · 2번)가 없음: " + JSON.stringify(wink.map((s) => s.text).filter(Boolean)));
+      // 2번 칸(왼쪽 단, 2번부터 단 끝까지)만: 폭은 쪽 반쯤
+      const ratio = (pic.pts[3] - pic.pts[0]) / (pic.pts[4] - pic.pts[1]);
+      if (!(ratio > 1.5 && ratio < 6)) fail(`잘라 낸 문제 그림 모양이 이상함 (가로/세로 ${ratio.toFixed(2)})`);
+      await page.screenshot({ path: path.join(TMP, "wrong-note.png") });
+      console.log(`✓ 오답 노트: 두 단 시험지 2번의 빨간 사선 → 그 문제만 잘라 '오답 노트' 서식 쪽에 (exam · 1쪽 · 2번)`);
+    }
+
     if (errors.length) fail("페이지 오류: " + errors.join(" | "));
   } catch (e) {
     await page.screenshot({ path: path.join(TMP, "failure.png") }).catch(() => {});

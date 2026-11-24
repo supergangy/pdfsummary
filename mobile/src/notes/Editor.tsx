@@ -1713,11 +1713,12 @@ const backdrop = (t: Theme) => (t.dark ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.25)")
 const popBackdrop = (t: Theme) => (t.dark ? "rgba(0,0,0,0.35)" : "rgba(0,0,0,0.12)");
 
 /** 가운데 뜨는 작은 창 (글상자 · 노트 이름) */
-function Dialog({ open, title, maxWidth, onClose, children }: { open: boolean; title: string; maxWidth: number; onClose: () => void; children: ReactNode }) {
+/** top: 화면 위쪽에 (키보드가 올라와도 단추가 가려지지 않게 — 쪽 번호 넣기처럼 입력 칸이 있는 창) */
+function Dialog({ open, title, maxWidth, onClose, children, top }: { open: boolean; title: string; maxWidth: number; onClose: () => void; children: ReactNode; top?: boolean }) {
   const t = useTheme();
   return (
     <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={[sx.dialogBack, { backgroundColor: backdrop(t) }]}>
+      <View style={[sx.dialogBack, { backgroundColor: backdrop(t) }, top && { justifyContent: "flex-start", paddingTop: 72 }]}>
         <View style={[floating(t), sx.dialog, { maxWidth }]}>
           <Text style={[type.title, { color: t.ink }]}>{title}</Text>
           {children}
@@ -1790,7 +1791,7 @@ function GoToPageDialog({ open, count, current, onClose, onGo }: { open: boolean
     onGo(i);
   };
   return (
-    <Dialog open={open} title="쪽으로 가기" maxWidth={360} onClose={onClose}>
+    <Dialog open={open} title="쪽으로 가기" maxWidth={360} onClose={onClose} top>
       <Text style={[type.caption, { color: t.muted }]}>{`지금 ${current + 1}쪽 · 전체 ${count}쪽`}</Text>
       <TextInput
         value={v}

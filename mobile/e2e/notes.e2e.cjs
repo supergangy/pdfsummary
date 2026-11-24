@@ -1052,12 +1052,12 @@ d.save(sys.argv[1])`, exam]);
       const wink = JSON.parse(files[Object.keys(files).find((kk) => kk.includes(`${wn.id}/ink/${wn.pages[0].id}`))] ?? "[]");
       const pic = wink.find((s) => s.tool === "image");
       if (!pic || !String(pic.img).startsWith("data:image/jpeg")) fail("오답 노트에 잘라 낸 문제 그림이 없음");
-      if (!wink.some((s) => s.text === "exam · 1쪽 · 2번")) fail("오답 노트에 어디서 온 문제인지(exam · 1쪽 · 2번)가 없음: " + JSON.stringify(wink.map((s) => s.text).filter(Boolean)));
+      if (!wink.some((s) => s.text === "2번 · 1쪽 · exam")) fail("오답 노트에 어디서 온 문제인지(2번 · 1쪽 · exam)가 없음: " + JSON.stringify(wink.map((s) => s.text).filter(Boolean)));
       // 2번 칸(왼쪽 단, 2번부터 단 끝까지)만: 폭은 쪽 반쯤
       const ratio = (pic.pts[3] - pic.pts[0]) / (pic.pts[4] - pic.pts[1]);
       if (!(ratio > 1.5 && ratio < 6)) fail(`잘라 낸 문제 그림 모양이 이상함 (가로/세로 ${ratio.toFixed(2)})`);
       await page.screenshot({ path: path.join(TMP, "wrong-note.png") });
-      console.log(`✓ 오답 노트: 두 단 시험지 2번의 빨간 사선 → 그 문제만 잘라 '오답 노트' 서식 쪽에 (exam · 1쪽 · 2번)`);
+      console.log(`✓ 오답 노트: 두 단 시험지 2번의 빨간 사선 → 그 문제만 잘라 '오답 노트' 서식 쪽에 (2번 · 1쪽 · exam)`);
     }
 
     if (errors.length) fail("페이지 오류: " + errors.join(" | "));

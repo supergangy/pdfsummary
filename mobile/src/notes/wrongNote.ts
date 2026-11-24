@@ -83,8 +83,9 @@ export function questionBlocks(chars: PdfChar[] | null, pageW: number, pageH: nu
     const inCol = lines.filter((l) => colOf(l.x0) === col);
     const hs = heads.filter((h) => colOf(h.l.x0) === col).sort((a, b) => a.l.y0 - b.l.y0);
     if (!hs.length || !inCol.length) continue;
-    const left = Math.max(0, Math.min(...inCol.map((l) => l.x0)) - 8);
-    const right = twoCols && col === 0 ? mid - 2 : Math.min(pageW, Math.max(...inCol.map((l) => l.x1)) + 8);
+    // 그 단의 글이 있는 곳까지만 (넉넉히 잡으면 두 단 사이 세로줄이 같이 잘려 들어왔다)
+    const left = Math.max(0, Math.min(...inCol.map((l) => l.x0)) - 3);
+    const right = Math.min(twoCols && col === 0 ? mid + 12 : pageW, Math.max(...inCol.map((l) => l.x1)) + 3);
     hs.forEach((h, i) => {
       const top = Math.max(0, h.l.y0 - 6);
       const next = hs[i + 1];
@@ -142,7 +143,9 @@ export function layoutWrongNote(title: string, items: WrongItem[], now: number):
     const fits = fit >= 0.6;
     const page = { id: newId(), w: A4.w, h: A4.h, paper: fits ? ("wrong" as const) : ("plain" as const) };
     nb.pages.push(page);
-    const where = `${it.source} · ${it.page}쪽${it.num !== null ? ` · ${it.num}번` : ""}`;
+    // 번호·쪽을 앞에, 긴 노트 이름은 줄여서 (과목 줄 한 줄에 들어가게)
+    const src = [...it.source].length > 16 ? [...it.source].slice(0, 15).join("") + "…" : it.source;
+    const where = `${it.num !== null ? `${it.num}번 · ` : ""}${it.page}쪽 · ${src}`;
     const strokes: Stroke[] = [];
     if (fits) {
       const k = Math.min(fit, 1.6);

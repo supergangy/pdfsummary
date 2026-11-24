@@ -46,7 +46,7 @@ test("두 단 시험지: 사선이 그어진 문제의 칸만, 단마다 다음 
   const blocks = questionBlocks(chars, 595, 842);
   assert.deepEqual(blocks.map((b) => b.num), [1, 2, 3, 4]);
   // 1번: 왼쪽 단, 2번 앞까지 / 4번: 오른쪽 단 끝 글까지
-  assert.deepEqual(blocks[0].box, [32, 54, 295.5, 196]);
+  assert.deepEqual(blocks[0].box, [37, 54, 99, 196]); // 그 단의 글이 있는 곳까지만 (두 단 사이 세로줄은 안 들어가게)
   assert.equal(blocks[3].box[0] >= 297, true);
   assert.equal(blocks[3].box[3], 358);
   // 2번 문제 번호 위에 사선, 4번 보기 위에 사선 두 개(같은 문제) → 2번·4번
@@ -74,8 +74,13 @@ test("오답 노트: 문제마다 한 쪽, 칸에 들어가면 '오답 노트' �
   const [a, b] = nb.pages.map((p) => ink[p.id]);
   const pic = a.find((s) => s.tool === "image")!;
   assert.ok(pic.pts[0] >= 44 && pic.pts[3] <= 551.5 && pic.pts[1] >= 108 && pic.pts[4] <= 334, "문제 칸 안");
-  assert.ok(a.some((s) => s.text === "컴퓨터일반 · 3쪽 · 7번") && a.some((s) => s.text === "2026.11.25"));
-  assert.ok(b.some((s) => s.text === "컴퓨터일반 · 5쪽 · 2026.11.25"));
+  assert.ok(a.some((s) => s.text === "7번 · 3쪽 · 컴퓨터일반") && a.some((s) => s.text === "2026.11.25"));
+  assert.ok(b.some((s) => s.text === "5쪽 · 컴퓨터일반 · 2026.11.25"));
   const tall = b.find((s) => s.tool === "image")!;
   assert.ok(tall.pts[4] - tall.pts[1] > 400, "긴 문제는 크게");
+});
+
+test("오답 노트: 긴 노트 이름은 줄여 과목 줄 한 줄에 (번호·쪽이 앞에)", () => {
+  const { nb, ink } = layoutWrongNote("오답", [{ source: "2025_9급_국가직_컴퓨터일반(나)_2025년_04월_05일", page: 1, num: 6, img: "x", w: 500, h: 200 }], 0);
+  assert.ok(ink[nb.pages[0].id].some((s) => s.text === "6번 · 1쪽 · 2025_9급_국가직_컴퓨터…"));
 });

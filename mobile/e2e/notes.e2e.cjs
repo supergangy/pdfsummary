@@ -115,6 +115,70 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await page.mouse.move(x0, y0, { steps: 3 });
     await tipEl.waitFor({ state: "detached", timeout: 3000 }).catch(() => fail("단추에서 벗어났는데 이름표가 닫히지 않음"));
     console.log("✓ 그림 단추 이름표: 위에 띄우면 '지우개'가 단추 밑에, 벗어나면 닫힘");
+    // 화면 왼쪽 끝 가까운 펜 단추도 이름표가 단추 가운데 밑에 (예전엔 오른쪽으로 밀렸다), 색 단추는 색 이름
+    const center = (b) => b.x + b.width / 2;
+    const hoverOn = async (loc) => {
+      const b = await loc.boundingBox();
+      await page.mouse.move(center(b), b.y + b.height / 2, { steps: 3 });
+      await tipEl.waitFor({ timeout: 3000 });
+      await page.waitForTimeout(150);
+      return b;
+    };
+    const penB = await hoverOn(page.getByLabel(/한 번 더 누르면 펜 설정/));
+    const penTip = await tipEl.boundingBox();
+    if (Math.abs(center(penTip) - center(penB)) > 4) fail(`펜 단추 이름표가 단추 가운데 밑이 아님 (어긋남 ${(center(penTip) - center(penB)).toFixed(0)}px)`);
+    await hoverOn(page.getByLabel("색 #1F2328"));
+    if ((await tipEl.innerText()).trim() !== "검정") fail("검정 색 단추 이름표가 '검정'이 아님: " + (await tipEl.innerText()));
+    await page.mouse.move(x0, y0, { steps: 3 });
+    await tipEl.waitFor({ state: "detached", timeout: 3000 });
+
+    // ── 도구 모음 편집: 순서·숨기기·자리, 손잡이로 끌어 붙이기·띄우기 ──
+    const btnOf = (re) => page.getByLabel(re);
+    const eraserBtn = btnOf(/한 번 더 누르면 지우개 설정/), hlBtn = btnOf(/한 번 더 누르면 형광펜 설정/), lassoBtn = btnOf(/^올가미 \(/);
+    const editBar = async () => {
+      await page.getByLabel("도구 모음 편집").click();
+      await page.getByText("순서와 보이기").waitFor({ timeout: 3000 });
+    };
+    const closeEdit = async () => {
+      await page.getByText("닫기", { exact: true }).click();
+      await page.getByText("순서와 보이기").waitFor({ state: "detached", timeout: 3000 });
+      await page.waitForTimeout(500);
+    };
+    await editBar();
+    await page.getByLabel("지우개 앞으로").click();
+    await page.getByLabel("올가미 보이기").click();
+    await page.getByLabel("도구 모음 자리: 왼쪽").click();
+    await closeEdit();
+    if ((await lassoBtn.count()) !== 0) fail("올가미를 숨겼는데 도구 모음에 남아 있음");
+    let eB = await eraserBtn.boundingBox(), hB = await hlBtn.boundingBox();
+    if (!(eB.y < hB.y)) fail("지우개를 앞으로 옮겼는데 형광펜보다 앞(위)에 있지 않음");
+    if (!(eB.x < 60 && eB.y > 60)) fail(`왼쪽에 붙였는데 지우개 단추가 왼쪽 세로 줄에 있지 않음 (${eB.x.toFixed(0)}, ${eB.y.toFixed(0)})`);
+    await hoverOn(eraserBtn);
+    const sideTip = await tipEl.boundingBox();
+    if (!(sideTip.x > eB.x + eB.width)) fail("왼쪽에 붙인 도구 모음의 이름표가 단추 오른쪽에 뜨지 않음");
+    // 손잡이를 끌어 오른쪽 끝에 놓으면 오른쪽에 붙는다
+    const vp = page.viewportSize();
+    const dragGrip = async (x, y) => {
+      const g = await page.getByLabel(/^도구 모음 옮기기/).boundingBox();
+      await page.mouse.move(center(g), g.y + g.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(x, y, { steps: 12 });
+      await page.mouse.up();
+      await page.waitForTimeout(700);
+    };
+    await dragGrip(vp.width - 20, 420);
+    eB = await eraserBtn.boundingBox();
+    if (!(eB.x > vp.width - 70)) fail(`손잡이를 오른쪽 끝에 놓았는데 오른쪽에 붙지 않음 (지우개 x ${eB.x.toFixed(0)})`);
+    // 가운데에 놓으면 놓은 높이에 떠 있는 도구 모음 (가로는 화면 밖으로 나가지 않게 안쪽으로 당겨질 수 있다)
+    await dragGrip(500, 420);
+    eB = await eraserBtn.boundingBox();
+    if (!(Math.abs(eB.y + eB.height / 2 - 420) < 40)) fail(`가운데에 놓았는데 그 높이에 떠 있지 않음 (지우개 ${eB.x.toFixed(0)}, ${eB.y.toFixed(0)})`);
+    await editBar();
+    await page.getByText("처음대로", { exact: true }).click();
+    await closeEdit();
+    eB = await eraserBtn.boundingBox(), hB = await hlBtn.boundingBox();
+    if (!(eB.x > hB.x && eB.y < 60) || (await lassoBtn.count()) !== 1) fail("'처음대로'로 도구 모음이 처음 모습(위, 기본 순서, 올가미 보임)으로 돌아오지 않음");
+    console.log("✓ 이름표: 펜 단추 가운데 밑·색 이름 / 도구 모음 편집: 순서·숨기기·왼쪽에 붙이기(이름표는 옆에)·손잡이로 오른쪽·떠 있게·처음대로");
     await page.mouse.move(x0, y0);
     await page.mouse.down();
     for (let i = 1; i <= 20; i++) await page.mouse.move(x0 + i * 10, y0 + (i % 2 ? 15 : 0), { steps: 2 });
@@ -205,6 +269,7 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await pp.getByLabel("만년필", { exact: true }).click();
     await pp.getByLabel("실선", { exact: true }).click();
     await pp.getByLabel("닫기", { exact: true }).click();
+    await pp.waitFor({ state: "detached", timeout: 3000 }); // 창이 사라지는 동안(흐려지는 중)에는 창 안의 '직선' 스위치도 잡힌다
     // S펜 옆 단추를 펜을 띄운 채 빠르게 두 번 누르면 형광펜으로, 다시 두 번 누르면 원래 펜으로 (기본 설정)
     const penHover = (buttons) => canvas.dispatchEvent("pointermove", { pointerType: "pen", buttons, bubbles: true, clientX: x0 + 300, clientY: y0 + 300 });
     const doublePress = async () => {

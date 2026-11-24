@@ -1,12 +1,12 @@
 // 필기 화면: 도구 모음 + 쪽 그리기 + 자동 저장
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type Ref, type RefObject } from "react";
-import { ActivityIndicator, Alert, AppState, BackHandler, Modal, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View, type HostInstance } from "react-native";
+import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type Ref, type RefObject } from "react";
+import { ActivityIndicator, Alert, AppState, BackHandler, Modal, PanResponder, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View, type HostInstance } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { pageText } from "../../modules/pdf-pages";
 import { StylusView } from "../../modules/stylus";
 import { Button, floating, radius, styles as ui, type, useTheme, type Theme } from "../ui";
-import { clampPage, isHighlighterTap, justAfter, otherPage, pageBg, penSwap, swatchEdge, type BgCache, type SwapSaved } from "./editor-logic";
+import { clampPage, colorName, isHighlighterTap, justAfter, otherPage, pageBg, penSwap, swatchEdge, widthName, type BgCache, type SwapSaved } from "./editor-logic";
 import { bounds, eraseFrom, fitHighlight, hitAlong, straighten, thin, type CharBox } from "./geometry";
 import { History, removal, type Op } from "./history";
 import {
@@ -20,6 +20,7 @@ import { loadPrefs, savePrefs, type Prefs } from "./prefs";
 import { lassoSelect, moved, snapShape } from "./shapes";
 import { ToolIcon, type IconName } from "./ToolIcon";
 import { ToolPanel } from "./ToolPanel";
+import { clampFloat, dockAt, DOCKS, groupOf, itemLabel, moveItem, toolbarOrder, type ToolbarDock, type ToolbarItem } from "./toolbar";
 import type { SyncedStore } from "./sync/syncedStore";
 import { applyToInk, applyToNotebook } from "./sync/writes";
 
@@ -80,11 +81,13 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const [, bump] = useState(0); // 되돌리기 단추 상태 갱신용
 
   // ── 도구 모음 단추 이름표 ─────────────────────────────────
-  // 그림뿐인 단추 위에 S펜(웹은 마우스)을 띄우면 잠시 뒤 이름이 단추 밑에 뜬다. 손가락으로 길게 눌러도 뜬다.
-  // (안드로이드 기본 툴팁은 갤럭시탭에서 뜨지 않아서, 도구 모음을 감싼 S펜 뷰가 펜 자리를 알려 주면 여기서 단추를 찾는다)
-  const [tip, setTip] = useState<{ label: string; x: number; y: number } | null>(null);
+  // 단추 위에 S펜(웹은 마우스)을 띄우면 잠시 뒤 이름이 뜬다. 손가락으로 길게 눌러도 뜬다.
+  // (안드로이드 기본 툴팁은 갤럭시탭에서 뜨지 않아서, 도구 모음을 감싼 S펜 뷰가 펜 자리(창 기준)를 알려 주면 여기서 단추를 찾는다)
+  // 위·떠 있는 도구 모음은 단추 밑에, 왼쪽에 붙였으면 단추 오른쪽에, 오른쪽에 붙였으면 단추 왼쪽에 뜬다
+  const [tip, setTip] = useState<{ label: string; r: number[]; side: "below" | "right" | "left" } | null>(null);
+  const tipSide = useRef<"below" | "right" | "left">("below");
   const tipBtns = useRef(new Map<number, { label: string; ref: RefObject<HostInstance | null> }>());
-  const tipGeo = useRef<{ at: number; root: number[] | null; bar: number[] | null; items: { label: string; r: number[] }[] }>({ at: 0, root: null, bar: null, items: [] });
+  const tipGeo = useRef<{ at: number; root: number[] | null; items: { label: string; r: number[] }[] }>({ at: 0, root: null, items: [] });
   const tipMeasure = useRef<Promise<void> | null>(null);
   const tipTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tipOver = useRef<string | null>(null); // 펜이 떠 있는 단추
@@ -112,9 +115,10 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  /** 단추 자리(창 기준)를 화면 전체 기준으로 바꿔 이름표를 놓는다 */
   const placeTip = (label: string, r: number[], root: number[]) => {
     tipShown.current = true;
-    setTip({ label, x: r[0] + r[2] / 2 - root[0], y: r[1] + r[3] + 6 - root[1] });
+    setTip({ label, r: [r[0] - root[0], r[1] - root[1], r[2], r[3]], side: tipSide.current });
   };
   const hideTip = () => {
     if (tipTimer.current) clearTimeout(tipTimer.current);
@@ -124,24 +128,24 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   };
   const measureTips = () => {
     tipMeasure.current ??= (async () => {
-      const [root, bar] = await Promise.all([winOf(rootRef.current), winOf(barRef.current)]);
+      const root = await winOf(rootRef.current);
       const items = await Promise.all([...tipBtns.current.values()].map(async (b) => ({ label: b.label, r: await winOf(b.ref.current) })));
-      tipGeo.current = { at: Date.now(), root, bar, items: items.filter((i): i is { label: string; r: number[] } => !!i.r) };
+      tipGeo.current = { at: Date.now(), root, items: items.filter((i): i is { label: string; r: number[] } => !!i.r) };
     })().finally(() => {
       tipMeasure.current = null;
     });
     return tipMeasure.current;
   };
+  /** 펜이 떠 있는 자리 (창 기준 dp) */
   const onBarHover = useCallback(async (x: number, y: number, exit: boolean) => {
     if (exit) {
       tipOver.current = null;
       return hideTip();
     }
-    if (Date.now() - tipGeo.current.at > 1000) await measureTips(); // 옆으로 밀었거나 도구가 바뀌었을 수 있다
+    if (Date.now() - tipGeo.current.at > 1000) await measureTips(); // 밀었거나 도구가 바뀌었을 수 있다
     const g = tipGeo.current;
-    if (!g.bar || !g.root) return;
-    const wx = g.bar[0] + x, wy = g.bar[1] + y;
-    const hit = g.items.find((i) => wx >= i.r[0] && wx <= i.r[0] + i.r[2] && wy >= i.r[1] - 4 && wy <= i.r[1] + i.r[3] + 4);
+    if (!g.root) return;
+    const hit = g.items.find((i) => x >= i.r[0] - 2 && x <= i.r[0] + i.r[2] + 2 && y >= i.r[1] - 2 && y <= i.r[1] + i.r[3] + 2);
     const label = hit?.label ?? null;
     if (label === tipOver.current) return;
     tipOver.current = label;
@@ -158,6 +162,45 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   }, []);
   useEffect(() => () => {
     if (tipTimer.current) clearTimeout(tipTimer.current);
+  }, []);
+
+  // ── 도구 모음 옮기기: 손잡이를 끌어 놓은 자리에 붙인다 ─────────────
+  // 끄는 동안은 도구 모음은 그대로 두고 '여기에 놓기' 표시만 손가락을 따라간다 (끄는 손잡이가 사라지면 끌기가 끊기므로)
+  const [ghost, setGhost] = useState<{ x: number; y: number; dock: ToolbarDock } | null>(null);
+  const dragGeo = useRef<{ root: number[]; barBottom: number } | null>(null);
+  const stripRef = useRef<HostInstance>(null); // 왼쪽·오른쪽·떠 있는 도구 모음
+  const [floatSize, setFloatSize] = useState({ w: 400, h: 52 });
+  const [tbEdit, setTbEdit] = useState(false); // 도구 모음 편집 창
+  const grip = useMemo(() => {
+    const where = (x: number, y: number) => {
+      const g = dragGeo.current;
+      if (!g) return null;
+      return { x: x - g.root[0], y: y - g.root[1], dock: dockAt(x - g.root[0], y - g.root[1], g.root[2], g.barBottom - g.root[1]) };
+    };
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: () => {
+        hideTip();
+        void Promise.all([winOf(rootRef.current), winOf(barRef.current)]).then(([root, bar]) => {
+          if (root && bar) dragGeo.current = { root, barBottom: bar[1] + bar[3] };
+        });
+      },
+      onPanResponderMove: (_e, g) => setGhost(where(g.moveX, g.moveY)),
+      onPanResponderRelease: (_e, g) => {
+        const w = where(g.moveX, g.moveY);
+        setGhost(null);
+        dragGeo.current = null;
+        if (!w || Math.abs(g.dx) + Math.abs(g.dy) < 8) return; // 살짝 누르기만 했다
+        setP(w.dock === "float" ? { toolbarDock: "float", toolbarFloat: { x: w.x - 20, y: w.y - 22 } } : { toolbarDock: w.dock });
+      },
+      onPanResponderTerminate: () => {
+        setGhost(null);
+        dragGeo.current = null;
+      },
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── 불러오기 ────────────────────────────────────────────
@@ -774,24 +817,21 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const edge = swatchEdge(t.card); // 색 단추 테두리 (어두운 모드에서도 검정 단추가 보이게)
   const narrow = win.width < 480; // 세로로 든 폰 (고르기 안내 줄을 두 줄로)
   const pad = win.width >= 700 ? 16 : 8; // 화면 양옆 여백
-  const undoRedo = (
-    <View style={sx.row}>
-      <IconBtn icon="undo" onPress={undo} disabled={!hist.current.canUndo} label="되돌리기" />
-      <IconBtn icon="redo" onPress={redo} disabled={!hist.current.canRedo} label="다시 하기" />
-    </View>
-  );
-  /** 도구 설정 창 열기 — 도구 모음 바로 밑, 지금 도구 단추의 왼쪽 끝에 맞춰서 */
+  const dock: ToolbarDock = prefs.toolbarDock;
+  tipSide.current = dock === "left" ? "right" : dock === "right" ? "left" : "below";
+  const order = toolbarOrder(prefs.toolbar);
+  const hiddenItems = new Set(prefs.toolbarHidden);
+  /** 도구 설정 창 열기 — 위·떠 있는 도구 모음이면 도구 모음 바로 밑 지금 도구 단추 왼쪽 끝에,
+   *  왼쪽·오른쪽에 붙였으면 도구 모음 옆 지금 도구 단추 높이에 */
   const openPanel = () => {
-    const bar = barRef.current;
     const btn = toolRefs.current[tool];
-    if (!bar) return setPanel(true);
-    bar.measureInWindow((_x, y, _w, h) => {
-      const show = (left: number) => {
-        setPanelAt({ top: y + h + 4, left });
-        setPanel(true);
-      };
-      if (btn) btn.measureInWindow((x) => show(x));
-      else show(12);
+    const box = dock === "top" ? barRef.current : stripRef.current;
+    void Promise.all([winOf(box), winOf(btn ?? null)]).then(([b, r]) => {
+      if (!b) setPanelAt(null);
+      else if (dock === "left") setPanelAt({ top: r ? r[1] : b[1], left: b[0] + b[2] + 4 });
+      else if (dock === "right") setPanelAt({ top: r ? r[1] : b[1], left: b[0] - PANEL_W - 4 });
+      else setPanelAt({ top: b[1] + b[3] + 4, left: r ? r[0] : b[0] + 12 });
+      setPanel(true);
     });
   };
   const toolRef = (name: ToolName) => (v: HostInstance | null) => {
@@ -801,52 +841,54 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const pick = (next: ToolName) => (tool === next ? openPanel() : setP({ tool: next }));
   const penName = PENS.find((x) => x.id === prefs.penBrush)?.label ?? "펜";
 
-  return (
-    <TipCtx.Provider value={tipCtx}>
-    <SafeAreaView ref={rootRef} style={{ flex: 1, backgroundColor: t.bg }} edges={["top", "left", "right"]}>
-      <StylusView onHover={onBarHover}>
-      {/* 한 줄 도구 모음: 돌아가기 · 도구(그림) · 설정 · 색 · 굵기 · 보정 · 손가락 · 확대 · 되돌리기 · 쪽 · 더 보기 · 요약.
-          노트 이름은 자리를 차지하지 않게 ⋯ 메뉴의 '이름 바꾸기'로. 좁으면 가운데 부분만 옆으로 민다 */}
-      <View ref={barRef} collapsable={false} style={[sx.toolBar, { borderColor: t.lineSoft, backgroundColor: t.bg, paddingHorizontal: pad }]}>
-        <IconBtn icon="back" onPress={close} label="노트 목록으로" />
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={sx.toolRow} keyboardShouldPersistTaps="handled" style={sx.toolScroll}>
-          <ToolBtn ref={toolRef("pen")} icon="pen" label={penName} on={tool === "pen"} onPress={() => pick("pen")} hint="한 번 더 누르면 펜 설정" />
-          <ToolBtn ref={toolRef("highlighter")} icon="highlighter" label="형광펜" on={tool === "highlighter"} onPress={() => pick("highlighter")} hint="한 번 더 누르면 형광펜 설정" />
-          <ToolBtn ref={toolRef("eraser")} icon="eraser" label={prefs.eraserMode === "area" ? "영역 지우개" : "지우개"} on={tool === "eraser"} onPress={() => pick("eraser")} hint="한 번 더 누르면 지우개 설정" />
-          <ToolBtn ref={toolRef("lasso")} icon="lasso" label="올가미" on={tool === "lasso"} onPress={() => pick("lasso")} hint="둘러싸서 고르고 옮기기, 한 번 더 누르면 설정" />
-          <ToolBtn icon="text" label="글상자" on={tool === "text"} onPress={() => setP({ tool: "text" })} hint="쪽을 누르면 글을 써 넣어요" />
-          {tool !== "text" && <IconBtn icon="settings" onPress={openPanel} label="도구 설정" />}
-          {tool === "text" && (
-            <>
-              <Divider />
-              <View style={sx.swatches}>
-                {PEN_COLORS.map((c) => (
-                  <Swatch key={c} color={c} edge={edge} on={c === prefs.penColor} onPress={() => setP({ penColor: c })} label={`글 색 ${c}`} />
-                ))}
-              </View>
-            </>
-          )}
-          {tool !== "eraser" && tool !== "lasso" && tool !== "text" && (
-            <>
-              <Divider />
-              <View style={sx.swatches}>
-                {colors.map((c) => (
-                  <Swatch key={c} color={c} edge={edge} on={c === color} onPress={() => setP(tool === "highlighter" ? { hlColor: c } : { penColor: c })} label={`색 ${c}`} />
-                ))}
-              </View>
-              <Divider />
-              {widths.map((w, i) => (
-                <WidthDot key={w} size={6 + i * 6} on={w === width} onPress={() => setP(tool === "highlighter" ? { hlWidth: w } : { penWidth: w })} label={`굵기 ${i + 1}`} />
+  /** 도구 모음 항목 하나 (vertical: 왼쪽·오른쪽에 붙여 세로로 늘어놓을 때) */
+  const item = (id: ToolbarItem, vertical: boolean): ReactNode => {
+    const line = vertical ? sx.swatchesCol : sx.swatches;
+    switch (id) {
+      case "pen":
+        return <ToolBtn ref={toolRef("pen")} icon="pen" label={penName} on={tool === "pen"} onPress={() => pick("pen")} hint="한 번 더 누르면 펜 설정" />;
+      case "highlighter":
+        return <ToolBtn ref={toolRef("highlighter")} icon="highlighter" label="형광펜" on={tool === "highlighter"} onPress={() => pick("highlighter")} hint="한 번 더 누르면 형광펜 설정" />;
+      case "eraser":
+        return <ToolBtn ref={toolRef("eraser")} icon="eraser" label={prefs.eraserMode === "area" ? "영역 지우개" : "지우개"} on={tool === "eraser"} onPress={() => pick("eraser")} hint="한 번 더 누르면 지우개 설정" />;
+      case "lasso":
+        return <ToolBtn ref={toolRef("lasso")} icon="lasso" label="올가미" on={tool === "lasso"} onPress={() => pick("lasso")} hint="둘러싸서 고르고 옮기기, 한 번 더 누르면 설정" />;
+      case "text":
+        return <ToolBtn ref={toolRef("text")} icon="text" label="글상자" on={tool === "text"} onPress={() => setP({ tool: "text" })} hint="쪽을 누르면 글을 써 넣어요" />;
+      case "colors":
+        if (tool === "text") {
+          return (
+            <View style={line}>
+              {PEN_COLORS.map((c) => (
+                <Swatch key={c} color={c} edge={edge} on={c === prefs.penColor} onPress={() => setP({ penColor: c })} label={`글 색 ${c}`} />
               ))}
-              {tool === "highlighter" && (
-                <ToolBtn icon="line" label="직선" on={prefs.straight} onPress={() => setP({ straight: !prefs.straight })} hint="처음 찍은 점에서 곧은 선으로" />
-              )}
-              {tool === "pen" && (
-                <ToolBtn icon="shapes" label="도형 펴기" on={prefs.shapes} onPress={() => setP({ shapes: !prefs.shapes })} hint="선·사각형·원·삼각형을 반듯하게" />
-              )}
-            </>
-          )}
-          <Divider />
+            </View>
+          );
+        }
+        if (tool === "eraser" || tool === "lasso") return null;
+        return (
+          <View style={line}>
+            {colors.map((c) => (
+              <Swatch key={c} color={c} edge={edge} on={c === color} onPress={() => setP(tool === "highlighter" ? { hlColor: c } : { penColor: c })} label={`색 ${c}`} />
+            ))}
+          </View>
+        );
+      case "widths":
+        if (tool !== "pen" && tool !== "highlighter") return null;
+        return (
+          <View style={line}>
+            {widths.map((w, i) => (
+              <WidthDot key={w} size={6 + i * 6} on={w === width} onPress={() => setP(tool === "highlighter" ? { hlWidth: w } : { penWidth: w })} label={`굵기 ${i + 1}`} tipText={widthName(i)} />
+            ))}
+            {tool === "highlighter" ? (
+              <ToolBtn icon="line" label="직선" on={prefs.straight} onPress={() => setP({ straight: !prefs.straight })} hint="처음 찍은 점에서 곧은 선으로" />
+            ) : (
+              <ToolBtn icon="shapes" label="도형 펴기" on={prefs.shapes} onPress={() => setP({ shapes: !prefs.shapes })} hint="선·사각형·원·삼각형을 반듯하게" />
+            )}
+          </View>
+        );
+      case "finger":
+        return (
           <ToolBtn
             icon={prefs.fingerDraw ? "finger" : "hand"}
             label={prefs.fingerDraw ? "손가락: 쓰기" : "손가락: 이동"}
@@ -854,13 +896,76 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
             onPress={() => setP({ fingerDraw: !prefs.fingerDraw })}
             hint="손가락으로 쓸지, 화면만 옮길지"
           />
-          <Divider />
-          <IconBtn icon="minus" onPress={() => setZoom((z) => ({ kind: "out", n: z.n + 1 }))} label="축소" />
-          <IconBtn icon="fit" onPress={() => setZoom((z) => ({ kind: "fit", n: z.n + 1 }))} label="맞춤 (쪽 폭에 맞추기)" />
-          <IconBtn icon="plus" onPress={() => setZoom((z) => ({ kind: "in", n: z.n + 1 }))} label="확대" />
-          <Divider />
-          {undoRedo}
+        );
+      case "zoom":
+        return (
+          <View style={line}>
+            <IconBtn icon="minus" onPress={() => setZoom((z) => ({ kind: "out", n: z.n + 1 }))} label="축소" />
+            <IconBtn icon="fit" onPress={() => setZoom((z) => ({ kind: "fit", n: z.n + 1 }))} label="맞춤 (쪽 폭에 맞추기)" />
+            <IconBtn icon="plus" onPress={() => setZoom((z) => ({ kind: "in", n: z.n + 1 }))} label="확대" />
+          </View>
+        );
+      case "undo":
+        return (
+          <View style={line}>
+            <IconBtn icon="undo" onPress={undo} disabled={!hist.current.canUndo} label="되돌리기" />
+            <IconBtn icon="redo" onPress={redo} disabled={!hist.current.canRedo} label="다시 하기" />
+          </View>
+        );
+    }
+  };
+  /** 도구 모음 내용: 사용자가 정한 순서대로, 무리가 바뀔 때 나눔 줄. 맨 끝에 '도구 모음 편집' */
+  const strip = (vertical: boolean) => {
+    const out: ReactNode[] = [];
+    let last = "";
+    for (const id of order) {
+      if (hiddenItems.has(id)) continue;
+      const node = item(id, vertical);
+      if (!node) continue;
+      if (out.length && groupOf(id) !== last) out.push(<Divider key={`d-${id}`} vertical={vertical} />);
+      out.push(<Fragment key={id}>{node}</Fragment>);
+      last = groupOf(id);
+    }
+    out.push(<Divider key="d-edit" vertical={vertical} />);
+    out.push(<IconBtn key="edit" icon="sliders" onPress={() => setTbEdit(true)} label="도구 모음 편집" />);
+    return out;
+  };
+  /** 끌어서 옮기는 손잡이 */
+  const gripView = (
+    <View {...grip.panHandlers} accessibilityRole="adjustable" accessibilityLabel="도구 모음 옮기기 (끌어서 왼쪽·오른쪽·위 끝에 놓으면 붙고, 가운데에 놓으면 떠 있어요)" hitSlop={6} style={sx.grip}>
+      <ToolIcon name="grip" color={t.muted} size={18} />
+    </View>
+  );
+  const sideStrip = (
+    <StylusView onHover={onBarHover}>
+      <View ref={stripRef} collapsable={false} style={[sx.sideBar, { borderColor: t.lineSoft, backgroundColor: t.bg }, dock === "left" ? sx.sideLeft : sx.sideRight]}>
+        {gripView}
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={sx.toolCol} keyboardShouldPersistTaps="handled">
+          {strip(true)}
         </ScrollView>
+      </View>
+    </StylusView>
+  );
+  const fl = clampFloat(prefs.toolbarFloat?.x ?? 80, prefs.toolbarFloat?.y ?? 120, floatSize.w, floatSize.h, win.width, win.height, 48);
+
+  return (
+    <TipCtx.Provider value={tipCtx}>
+    <SafeAreaView ref={rootRef} style={{ flex: 1, backgroundColor: t.bg }} edges={["top", "left", "right"]}>
+      <StylusView onHover={onBarHover}>
+      {/* 맨 윗줄: 돌아가기 · (위에 붙였으면 도구 모음) · 쪽 · 더 보기 · 요약.
+          노트 이름은 자리를 차지하지 않게 ⋯ 메뉴의 '이름 바꾸기'로. 좁으면 도구 모음만 옆으로 민다 */}
+      <View ref={barRef} collapsable={false} style={[sx.toolBar, { borderColor: t.lineSoft, backgroundColor: t.bg, paddingHorizontal: pad }]}>
+        <IconBtn icon="back" onPress={close} label="노트 목록으로" />
+        {dock === "top" ? (
+          <>
+            {gripView}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={sx.toolRow} keyboardShouldPersistTaps="handled" style={sx.toolScroll}>
+              {strip(false)}
+            </ScrollView>
+          </>
+        ) : (
+          <View style={sx.toolScroll} />
+        )}
         {/* 쪽 넘기기는 ‹ 1 / 4 › 한 덩어리로. 가운데 쪽 번호를 누르면 쪽 모아보기 */}
         <View style={[sx.pageNav, { backgroundColor: t.sunken }]}>
           <IconBtn compact icon="prev" onPress={() => go(pi - 1)} disabled={pi === 0} label="이전 쪽" />
@@ -874,6 +979,9 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
       </View>
       </StylusView>
 
+      <View style={sx.body}>
+      {dock === "left" && sideStrip}
+      <View style={sx.toolScroll}>
       <PageCanvas
         pages={nb.pages}
         ink={ink}
@@ -904,6 +1012,31 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         onShown={onShown}
         onVisible={onVisible}
       />
+      </View>
+      {dock === "right" && sideStrip}
+      </View>
+
+      {/* 떠 있는 도구 모음: 손잡이로 끌어 아무 데나 */}
+      {dock === "float" && (
+        <StylusView onHover={onBarHover} style={[sx.floatWrap, { left: fl.x, top: fl.y }]}>
+          <View
+            ref={stripRef}
+            collapsable={false}
+            onLayout={(e) => setFloatSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
+            style={[floating(t), sx.floatBar, { maxWidth: win.width - 16 }]}
+          >
+            {gripView}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={sx.toolRow} keyboardShouldPersistTaps="handled" style={{ flexShrink: 1 }}>
+              {strip(false)}
+            </ScrollView>
+          </View>
+        </StylusView>
+      )}
+      {ghost && (
+        <View pointerEvents="none" style={[sx.ghost, { left: ghost.x - 70, top: ghost.y - 22, borderColor: t.ink, backgroundColor: t.card }]}>
+          <Text style={[type.caption, { color: t.ink }]}>{ghost.dock === "float" ? "여기에 띄우기" : `${DOCKS.find((d) => d.id === ghost.dock)?.label}에 붙이기`}</Text>
+        </View>
+      )}
 
       {/* 올가미로 고른 것: 아래에 떠 있는 작은 막대 (색 바꾸기·지우기·끝내기) */}
       {selection && (
@@ -920,13 +1053,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         </View>
       )}
 
-      {tip && (
-        <View pointerEvents="none" testID="tool-tip" style={[sx.tipWrap, { top: tip.y, left: Math.max(4, Math.min(win.width - 204, tip.x - 100)) }]}>
-          <View style={[sx.tip, { backgroundColor: t.ink }]}>
-            <Text style={[type.caption, { color: t.bg }]}>{tip.label}</Text>
-          </View>
-        </View>
-      )}
+      {tip && <TipBubble key={`${tip.label}@${tip.r.join(",")}`} label={tip.label} r={tip.r} side={tip.side} maxX={win.width} />}
       {!!toast && (
         <View pointerEvents="none" style={sx.toastWrap}>
           <View style={[floating(t), sx.toast, { backgroundColor: t.ink, borderColor: t.ink }]}>
@@ -969,6 +1096,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         </Pressable>
       </Modal>
 
+      <ToolbarDialog open={tbEdit} prefs={prefs} setP={setP} onClose={() => setTbEdit(false)} />
       <ToolPanel open={panel} at={panelAt} prefs={prefs} setP={setP} onClearPage={clearPage} onClose={() => setPanel(false)} viewScale={viewPx.current ? viewPx.current / page.w : undefined} />
       <RenameDialog value={renaming} onDone={rename} />
       <TextDialog
@@ -999,6 +1127,77 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
 }
 
 // ── 창과 작은 부품 ────────────────────────────────────────────────
+
+/** 단추 이름표 말풍선: 제 크기를 재서 단추 가운데 밑(또는 옆)에 놓는다 (재기 전에는 안 보이게). 화면 끝에 닿으면 안쪽으로만 민다.
+ *  r = 단추 자리 [x, y, 폭, 높이] (화면 전체 기준) */
+function TipBubble({ label, r, side, maxX }: { label: string; r: number[]; side: "below" | "right" | "left"; maxX: number }) {
+  const t = useTheme();
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  const w = size?.w ?? 0, h = size?.h ?? 0;
+  const left = side === "right" ? r[0] + r[2] + 6 : side === "left" ? r[0] - w - 6 : Math.max(4, Math.min(maxX - w - 4, r[0] + r[2] / 2 - w / 2));
+  const top = side === "below" ? r[1] + r[3] + 6 : r[1] + r[3] / 2 - h / 2;
+  return (
+    <View
+      pointerEvents="none"
+      testID="tool-tip"
+      onLayout={(e) => setSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
+      style={[sx.tip, { top, left, opacity: size ? 1 : 0, backgroundColor: t.ink }]}
+    >
+      <Text style={[type.caption, { color: t.bg }]}>{label}</Text>
+    </View>
+  );
+}
+
+/** 도구 설정 창(ToolPanel) 폭 — 오른쪽에 붙인 도구 모음 왼쪽에 놓을 때 */
+const PANEL_W = 368;
+
+/** 도구 모음 편집: 자리(위·왼쪽·오른쪽·떠 있게), 항목 순서(▲▼), 보이기 */
+function ToolbarDialog({ open, prefs, setP, onClose }: { open: boolean; prefs: Prefs; setP: (p: Partial<Prefs>) => void; onClose: () => void }) {
+  const t = useTheme();
+  const win = useWindowDimensions();
+  const order = toolbarOrder(prefs.toolbar);
+  const hidden = new Set(prefs.toolbarHidden);
+  return (
+    <Dialog open={open} title="도구 모음 편집" maxWidth={460} onClose={onClose}>
+      <Text style={[type.label, { color: t.sub }]}>자리</Text>
+      <View style={sx.sizeRow}>
+        {DOCKS.map((d) => {
+          const on = prefs.toolbarDock === d.id;
+          return (
+            <Pressable key={d.id} onPress={() => setP({ toolbarDock: d.id })} accessibilityRole="radio" accessibilityState={{ selected: on }} accessibilityLabel={`도구 모음 자리: ${d.label}`} style={[sx.sizeChip, { backgroundColor: on ? t.ink : t.sunken }]}>
+              <Text style={{ color: on ? t.bg : t.sub, fontWeight: on ? "600" : "500" }}>{d.label}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      <Text style={[type.caption, { color: t.muted }]}>도구 모음 앞의 손잡이(⋮⋮)를 끌어 화면 왼쪽·오른쪽·위 끝에 놓으면 그쪽에 붙고, 가운데에 놓으면 떠 있어요.</Text>
+      <Text style={[type.label, { color: t.sub, marginTop: 4 }]}>순서와 보이기</Text>
+      <ScrollView style={{ maxHeight: Math.max(160, win.height - 380) }}>
+        {order.map((id, i) => {
+          const label = itemLabel(id);
+          const shown = !hidden.has(id);
+          return (
+            <View key={id} style={[sx.tbRow, { borderColor: t.lineSoft }]}>
+              <Text style={[type.body, { color: shown ? t.ink : t.muted, flex: 1 }]}>{label}</Text>
+              <Switch
+                value={shown}
+                onValueChange={(v) => setP({ toolbarHidden: v ? prefs.toolbarHidden.filter((x) => x !== id) : [...prefs.toolbarHidden, id] })}
+                accessibilityLabel={`${label} 보이기`}
+              />
+              <IconBtn icon="up" onPress={() => setP({ toolbar: moveItem(order, id, -1) })} disabled={i === 0} label={`${label} 앞으로`} />
+              <IconBtn icon="down" onPress={() => setP({ toolbar: moveItem(order, id, 1) })} disabled={i === order.length - 1} label={`${label} 뒤로`} />
+            </View>
+          );
+        })}
+      </ScrollView>
+      <View style={sx.actions}>
+        <TextBtn label="처음대로" onPress={() => setP({ toolbar: [], toolbarHidden: [], toolbarDock: "top" })} label2="도구 모음을 처음 모습으로" />
+        <View style={{ flex: 1 }} />
+        <Button kind="primary" label="닫기" onPress={onClose} />
+      </View>
+    </Dialog>
+  );
+}
 
 /** 화면(창) 기준 [x, y, 폭, 높이] */
 function winOf(r: HostInstance | null): Promise<number[] | null> {
@@ -1171,9 +1370,12 @@ function ToolBtn({ label, icon, on, onPress, hint, ref }: { label: string; icon:
 /** 동그란 색 단추. 고른 색은 둘레에 검은 고리 (사이를 조금 띄워서) */
 function Swatch({ color, on, onPress, label, edge }: { color: string; on?: boolean; onPress: () => void; label: string; edge: string }) {
   const t = useTheme();
+  const tip = useTip(colorName(color));
   return (
     <Pressable
+      ref={tip.ref}
       onPress={onPress}
+      onLongPress={tip.onLongPress}
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={on === undefined ? undefined : { selected: on }}
@@ -1185,11 +1387,14 @@ function Swatch({ color, on, onPress, label, edge }: { color: string; on?: boole
 }
 
 /** 굵기 빠른 고르기: 점 크기가 굵기. 고른 것은 색 단추처럼 둘레에 검은 고리 */
-function WidthDot({ size, on, onPress, label }: { size: number; on: boolean; onPress: () => void; label: string }) {
+function WidthDot({ size, on, onPress, label, tipText }: { size: number; on: boolean; onPress: () => void; label: string; tipText?: string }) {
   const t = useTheme();
+  const tip = useTip(tipText ?? label);
   return (
     <Pressable
+      ref={tip.ref}
       onPress={onPress}
+      onLongPress={tip.onLongPress}
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityState={{ selected: on }}
@@ -1230,9 +1435,9 @@ function MenuSep() {
 }
 
 /** 도구 모음의 무리 나누기: 가는 세로줄 */
-function Divider() {
+function Divider({ vertical }: { vertical?: boolean }) {
   const t = useTheme();
-  return <View style={[sx.divider, { backgroundColor: t.line }]} />;
+  return <View style={[vertical ? sx.dividerH : sx.divider, { backgroundColor: t.line }]} />;
 }
 
 const sx = StyleSheet.create({
@@ -1248,12 +1453,26 @@ const sx = StyleSheet.create({
   toolBar: { flexDirection: "row", alignItems: "center", gap: 4, borderBottomWidth: 1, paddingVertical: 6 },
   toolScroll: { flex: 1 },
   toolRow: { alignItems: "center", gap: 2, paddingHorizontal: 2 },
+  toolCol: { alignItems: "center", gap: 2, paddingVertical: 4 },
+  body: { flex: 1, flexDirection: "row" },
+  // 왼쪽·오른쪽에 붙인 도구 모음 (세로)
+  sideBar: { flex: 1, width: 52, alignItems: "center", paddingTop: 4 },
+  sideLeft: { borderRightWidth: 1 },
+  sideRight: { borderLeftWidth: 1 },
+  // 떠 있는 도구 모음
+  floatWrap: { position: "absolute", zIndex: 15 },
+  floatBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 6, paddingVertical: 4, borderRadius: radius.xl },
+  grip: { width: 22, height: 36, alignItems: "center", justifyContent: "center" },
+  ghost: { position: "absolute", zIndex: 30, width: 140, height: 44, borderRadius: radius.md, borderWidth: 2, borderStyle: "dashed", alignItems: "center", justifyContent: "center" },
+  tbRow: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 2, borderBottomWidth: StyleSheet.hairlineWidth },
+  swatchesCol: { flexDirection: "column", alignItems: "center", gap: 2 },
   toolBtn: { width: 38, height: 36, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" },
   swatches: { flexDirection: "row", alignItems: "center", gap: 2 },
   swatchRing: { width: 32, height: 32, borderRadius: 16, borderWidth: 2, alignItems: "center", justifyContent: "center" },
   swatch: { width: 24, height: 24, borderRadius: 12, borderWidth: 1 },
   widthBtn: { width: 32, height: 32, borderRadius: 16, borderWidth: 2, alignItems: "center", justifyContent: "center" },
   divider: { width: 1, height: 20, marginHorizontal: 8 },
+  dividerH: { height: 1, width: 24, marginVertical: 6 },
   iconBtn: { minWidth: 36, height: 36, paddingHorizontal: 6, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" },
   iconCompact: { minWidth: 30, paddingHorizontal: 4 },
   glyphNav: { fontSize: 23, lineHeight: 26, marginTop: -2 },
@@ -1267,9 +1486,8 @@ const sx = StyleSheet.create({
   // 좁은 폰: 설명 글을 윗줄에 두고 단추는 아랫줄에 (한 줄에 다 들어가지 않아서)
   selBarNarrow: { left: 16, right: 16, alignSelf: "auto", flexWrap: "wrap", justifyContent: "center", rowGap: 2, borderRadius: radius.xl, paddingLeft: 12, paddingTop: 10 },
   selTextNarrow: { width: "100%", textAlign: "center", marginRight: 0 },
-  // 단추 이름표: 단추 가운데 밑에 작은 검은 말풍선 (폭 200 상자 가운데에)
-  tipWrap: { position: "absolute", width: 200, alignItems: "center", zIndex: 20 },
-  tip: { borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 5 },
+  // 단추 이름표: 단추 가운데 밑에 작은 검은 말풍선 (TipBubble이 제 폭을 재서 자리를 잡는다)
+  tip: { position: "absolute", zIndex: 20, borderRadius: radius.sm, paddingHorizontal: 10, paddingVertical: 5 },
   toastWrap: { position: "absolute", bottom: 32, left: 16, right: 16, alignItems: "center" },
   toast: { maxWidth: 560, borderRadius: radius.xl, paddingHorizontal: 18, paddingVertical: 10 },
   toastText: { fontSize: 14, lineHeight: 20, fontWeight: "500", textAlign: "center", letterSpacing: -0.2 },

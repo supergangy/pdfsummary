@@ -127,3 +127,19 @@ export function ro(word: string): string {
   const jong = c % 28;
   return word + (jong === 0 || jong === 8 ? "로" : "으로");
 }
+
+/** 색 단추 이름표에 보일 색 이름 (펜·형광펜 색). 모르는 색은 색 값 그대로 */
+const COLOR_NAMES: Record<string, string> = {
+  "#1F2328": "검정", "#1E4FD8": "파랑", "#D7263D": "빨강", "#0F8A5F": "초록", "#7A3EC8": "보라", "#E67E22": "주황",
+  "#6B7280": "회색", "#0EA5E9": "하늘색", "#EC4899": "분홍", "#8B5A2B": "갈색", "#C9A100": "겨자색", "#FFFFFF": "흰색",
+  "#FFE14D": "노랑", "#FF9EC7": "분홍", "#8FE38F": "연두", "#7FD3FF": "하늘색", "#FFB86B": "주황", "#C9A7FF": "연보라",
+  "#FF7B7B": "빨강", "#BDBDBD": "회색",
+};
+export function colorName(hex: string): string {
+  return COLOR_NAMES[hex.toUpperCase()] ?? hex;
+}
+
+/** 굵기 단추 이름표 (도구 모음의 빠른 굵기 세 개) */
+export function widthName(i: number): string {
+  return `굵기: ${["가늘게", "보통", "굵게"][i] ?? i + 1}`;
+}

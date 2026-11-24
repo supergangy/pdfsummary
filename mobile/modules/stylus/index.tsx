@@ -4,7 +4,7 @@ import type { ComponentType } from "react";
 import { View, type ViewProps } from "react-native";
 
 /** hover: 펜이 화면에 닿지 않고 떠 있을 때 바뀐 것인지.
- *  onHover: 펜(마우스)이 이 뷰 위에 떠 있는 자리 (이 뷰 기준 dp), 떠났으면 exit */
+ *  onHover: 펜(마우스)이 이 뷰 위에 떠 있는 자리 (창 기준 dp), 떠났으면 exit */
 export type StylusViewProps = ViewProps & {
   onButton?: (pressed: boolean, hover: boolean) => void;
   onHover?: (x: number, y: number, exit: boolean) => void;

@@ -12,7 +12,7 @@ import expo.modules.kotlin.views.ExpoView
 // S펜 옆 단추: 안쪽 화면에 오는 펜 이벤트(닿기·떠 있기)를 엿보아 단추가 눌렸는지 알린다.
 // 펜을 화면에 대기 전(떠 있을 때)부터 알 수 있어, 단추를 누른 채 쓰면 처음부터 지우개가 된다.
 // hover: 펜이 화면에 닿지 않고 떠 있을 때 바뀐 것인지 (떠 있을 때 두 번 누르면 도구 바꾸기)
-// hoverEvents를 켜면 펜(마우스)이 떠 있는 자리도 알린다 (onHover: dp 좌표, 떠났으면 exit) — 도구 모음 단추 이름표용.
+// hoverEvents를 켜면 펜(마우스)이 떠 있는 자리도 알린다 (onHover: 창 기준 dp 좌표, 떠났으면 exit) — 도구 모음 단추 이름표용.
 // (안드로이드 기본 툴팁 View.tooltipText는 갤럭시탭에서 S펜을 띄워도 뜨지 않았다)
 class StylusModule : Module() {
   override fun definition() = ModuleDefinition {
@@ -30,6 +30,7 @@ class StylusView(context: Context, appContext: AppContext) : ExpoView(context, a
   private var pressed = false
   var hoverEvents = false
   private var lastHover = 0L
+  private val winLoc = IntArray(2)
 
   /** 펜이 떠 있는 자리를 JS로 (움직임은 40ms에 한 번만, 들어옴·떠남은 바로) */
   private fun reportHover(ev: MotionEvent) {
@@ -39,7 +40,8 @@ class StylusView(context: Context, appContext: AppContext) : ExpoView(context, a
     if (a == MotionEvent.ACTION_HOVER_MOVE && now - lastHover < 40) return
     lastHover = now
     val d = resources.displayMetrics.density
-    onHover(mapOf("x" to ev.x / d, "y" to ev.y / d, "exit" to (a == MotionEvent.ACTION_HOVER_EXIT)))
+    getLocationInWindow(winLoc) // 창 기준으로 (JS의 measureInWindow와 같은 기준)
+    onHover(mapOf("x" to (winLoc[0] + ev.x) / d, "y" to (winLoc[1] + ev.y) / d, "exit" to (a == MotionEvent.ACTION_HOVER_EXIT)))
   }
 
   private fun watch(ev: MotionEvent, hover: Boolean) {

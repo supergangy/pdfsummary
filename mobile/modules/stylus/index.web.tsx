@@ -1,5 +1,5 @@
 // 웹: 펜의 옆 단추(barrel, buttons 2)나 지우개 끝(buttons 32)을 포인터 이벤트로 읽는다.
-// onHover: 펜·마우스가 버튼을 누르지 않고 떠 있는 자리 (이 뷰 기준), 떠났거나 눌렀으면 exit
+// onHover: 펜·마우스가 버튼을 누르지 않고 떠 있는 자리 (창 기준), 떠났거나 눌렀으면 exit
 import { useRef } from "react";
 import { View, type ViewProps } from "react-native";
 
@@ -8,7 +8,7 @@ export type StylusViewProps = ViewProps & {
   onHover?: (x: number, y: number, exit: boolean) => void;
 };
 
-type PE = { nativeEvent: { pointerType?: string; buttons?: number; clientX?: number; clientY?: number }; currentTarget?: unknown };
+type PE = { nativeEvent: { pointerType?: string; buttons?: number; clientX?: number; clientY?: number } };
 
 export function StylusView({ onButton, onHover, ...rest }: StylusViewProps) {
   const last = useRef(false);
@@ -26,10 +26,7 @@ export function StylusView({ onButton, onHover, ...rest }: StylusViewProps) {
     const ev = e.nativeEvent;
     if (ev.pointerType === "touch") return;
     if ((ev.buttons ?? 0) !== 0) return onHover(0, 0, true);
-    const el = e.currentTarget as { getBoundingClientRect?: () => { left: number; top: number } } | undefined;
-    const r = el?.getBoundingClientRect?.();
-    if (!r) return;
-    onHover((ev.clientX ?? 0) - r.left, (ev.clientY ?? 0) - r.top, false);
+    onHover(ev.clientX ?? 0, ev.clientY ?? 0, false); // 웹은 화면(창) 기준 그대로
   };
   // onPointerMove는 펜이 떠 있을 때도 온다 (두 번 누르기를 떠 있을 때 알려고)
   const extra = {

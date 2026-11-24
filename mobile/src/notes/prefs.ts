@@ -2,6 +2,7 @@
 import { HIGHLIGHT_COLORS, HIGHLIGHT_OPACITY, HIGHLIGHT_WIDTHS, PEN_COLORS, PEN_WIDTHS, type LineDash, type PenBrush } from "./model";
 import type { PenLook, SwapTarget } from "./editor-logic";
 import type { PageFlow } from "./pageLayout";
+import type { ToolbarDock } from "./toolbar";
 import type { ToolName } from "./PageCanvas";
 import { deviceFs } from "./fs";
 
@@ -29,6 +30,10 @@ export type Prefs = {
   stylusSeen: boolean;
   flow: PageFlow; // 쪽 넘기기: 좌우(한 쪽씩 딱 맞춰) / 위아래(이어서)
   twoPages: boolean; // 두 쪽씩 보기
+  toolbar: string[]; // 도구 모음 순서 (toolbar.ts의 항목 id, 비면 기본 순서)
+  toolbarHidden: string[]; // 도구 모음에서 숨긴 항목
+  toolbarDock: ToolbarDock; // 도구 모음 자리: 위·왼쪽·오른쪽·떠 있게
+  toolbarFloat: { x: number; y: number } | null; // 떠 있는 도구 모음 자리
 };
 
 export const DEFAULT_PREFS: Prefs = {
@@ -55,6 +60,10 @@ export const DEFAULT_PREFS: Prefs = {
   stylusSeen: false,
   flow: "h",
   twoPages: false,
+  toolbar: [],
+  toolbarHidden: [],
+  toolbarDock: "top",
+  toolbarFloat: null,
 };
 
 const PATH = "prefs.json";

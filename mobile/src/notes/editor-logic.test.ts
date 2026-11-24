@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { clampPage, isHighlighterTap, justAfter, otherPage, pageBg, penDoubleClick, penSwap, previewPts, previewScale, reach, ro, swatchEdge, type BgCache, type SwapSaved } from "./editor-logic.ts";
+import { clampPage, isHighlighterTap, justAfter, otherPage, pageBg, penDoubleClick, penSwap, previewPts, previewScale, reach, ro, swatchEdge, type BgCache, type SwapSaved, colorName, widthName } from "./editor-logic.ts";
 import { History } from "./history.ts";
 import { insertPage, removePage, type Ink, type Notebook, type Stroke } from "./model.ts";
 
@@ -146,4 +146,13 @@ test("double click switches to the registered tool and back", () => {
   assert.equal(ro("지우개"), "지우개로");
   assert.equal(ro("볼펜"), "볼펜으로");
   assert.equal(ro("연필"), "연필로");
+});
+
+test("색·굵기 단추 이름표: 도구 모음의 모든 색에 이름이 있다", async () => {
+  const { PEN_COLORS, HIGHLIGHT_COLORS } = await import("./model.ts");
+  for (const c of [...PEN_COLORS, ...HIGHLIGHT_COLORS]) assert.ok(!colorName(c).startsWith("#"), c);
+  assert.equal(colorName("#1f2328"), "검정");
+  assert.equal(colorName("#123456"), "#123456");
+  assert.equal(widthName(0), "굵기: 가늘게");
+  assert.equal(widthName(2), "굵기: 굵게");
 });

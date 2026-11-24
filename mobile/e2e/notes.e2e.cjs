@@ -154,6 +154,11 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     let eB = await eraserBtn.boundingBox(), hB = await hlBtn.boundingBox();
     if (!(eB.y < hB.y)) fail("지우개를 앞으로 옮겼는데 형광펜보다 앞(위)에 있지 않음");
     if (!(eB.x < 60 && eB.y > 60)) fail(`왼쪽에 붙였는데 지우개 단추가 왼쪽 세로 줄에 있지 않음 (${eB.x.toFixed(0)}, ${eB.y.toFixed(0)})`);
+    // 왼쪽에 붙이면 윗줄은 없어지고 돌아가기·쪽 번호도 왼쪽 줄로 (화면 위쪽까지 쪽이 쓴다)
+    const backB = await page.getByLabel("노트 목록으로").boundingBox();
+    const pageNoB = await page.getByLabel("쪽 모아보기").boundingBox();
+    if (!(backB.x < 60 && pageNoB.x < 60)) fail("왼쪽에 붙였는데 돌아가기·쪽 번호가 왼쪽 줄에 있지 않음 (윗줄이 남아 있음)");
+    if (!((await canvas.boundingBox()).y < 10)) fail("왼쪽에 붙였는데 쪽 화면이 맨 위까지 오지 않음");
     await hoverOn(eraserBtn);
     const sideTip = await tipEl.boundingBox();
     if (!(sideTip.x > eB.x + eB.width)) fail("왼쪽에 붙인 도구 모음의 이름표가 단추 오른쪽에 뜨지 않음");
@@ -174,6 +179,29 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await dragGrip(500, 420);
     eB = await eraserBtn.boundingBox();
     if (!(Math.abs(eB.y + eB.height / 2 - 420) < 40)) fail(`가운데에 놓았는데 그 높이에 떠 있지 않음 (지우개 ${eB.x.toFixed(0)}, ${eB.y.toFixed(0)})`);
+    // 떠 있는 모양 '두 줄': 도구가 두 줄로 (되돌리기는 아랫줄)
+    await editBar();
+    await page.getByLabel("떠 있는 모양: 두 줄").click();
+    await closeEdit();
+    eB = await eraserBtn.boundingBox();
+    const undoB = await page.getByLabel("되돌리기").boundingBox();
+    if (!(undoB.y > eB.y + 20)) fail(`떠 있는 모양을 두 줄로 했는데 한 줄 그대로 (지우개 y ${eB.y.toFixed(0)}, 되돌리기 y ${undoB.y.toFixed(0)})`);
+    // 도구 모음 빈 곳(쪽 번호)을 꾹 눌러 끌어 왼쪽 끝에 놓으면 왼쪽에 붙는다
+    const pn = await page.getByLabel("쪽 모아보기").boundingBox();
+    await page.mouse.move(pn.x + pn.width / 2, pn.y + pn.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(700);
+    await page.mouse.move(15, 420, { steps: 12 });
+    await page.waitForTimeout(200);
+    await page.mouse.up();
+    await page.waitForTimeout(700);
+    if ((await page.getByLabel("쪽 모아보기 닫기").count())) await page.getByLabel("쪽 모아보기 닫기").click();
+    eB = await eraserBtn.boundingBox();
+    if (!(eB.x < 60)) fail(`도구 모음을 꾹 눌러 왼쪽 끝으로 끌었는데 왼쪽에 붙지 않음 (지우개 x ${eB.x.toFixed(0)})`);
+    await editBar();
+    await page.getByLabel("도구 모음 자리: 떠 있게").click();
+    await page.getByLabel("떠 있는 모양: 한 줄").click();
+    await closeEdit();
     // 접기: 지금 도구(펜)와 펼치기만 남고, 펼치면 다시 다 보인다
     await page.getByLabel("도구 모음 접기").click();
     await page.waitForTimeout(400);
@@ -186,7 +214,7 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await closeEdit();
     eB = await eraserBtn.boundingBox(), hB = await hlBtn.boundingBox();
     if (!(eB.x > hB.x && eB.y < 60) || (await lassoBtn.count()) !== 1) fail("'처음대로'로 도구 모음이 처음 모습(위, 기본 순서, 올가미 보임)으로 돌아오지 않음");
-    console.log("✓ 이름표: 펜 단추 가운데 밑·색 이름 / 도구 모음 편집: 순서·숨기기·왼쪽에 붙이기(이름표는 옆에)·손잡이로 오른쪽·떠 있게·접기·처음대로");
+    console.log("✓ 이름표: 펜 단추 가운데 밑·색 이름 / 도구 모음 편집: 순서·숨기기·왼쪽에 붙이기(이름표는 옆에)·손잡이로 오른쪽·떠 있게(두 줄)·꾹 눌러 옮기기·윗줄 없애기·접기·처음대로");
     await page.mouse.move(x0, y0);
     await page.mouse.down();
     for (let i = 1; i <= 20; i++) await page.mouse.move(x0 + i * 10, y0 + (i % 2 ? 15 : 0), { steps: 2 });
@@ -382,7 +410,7 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     const tile = await page.getByLabel("시험 노트 열기").boundingBox();
     // 폴더 이름 바꾸기: 안의 노트도 따라간다
     await page.getByText("폴더 ⋯").click();
-    await page.getByText("이름 바꾸기", { exact: true }).click();
+    await page.getByText("이름 바꾸기", { exact: true }).locator("visible=true").first().click();
     await page.getByLabel("폴더 이름 바꾸기").fill("적분");
     await page.getByText("바꾸기", { exact: true }).click();
     await page.getByLabel("경로: 적분").waitFor({ timeout: 5000 });
@@ -432,25 +460,39 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     if (!((await xOf("둘째 노트")) < (await xOf("시험 노트")))) fail("새로 만든 노트가 앞에 있지 않음");
     await dragTo(card("시험 노트"), card("둘째 노트"));
     if (!((await xOf("시험 노트")) < (await xOf("둘째 노트")))) fail("노트를 다른 노트 앞에 놓았는데 순서가 바뀌지 않음");
+    // 이름을 누르면 이름 바꾸기
+    await page.getByLabel("둘째 노트 이름 바꾸기").click();
+    await page.getByLabel("노트 이름 바꾸기", { exact: true }).fill("둘째 메모");
+    await page.getByText("바꾸기", { exact: true }).click();
+    await card("둘째 메모").waitFor({ timeout: 5000 }).catch(() => fail("노트 이름을 눌러 바꿨는데 바뀌지 않음"));
+    // 꾹 눌렀다가 움직이지 않고 떼면 메뉴
+    const cb2 = await card("둘째 메모").boundingBox();
+    await page.mouse.move(cb2.x + cb2.width / 2, cb2.y + cb2.height / 3);
+    await page.mouse.down();
+    await page.waitForTimeout(800);
+    await page.mouse.up();
+    await page.getByText("즐겨찾기에 넣기", { exact: true }).waitFor({ timeout: 3000 }).catch(() => fail("노트를 꾹 눌렀다 뗐는데 메뉴가 뜨지 않음"));
+    await page.mouse.click(8, 8);
+    await page.waitForTimeout(500);
     // 휴지통으로 끌기 → 휴지통에서 되살리기 → 다시 넣고 영원히 지우기
-    await dragTo(card("둘째 노트"), page.getByLabel("휴지통", { exact: true }));
-    if ((await card("둘째 노트").count()) !== 0) fail("휴지통으로 끌었는데 목록에 남아 있음");
+    await dragTo(card("둘째 메모"), page.getByLabel("휴지통", { exact: true }));
+    if ((await card("둘째 메모").count()) !== 0) fail("휴지통으로 끌었는데 목록에 남아 있음");
     await page.getByLabel("휴지통", { exact: true }).click();
-    await card("둘째 노트").click();
+    await card("둘째 메모").click();
     await page.getByText("되살리기", { exact: true }).click();
     await page.getByLabel("모든 노트", { exact: true }).click();
-    await card("둘째 노트").waitFor({ timeout: 5000 }).catch(() => fail("휴지통에서 되살렸는데 목록에 없음"));
-    await page.getByLabel("둘째 노트 더 보기").click();
+    await card("둘째 메모").waitFor({ timeout: 5000 }).catch(() => fail("휴지통에서 되살렸는데 목록에 없음"));
+    await page.getByLabel("둘째 메모 더 보기").click();
     await page.getByText("노트 지우기 (휴지통으로)").click();
     await page.getByLabel("휴지통", { exact: true }).click();
     page.once("dialog", (d) => d.accept());
-    await card("둘째 노트").click();
+    await card("둘째 메모").click();
     await page.getByText("영원히 지우기", { exact: true }).click();
     await page.waitForTimeout(1000);
-    if ((await card("둘째 노트").count()) !== 0) fail("영원히 지웠는데 휴지통에 남아 있음");
+    if ((await card("둘째 메모").count()) !== 0) fail("영원히 지웠는데 휴지통에 남아 있음");
     await page.getByLabel("모든 노트", { exact: true }).click();
     await page.waitForTimeout(500);
-    console.log("✓ 즐겨찾기(별), 꾹 눌러 끌기: 폴더 밖으로·폴더 칸 안으로·노트 앞으로, 휴지통: 끌어 넣기·되살리기·영원히 지우기");
+    console.log("✓ 즐겨찾기(별), 이름 눌러 바꾸기, 꾹 눌렀다 떼면 메뉴, 꾹 눌러 끌기: 폴더 밖으로·폴더 칸 안으로·노트 앞으로, 휴지통: 끌어 넣기·되살리기·영원히 지우기");
 
     // ── 노트 파일로 내보냈다가 다시 가져오기 (다른 기기로 옮기기) ──
     await page.getByLabel("시험 노트 더 보기").click();

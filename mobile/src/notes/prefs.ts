@@ -35,6 +35,7 @@ export type Prefs = {
   toolbarDock: ToolbarDock; // 도구 모음 자리: 위·왼쪽·오른쪽·떠 있게
   toolbarFloat: { x: number; y: number } | null; // 떠 있는 도구 모음 자리
   toolbarMin: boolean; // 도구 모음 접기 (지금 도구 하나와 펼치기 단추만)
+  toolbarShape: "row" | "two" | "column"; // 떠 있는 도구 모음 모양: 한 줄·두 줄·세로
 };
 
 export const DEFAULT_PREFS: Prefs = {
@@ -66,6 +67,7 @@ export const DEFAULT_PREFS: Prefs = {
   toolbarDock: "top",
   toolbarFloat: null,
   toolbarMin: false,
+  toolbarShape: "row",
 };
 
 const PATH = "prefs.json";

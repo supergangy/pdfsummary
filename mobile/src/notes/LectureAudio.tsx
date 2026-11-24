@@ -7,7 +7,7 @@ import {
   useAudioPlayer, useAudioPlayerStatus, useAudioRecorder,
 } from "expo-audio";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
+import { Alert, Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 
 import { floating, radius, type, useTheme } from "../ui";
 import { clock, type Recording } from "./audioSync";
@@ -50,8 +50,16 @@ export function useLectureAudio({ store, nbId, say }: { store: SyncedStore; nbId
   const start = useCallback(async () => {
     if (liveRef.current) return;
     try {
+      // 처음 누를 때 안드로이드가 '마이크를 허용할까요?'를 묻는다. 전에 '거부'해서 다시 물을 수 없으면 설정을 열어 준다
       const perm = await requestRecordingPermissionsAsync();
-      if (!perm.granted) return say("녹음하려면 마이크를 쓸 수 있게 허락해 주세요. (설정 › 애플리케이션 › 권한)");
+      if (!perm.granted) {
+        if (perm.canAskAgain) return say("마이크를 허용해야 녹음할 수 있어요. 녹음 단추를 다시 눌러 '허용'을 골라 주세요.");
+        Alert.alert("마이크 권한이 꺼져 있어요", "강의를 녹음하려면 설정에서 이 앱의 '마이크'를 허용해 주세요.", [
+          { text: "닫기", style: "cancel" },
+          { text: "설정 열기", onPress: () => void Linking.openSettings() },
+        ]);
+        return;
+      }
       // 화면이 꺼지거나 다른 앱으로 가도 녹음이 이어지게 (안드로이드는 알림이 떠 있어야 한다)
       if (Platform.OS === "android") await requestNotificationPermissionsAsync().catch(() => undefined);
       player.pause();

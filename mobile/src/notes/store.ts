@@ -133,7 +133,7 @@ export class NoteStore {
   }
 
   /** 노트 정보만 바꾸기 (즐겨찾기·휴지통·자리·폴더). undefined면 그 칸을 뺀다. 고친 시각은 그대로 */
-  async patchMeta(id: string, patch: { fav?: boolean; trashed?: number; pos?: number; folder?: string }): Promise<void> {
+  async patchMeta(id: string, patch: { fav?: boolean; trashed?: number; pos?: number; folder?: string; title?: string }): Promise<void> {
     const nb = await this.load(id);
     if (!nb) return;
     const next: Notebook = { ...nb };

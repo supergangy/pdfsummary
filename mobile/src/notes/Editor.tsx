@@ -1,6 +1,7 @@
 // 필기 화면: 도구 모음 + 쪽 그리기 + 자동 저장
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type Ref, type RefObject } from "react";
-import { ActivityIndicator, Alert, AppState, BackHandler, Image, Modal, PanResponder, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View, type HostInstance } from "react-native";
+import { ActivityIndicator, Alert, AppState, BackHandler, Image, Modal, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View, type HostInstance } from "react-native";
+import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { pageText } from "../../modules/pdf-pages";
@@ -175,37 +176,61 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const stripRef = useRef<HostInstance>(null); // 왼쪽·오른쪽·떠 있는 도구 모음
   const [floatSize, setFloatSize] = useState({ w: 400, h: 52 });
   const [tbEdit, setTbEdit] = useState(false); // 도구 모음 편집 창
-  const grip = useMemo(() => {
+  /** 도구 모음 집어 옮기기: 시작·움직임·놓기 (손잡이 끌기와 도구 모음 꾹 누르기가 함께 쓴다) */
+  const tbDrag = useMemo(() => {
+    const last = { x: 0, y: 0, x0: 0, y0: 0 };
     const where = (x: number, y: number) => {
       const g = dragGeo.current;
       if (!g) return null;
       return { x: x - g.root[0], y: y - g.root[1], dock: dockAt(x - g.root[0], y - g.root[1], g.root[2], g.barBottom - g.root[1]) };
     };
-    return PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderTerminationRequest: () => false,
-      onPanResponderGrant: () => {
+    return {
+      begin: (x: number, y: number) => {
         hideTip();
+        Object.assign(last, { x, y, x0: x, y0: y });
         void Promise.all([winOf(rootRef.current), winOf(barRef.current)]).then(([root, bar]) => {
-          if (root && bar) dragGeo.current = { root, barBottom: bar[1] + bar[3] };
+          // 윗줄이 없으면(왼쪽·오른쪽·떠 있게) 화면 맨 위 가까이가 '위에 붙이기'
+          if (root) dragGeo.current = { root, barBottom: bar ? bar[1] + bar[3] : root[1] + 8 };
+          setGhost(where(last.x, last.y));
         });
       },
-      onPanResponderMove: (_e, g) => setGhost(where(g.moveX, g.moveY)),
-      onPanResponderRelease: (_e, g) => {
-        const w = where(g.moveX, g.moveY);
+      move: (x: number, y: number) => {
+        last.x = x;
+        last.y = y;
+        setGhost(where(x, y));
+      },
+      end: () => {
+        const w = where(last.x, last.y);
         setGhost(null);
         dragGeo.current = null;
-        if (!w || Math.abs(g.dx) + Math.abs(g.dy) < 8) return; // 살짝 누르기만 했다
+        if (!w || Math.abs(last.x - last.x0) + Math.abs(last.y - last.y0) < 8) return; // 살짝 누르기만 했다
         setP(w.dock === "float" ? { toolbarDock: "float", toolbarFloat: { x: w.x - 20, y: w.y - 22 } } : { toolbarDock: w.dock });
       },
-      onPanResponderTerminate: () => {
+      cancel: () => {
         setGhost(null);
         dragGeo.current = null;
       },
-    });
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // 손잡이는 누르자마자 끈다 (도구 모음 전체의 '꾹 누르기'보다 먼저 잡히게 같은 제스처 도구로)
+  const gripPan = usePanGesture({
+    minDistance: 2,
+    runOnJS: true,
+    onActivate: (e) => tbDrag.begin(e.absoluteX - e.translationX, e.absoluteY - e.translationY),
+    onUpdate: (e) => tbDrag.move(e.absoluteX, e.absoluteY),
+    onDeactivate: () => tbDrag.end(),
+    onFinalize: () => tbDrag.cancel(),
+  });
+  // 도구 모음 아무 데나 꾹 누르면(0.45초) 집어서 옮긴다
+  const holdMove = usePanGesture({
+    activateAfterLongPress: 450,
+    runOnJS: true,
+    onActivate: (e) => tbDrag.begin(e.absoluteX, e.absoluteY),
+    onUpdate: (e) => tbDrag.move(e.absoluteX, e.absoluteY),
+    onDeactivate: () => tbDrag.end(),
+    onFinalize: () => tbDrag.cancel(),
+  });
 
   // ── 불러오기 ────────────────────────────────────────────
   useEffect(() => {
@@ -942,7 +967,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const narrow = win.width < 480; // 세로로 든 폰 (고르기 안내 줄을 두 줄로)
   const pad = win.width >= 700 ? 16 : 8; // 화면 양옆 여백
   const dock: ToolbarDock = prefs.toolbarDock;
-  tipSide.current = dock === "left" ? "right" : dock === "right" ? "left" : "below";
+  const vertBar = dock === "left" || (dock === "float" && (prefs.toolbarShape ?? "row") === "column");
+  tipSide.current = vertBar ? "right" : dock === "right" ? "left" : "below";
   const order = toolbarOrder(prefs.toolbar);
   const hiddenItems = new Set(prefs.toolbarHidden);
   /** 도구 설정 창 열기 — 위·떠 있는 도구 모음이면 도구 모음 바로 밑 지금 도구 단추 왼쪽 끝에,
@@ -952,7 +978,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     const box = dock === "top" ? barRef.current : stripRef.current;
     void Promise.all([winOf(box), winOf(btn ?? null)]).then(([b, r]) => {
       if (!b) setPanelAt(null);
-      else if (dock === "left") setPanelAt({ top: r ? r[1] : b[1], left: b[0] + b[2] + 4 });
+      else if (vertBar) setPanelAt({ top: r ? r[1] : b[1], left: b[0] + b[2] + 4 });
       else if (dock === "right") setPanelAt({ top: r ? r[1] : b[1], left: b[0] - PANEL_W - 4 });
       else setPanelAt({ top: b[1] + b[3] + 4, left: r ? r[0] : b[0] + 12 });
       setPanel(true);
@@ -1057,77 +1083,100 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     }
   };
   /** 도구 모음 내용: 사용자가 정한 순서대로, 무리가 바뀔 때 나눔 줄. 맨 끝에 '도구 모음 접기'·'도구 모음 편집'.
-   *  접었으면 지금 도구 하나와 '펼치기'만 */
-  const strip = (vertical: boolean) => {
+   *  접었으면 지금 도구 하나와 '펼치기'만. part: 두 줄로 띄울 때 윗줄(0)·아랫줄(1) — 보이는 항목을 반씩 */
+  const strip = (vertical: boolean, part?: 0 | 1) => {
     if (prefs.toolbarMin) {
+      if (part === 1) return [];
       return [
         <Fragment key={tool}>{item(tool, vertical)}</Fragment>,
         <IconBtn key="grow" icon="grow" onPress={() => setP({ toolbarMin: false })} label="도구 모음 펼치기" />,
       ];
     }
+    let items = order.filter((id) => !hiddenItems.has(id)).map((id) => [id, item(id, vertical)] as const).filter(([, n]) => !!n);
+    if (part !== undefined) {
+      const half = Math.ceil(items.length / 2);
+      items = part === 0 ? items.slice(0, half) : items.slice(half);
+    }
     const out: ReactNode[] = [];
     let last = "";
-    for (const id of order) {
-      if (hiddenItems.has(id)) continue;
-      const node = item(id, vertical);
-      if (!node) continue;
+    for (const [id, node] of items) {
       if (out.length && groupOf(id) !== last) out.push(<Divider key={`d-${id}`} vertical={vertical} />);
       out.push(<Fragment key={id}>{node}</Fragment>);
       last = groupOf(id);
     }
+    if (part === 0) return out;
     out.push(<Divider key="d-edit" vertical={vertical} />);
     out.push(<IconBtn key="shrink" icon="shrink" onPress={() => setP({ toolbarMin: true })} label="도구 모음 접기" />);
     out.push(<IconBtn key="edit" icon="sliders" onPress={() => setTbEdit(true)} label="도구 모음 편집" />);
     return out;
   };
-  /** 끌어서 옮기는 손잡이 */
-  const gripView = (
-    <View {...grip.panHandlers} accessibilityRole="adjustable" accessibilityLabel="도구 모음 옮기기 (끌어서 왼쪽·오른쪽·위 끝에 놓으면 붙고, 가운데에 놓으면 떠 있어요)" hitSlop={6} style={sx.grip}>
-      <ToolIcon name="grip" color={t.muted} size={18} />
+  const backBtn = <IconBtn icon="back" onPress={close} label="노트 목록으로" />;
+  /** 쪽 넘기기 ‹ 1 / 4 › (세로 도구 모음에서는 위·아래로). 가운데 쪽 번호를 누르면 쪽 모아보기 */
+  const pageNav = (vertical: boolean) => (
+    <View style={[vertical ? sx.pageNavV : sx.pageNav, { backgroundColor: t.sunken }]}>
+      <IconBtn compact icon={vertical ? "up" : "prev"} onPress={() => go(pi - 1)} disabled={pi === 0} label="이전 쪽" />
+      <Pressable onPress={() => setGrid(true)} accessibilityRole="button" accessibilityLabel="쪽 모아보기" style={sx.pageNo}>
+        <Text style={[vertical ? type.caption : type.label, sx.tabular, { color: t.ink, textAlign: "center" }]}>{vertical ? `${pi + 1}\n/${nb.pages.length}` : `${pi + 1} / ${nb.pages.length}`}</Text>
+      </Pressable>
+      <IconBtn compact icon={vertical ? "down" : "next"} onPress={() => go(pi + 1)} disabled={pi >= nb.pages.length - 1} label="다음 쪽" />
     </View>
   );
+  const moreBtn = <IconBtn icon="more" onPress={() => setMenu(true)} label="더 보기" />;
+  const sumBtn = (vertical: boolean) => (
+    <Button kind="primary" small label="요약" accessibilityLabel="요약 만들기" onPress={quick} style={vertical ? sx.sumV : undefined} />
+  );
+  const shape = prefs.toolbarShape ?? "row";
+  /** 끌어서 옮기는 손잡이 */
+  const gripView = (
+    <GestureDetector gesture={gripPan}>
+    <View collapsable={false} accessibilityRole="adjustable" accessibilityLabel="도구 모음 옮기기 (끌어서 왼쪽·오른쪽·위 끝에 놓으면 붙고, 가운데에 놓으면 떠 있어요)" hitSlop={6} style={sx.grip}>
+      <ToolIcon name="grip" color={t.muted} size={18} />
+    </View>
+    </GestureDetector>
+  );
+  // 왼쪽·오른쪽에 붙인 도구 모음: 맨 위 돌아가기·손잡이, 가운데 도구, 맨 아래 쪽·더 보기·요약 (윗줄은 없앤다)
   const sideStrip = (
     <StylusView onHover={onBarHover}>
-      <View ref={stripRef} collapsable={false} style={[sx.sideBar, { borderColor: t.lineSoft, backgroundColor: t.bg }, dock === "left" ? sx.sideLeft : sx.sideRight]}>
-        {gripView}
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={sx.toolCol} keyboardShouldPersistTaps="handled">
-          {strip(true)}
-        </ScrollView>
-      </View>
+      <GestureDetector gesture={holdMove}>
+        <View ref={stripRef} collapsable={false} style={[sx.sideBar, { borderColor: t.lineSoft, backgroundColor: t.bg }, dock === "left" ? sx.sideLeft : sx.sideRight]}>
+          {backBtn}
+          {gripView}
+          <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={sx.toolCol} keyboardShouldPersistTaps="handled">
+            {strip(true)}
+          </ScrollView>
+          <View style={[sx.sideFoot, { borderColor: t.lineSoft }]}>
+            {pageNav(true)}
+            {moreBtn}
+            {sumBtn(true)}
+          </View>
+        </View>
+      </GestureDetector>
     </StylusView>
   );
-  const fl = clampFloat(prefs.toolbarFloat?.x ?? 80, prefs.toolbarFloat?.y ?? 120, floatSize.w, floatSize.h, win.width, win.height, 48);
+  const fl = clampFloat(prefs.toolbarFloat?.x ?? 80, prefs.toolbarFloat?.y ?? 120, floatSize.w, floatSize.h, win.width, win.height, 4);
 
   return (
     <TipCtx.Provider value={tipCtx}>
     <SafeAreaView ref={rootRef} style={{ flex: 1, backgroundColor: t.bg }} edges={["top", "left", "right"]}>
-      <StylusView onHover={onBarHover}>
-      {/* 맨 윗줄: 돌아가기 · (위에 붙였으면 도구 모음) · 쪽 · 더 보기 · 요약.
-          노트 이름은 자리를 차지하지 않게 ⋯ 메뉴의 '이름 바꾸기'로. 좁으면 도구 모음만 옆으로 민다 */}
-      <View ref={barRef} collapsable={false} style={[sx.toolBar, { borderColor: t.lineSoft, backgroundColor: t.bg, paddingHorizontal: pad }]}>
-        <IconBtn icon="back" onPress={close} label="노트 목록으로" />
-        {dock === "top" ? (
-          <>
-            {gripView}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={sx.toolRow} keyboardShouldPersistTaps="handled" style={sx.toolScroll}>
-              {strip(false)}
-            </ScrollView>
-          </>
-        ) : (
-          <View style={sx.toolScroll} />
-        )}
-        {/* 쪽 넘기기는 ‹ 1 / 4 › 한 덩어리로. 가운데 쪽 번호를 누르면 쪽 모아보기 */}
-        <View style={[sx.pageNav, { backgroundColor: t.sunken }]}>
-          <IconBtn compact icon="prev" onPress={() => go(pi - 1)} disabled={pi === 0} label="이전 쪽" />
-          <Pressable onPress={() => setGrid(true)} accessibilityRole="button" accessibilityLabel="쪽 모아보기" style={sx.pageNo}>
-            <Text style={[type.label, sx.tabular, { color: t.ink }]}>{pi + 1} / {nb.pages.length}</Text>
-          </Pressable>
-          <IconBtn compact icon="next" onPress={() => go(pi + 1)} disabled={pi >= nb.pages.length - 1} label="다음 쪽" />
-        </View>
-        <IconBtn icon="more" onPress={() => setMenu(true)} label="더 보기" />
-        <Button kind="primary" small label="요약" accessibilityLabel="요약 만들기" onPress={quick} />
-      </View>
-      </StylusView>
+      {/* 맨 윗줄 (위에 붙였을 때만): 돌아가기 · 손잡이 · 도구 모음 · 쪽 · 더 보기 · 요약.
+          노트 이름은 자리를 차지하지 않게 ⋯ 메뉴의 '이름 바꾸기'로. 좁으면 도구 모음만 옆으로 민다.
+          왼쪽·오른쪽에 붙이거나 띄우면 윗줄을 없애고 그 자리를 쪽 화면이 쓴다 */}
+      {dock === "top" && (
+        <StylusView onHover={onBarHover}>
+          <GestureDetector gesture={holdMove}>
+            <View ref={barRef} collapsable={false} style={[sx.toolBar, { borderColor: t.lineSoft, backgroundColor: t.bg, paddingHorizontal: pad }]}>
+              {backBtn}
+              {gripView}
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={sx.toolRow} keyboardShouldPersistTaps="handled" style={sx.toolScroll}>
+                {strip(false)}
+              </ScrollView>
+              {pageNav(false)}
+              {moreBtn}
+              {sumBtn(false)}
+            </View>
+          </GestureDetector>
+        </StylusView>
+      )}
 
       <View style={sx.body}>
       {dock === "left" && sideStrip}
@@ -1172,17 +1221,56 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
       {/* 떠 있는 도구 모음: 손잡이로 끌어 아무 데나 */}
       {dock === "float" && (
         <StylusView onHover={onBarHover} style={[sx.floatWrap, { left: fl.x, top: fl.y }]}>
-          <View
-            ref={stripRef}
-            collapsable={false}
-            onLayout={(e) => setFloatSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
-            style={[floating(t), sx.floatBar, { maxWidth: win.width - 16 }]}
-          >
-            {gripView}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={sx.toolRow} keyboardShouldPersistTaps="handled" style={{ flexShrink: 1 }}>
-              {strip(false)}
-            </ScrollView>
-          </View>
+          <GestureDetector gesture={holdMove}>
+            <View
+              ref={stripRef}
+              collapsable={false}
+              onLayout={(e) => setFloatSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}
+              style={[floating(t), shape === "column" ? sx.floatCol : shape === "two" ? sx.floatTwo : sx.floatBar, shape === "column" ? { maxHeight: win.height - 16 } : { maxWidth: win.width - 16 }]}
+            >
+              {shape === "column" ? (
+                <>
+                  {backBtn}
+                  {gripView}
+                  <ScrollView style={{ flexShrink: 1 }} showsVerticalScrollIndicator={false} contentContainerStyle={sx.toolCol} keyboardShouldPersistTaps="handled">
+                    {strip(true)}
+                  </ScrollView>
+                  {pageNav(true)}
+                  {moreBtn}
+                  {sumBtn(true)}
+                </>
+              ) : shape === "two" ? (
+                <>
+                  <View style={sx.floatLine}>
+                    {gripView}
+                    {backBtn}
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={sx.toolRow} keyboardShouldPersistTaps="handled" style={{ flexShrink: 1 }}>
+                      {strip(false, 0)}
+                    </ScrollView>
+                    {pageNav(false)}
+                  </View>
+                  <View style={sx.floatLine}>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={sx.toolRow} keyboardShouldPersistTaps="handled" style={{ flexShrink: 1 }}>
+                      {strip(false, 1)}
+                    </ScrollView>
+                    {moreBtn}
+                    {sumBtn(false)}
+                  </View>
+                </>
+              ) : (
+                <>
+                  {gripView}
+                  {backBtn}
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={sx.toolRow} keyboardShouldPersistTaps="handled" style={{ flexShrink: 1 }}>
+                    {strip(false)}
+                  </ScrollView>
+                  {pageNav(false)}
+                  {moreBtn}
+                  {sumBtn(false)}
+                </>
+              )}
+            </View>
+          </GestureDetector>
         </StylusView>
       )}
       {ghost && (
@@ -1391,7 +1479,22 @@ function ToolbarDialog({ open, prefs, setP, onClose }: { open: boolean; prefs: P
           );
         })}
       </View>
-      <Text style={[type.caption, { color: t.muted }]}>도구 모음 앞의 손잡이(⋮⋮)를 끌어 화면 왼쪽·오른쪽·위 끝에 놓으면 그쪽에 붙고, 가운데에 놓으면 떠 있어요.</Text>
+      {prefs.toolbarDock === "float" && (
+        <>
+          <Text style={[type.label, { color: t.sub }]}>떠 있는 모양</Text>
+          <View style={sx.sizeRow}>
+            {([["row", "한 줄"], ["two", "두 줄"], ["column", "세로"]] as const).map(([id, label]) => {
+              const on = (prefs.toolbarShape ?? "row") === id;
+              return (
+                <Pressable key={id} onPress={() => setP({ toolbarShape: id })} accessibilityRole="radio" accessibilityState={{ selected: on }} accessibilityLabel={`떠 있는 모양: ${label}`} style={[sx.sizeChip, { backgroundColor: on ? t.ink : t.sunken }]}>
+                  <Text style={{ color: on ? t.bg : t.sub, fontWeight: on ? "600" : "500" }}>{label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </>
+      )}
+      <Text style={[type.caption, { color: t.muted }]}>도구 모음 빈 곳을 꾹 누르거나 앞의 손잡이(⋮⋮)를 끌어 화면 왼쪽·오른쪽·위 끝에 놓으면 그쪽에 붙고, 가운데에 놓으면 떠 있어요.</Text>
       <Text style={[type.label, { color: t.sub, marginTop: 4 }]}>순서와 보이기</Text>
       <ScrollView style={{ maxHeight: Math.max(160, win.height - 380) }}>
         {order.map((id, i) => {
@@ -1677,7 +1780,13 @@ const sx = StyleSheet.create({
   toolCol: { alignItems: "center", gap: 2, paddingVertical: 4 },
   body: { flex: 1, flexDirection: "row" },
   // 왼쪽·오른쪽에 붙인 도구 모음 (세로)
-  sideBar: { flex: 1, width: 52, alignItems: "center", paddingTop: 4 },
+  sideBar: { flex: 1, width: 56, alignItems: "center", paddingTop: 4 },
+  sideFoot: { alignItems: "center", gap: 4, paddingVertical: 6, borderTopWidth: 1, alignSelf: "stretch" },
+  pageNavV: { alignItems: "center", borderRadius: radius.lg, paddingVertical: 2 },
+  sumV: { paddingHorizontal: 8 },
+  floatTwo: { paddingHorizontal: 6, paddingVertical: 4, borderRadius: radius.xl, gap: 2 },
+  floatLine: { flexDirection: "row", alignItems: "center" },
+  floatCol: { alignItems: "center", paddingHorizontal: 4, paddingVertical: 6, borderRadius: radius.xl, width: 60 },
   sideLeft: { borderRightWidth: 1 },
   sideRight: { borderLeftWidth: 1 },
   // 떠 있는 도구 모음

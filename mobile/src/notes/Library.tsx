@@ -61,6 +61,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
   const [folders, setFolders] = useState<string[]>([]);
   const [newIn, setNewIn] = useState<string | null | undefined>(undefined); // 새 폴더 창: 어느 폴더 안에 (undefined = 닫힘)
   const [renaming, setRenaming] = useState<string | null>(null); // 이름 바꿀 폴더
+  const [renamingNote, setRenamingNote] = useState<Notebook | null>(null); // 이름 바꿀 노트
   const [folderMenu, setFolderMenu] = useState<string | null>(null); // ⋯ 메뉴를 연 폴더
   const [moving, setMoving] = useState<Notebook | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set()); // 왼쪽 나무에서 펼친 폴더
@@ -203,6 +204,14 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
     reload();
   }
 
+  async function renameNote(nb: Notebook, title: string) {
+    setRenamingNote(null);
+    const v = title.trim();
+    if (!v || v === nb.title) return;
+    await store.patchMeta(nb.id, { title: v });
+    reload();
+  }
+
   async function toggleFav(nb: Notebook) {
     setActions(null);
     await store.patchMeta(nb.id, { fav: !nb.fav });
@@ -319,7 +328,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
   const rootRef = useRef<HostInstance>(null);
   const dropRefs = useRef(new Map<string, RefObject<HostInstance | null>>());
   const dragGeo = useRef<{ root: number[]; rects: { key: string; r: number[] }[] } | null>(null);
-  const [drag, setDrag] = useState<{ item: DragItem; x: number; y: number; over: string | null } | null>(null);
+  const [drag, setDrag] = useState<{ item: DragItem; x: number; y: number; x0: number; y0: number; over: string | null } | null>(null);
   const dragRef = useRef(drag);
   const lastDragEnd = useRef(0);
   dragRef.current = drag;
@@ -350,7 +359,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
       };
     },
     begin: (item: DragItem, x: number, y: number) => {
-      setDrag({ item, x, y, over: null });
+      setDrag({ item, x, y, x0: x, y0: y, over: null });
       dragGeo.current = null;
       const winOf = (r: HostInstance | null) => new Promise<number[] | null>((res) => (r ? r.measureInWindow((a, b, c, d) => res([a, b, c, d])) : res(null)));
       void (async () => {
@@ -375,6 +384,11 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
       lastDragEnd.current = Date.now();
       setDrag(null);
       if (d?.over) void dropOn(d.item, d.over);
+      // 꾹 눌렀다가 움직이지 않고 떼면: 메뉴 (이름 바꾸기·즐겨찾기·옮기기·지우기)
+      else if (d && Math.abs(d.x - d.x0) + Math.abs(d.y - d.y0) < 12) {
+        if (d.item.kind === "note") setActions(d.item.nb);
+        else setFolderMenu(d.item.path);
+      }
     },
     cancel: () => {
       if (dragRef.current) {
@@ -568,6 +582,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
                   width={cardW}
                   onPress={() => setFolder(f)}
                   onMore={() => setFolderMenu(f)}
+                  onRename={() => setRenaming(f)}
                 />
               ))}
               {shown.map((nb) => (
@@ -579,6 +594,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
                   onPress={() => (nb.trashed ? setActions(nb) : onOpen(nb.id))}
                   onMore={() => setActions(nb)}
                   onFav={nb.trashed ? undefined : () => void toggleFav(nb)}
+                  onRename={nb.trashed ? undefined : () => setRenamingNote(nb)}
                 />
               ))}
             </View>
@@ -628,6 +644,15 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
         onCancel={() => setRenaming(null)}
         onDone={(v) => renaming && renameFolder(renaming, v)}
       />
+      <NameDialog
+        visible={renamingNote !== null}
+        title="노트 이름 바꾸기"
+        initial={renamingNote?.title ?? ""}
+        action="바꾸기"
+        placeholder="노트 이름"
+        onCancel={() => setRenamingNote(null)}
+        onDone={(v) => renamingNote && void renameNote(renamingNote, v)}
+      />
       <Modal visible={folderMenu !== null} transparent animationType="fade" onRequestClose={() => setFolderMenu(null)}>
         <Pressable style={[s.backdrop, { backgroundColor: backdrop(t) }]} onPress={() => setFolderMenu(null)}>
           <Pressable style={[floating(t), s.menu]} onPress={() => {}}>
@@ -675,6 +700,7 @@ export function Library({ store, onOpen, onSummaryTool, onSettings, refresh, syn
             ) : (
               <>
                 <MenuItem label="열기" onPress={() => actions && onOpen(actions.id)} />
+                <MenuItem label="이름 바꾸기" onPress={() => { setRenamingNote(actions); setActions(null); }} />
                 <MenuItem label={actions?.fav ? "즐겨찾기에서 빼기" : "즐겨찾기에 넣기"} onPress={() => actions && void toggleFav(actions)} />
                 <MenuItem label="폴더로 옮기기" onPress={() => { setMoving(actions); setActions(null); }} />
                 <MenuItem label="다른 기기로 보내기 (노트 파일)" onPress={() => actions && sendPack(actions)} />
@@ -730,7 +756,7 @@ function Draggable({ item, children }: { item: DragItem; children: ReactNode }) 
   );
 }
 
-function NoteCard({ nb, store, width, onPress, onMore, onFav }: { nb: Notebook; store: SyncedStore; width: number; onPress: () => void; onMore: () => void; onFav?: () => void }) {
+function NoteCard({ nb, store, width, onPress, onMore, onFav, onRename }: { nb: Notebook; store: SyncedStore; width: number; onPress: () => void; onMore: () => void; onFav?: () => void; onRename?: () => void }) {
   const t = useTheme();
   const drop = useDrop(nb.trashed ? undefined : `note:${nb.id}`);
   const api = useContext(DropApi);
@@ -767,14 +793,24 @@ function NoteCard({ nb, store, width, onPress, onMore, onFav }: { nb: Notebook; 
           <PaperThumb paper={first?.paper} />
         )}
         {onFav && (
-          <Pressable onPress={onFav} hitSlop={8} accessibilityRole="button" accessibilityLabel={`${nb.title} 즐겨찾기 ${nb.fav ? "빼기" : "넣기"}`} style={s.star}>
-            <Text style={{ fontSize: 20, color: nb.fav ? "#F5B400" : "#9AA3AD" }}>{nb.fav ? "★" : "☆"}</Text>
+          // 즐겨찾기 단추: 흰 동그라미에 테두리 (즐겨찾기면 노란 테두리·채운 별) — 단추로 보이게
+          <Pressable
+            onPress={onFav}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel={`${nb.title} 즐겨찾기 ${nb.fav ? "빼기" : "넣기"}`}
+            style={({ pressed }) => [s.star, { borderColor: nb.fav ? "#F5B400" : "#8B95A1", backgroundColor: nb.fav ? "#FFF8E1" : "#FFFFFF", opacity: pressed ? 0.7 : 1 }]}
+          >
+            <Text style={{ fontSize: 22, lineHeight: 26, color: nb.fav ? "#F5B400" : "#6B7480" }}>{nb.fav ? "★" : "☆"}</Text>
           </Pressable>
         )}
       </View>
       <View style={s.cardFoot}>
         <View style={{ flex: 1, gap: 2 }}>
-          <Text style={[type.label, s.cardTitle, { color: t.ink }]} numberOfLines={1}>{nb.title}</Text>
+          {/* 이름을 누르면 이름 바꾸기 (굿노트처럼) */}
+          <Pressable onPress={onRename} disabled={!onRename} accessibilityRole="button" accessibilityLabel={`${nb.title} 이름 바꾸기`} hitSlop={4}>
+            <Text style={[type.label, s.cardTitle, { color: t.ink }]} numberOfLines={1}>{nb.title}</Text>
+          </Pressable>
           <Text style={[type.caption, { color: t.muted }]}>
             {nb.pages.length}쪽 · {date.getMonth() + 1}/{date.getDate()} {String(date.getHours()).padStart(2, "0")}:{String(date.getMinutes()).padStart(2, "0")}
           </Text>
@@ -795,7 +831,7 @@ function NoteCard({ nb, store, width, onPress, onMore, onFav }: { nb: Notebook; 
 }
 
 /** 폴더 칸: 노트 칸과 같은 네모에 큰 폴더 모양, 밑에 이름과 안에 든 것 수 */
-function FolderCard({ path, name, notes, folders, width, onPress, onMore }: { path: string; name: string; notes: number; folders: number; width: number; onPress: () => void; onMore: () => void }) {
+function FolderCard({ path, name, notes, folders, width, onPress, onMore, onRename }: { path: string; name: string; notes: number; folders: number; width: number; onPress: () => void; onMore: () => void; onRename: () => void }) {
   const t = useTheme();
   const drop = useDrop(`folder:${path}`);
   const api = useContext(DropApi);
@@ -813,7 +849,9 @@ function FolderCard({ path, name, notes, folders, width, onPress, onMore }: { pa
       </View>
       <View style={s.cardFoot}>
         <View style={{ flex: 1, gap: 2 }}>
-          <Text style={[type.label, s.cardTitle, { color: t.ink }]} numberOfLines={1}>{name}</Text>
+          <Pressable onPress={onRename} accessibilityRole="button" accessibilityLabel={`${name} 폴더 이름 바꾸기`} hitSlop={4}>
+            <Text style={[type.label, s.cardTitle, { color: t.ink }]} numberOfLines={1}>{name}</Text>
+          </Pressable>
           <Text style={[type.caption, { color: t.muted }]}>{folders ? `폴더 ${folders} · ` : ""}노트 {notes}</Text>
         </View>
         <Pressable
@@ -1069,7 +1107,11 @@ const s = StyleSheet.create({
   crumbStep: { flexDirection: "row", alignItems: "center", gap: 6 },
   crumb: { paddingVertical: 6, paddingHorizontal: 4 },
   folderBox: { borderWidth: 1 },
-  star: { position: "absolute", top: 4, right: 6, padding: 2 },
+  star: {
+    position: "absolute", top: 6, right: 6, width: 38, height: 38, borderRadius: 19, borderWidth: 2,
+    alignItems: "center", justifyContent: "center",
+    shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 2,
+  },
   ghost2: { position: "absolute", width: 160, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radius.md, borderWidth: 2, zIndex: 40 },
   noticeWrap: { position: "absolute", left: 16, right: 16, bottom: 32, alignItems: "center" },
   notice: { maxWidth: 560, borderRadius: radius.xl, paddingHorizontal: 18, paddingVertical: 10 },

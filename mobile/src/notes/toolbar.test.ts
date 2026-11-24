@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clampFloat, DEFAULT_TOOLBAR, dockAt, groupOf, moveItem, toolbarOrder } from "./toolbar.ts";
+import { clampFloat, DEFAULT_TOOLBAR, dockAt, groupOf, moveItem, moveTo, toolbarOrder } from "./toolbar.ts";
 
 test("도구 모음 순서: 처음엔 기본 순서", () => {
   assert.deepEqual(toolbarOrder(undefined), DEFAULT_TOOLBAR);
@@ -43,4 +43,14 @@ test("끌어 놓은 자리: 위 줄 근처 → 위, 왼쪽·오른쪽 끝 → �
 test("떠 있는 도구 모음은 화면 밖으로 나가지 않게", () => {
   assert.deepEqual(clampFloat(-50, 10, 300, 50, 1000, 800, 60), { x: 4, y: 64 });
   assert.deepEqual(clampFloat(900, 900, 300, 50, 1000, 800, 60), { x: 696, y: 746 });
+});
+
+test("꾹 눌러 끌어 옮기기: 원하는 자리로, 나머지는 밀리고, 범위 밖은 끝으로", () => {
+  const o = toolbarOrder([]);
+  assert.deepEqual(moveTo(o, "eraser", 0).slice(0, 3), ["eraser", "pen", "highlighter"]);
+  assert.deepEqual(moveTo(o, "pen", 2).slice(0, 3), ["highlighter", "eraser", "pen"]);
+  assert.deepEqual(moveTo(o, "pen", 0), o);
+  assert.equal(moveTo(o, "pen", 999).at(-1), "pen");
+  assert.equal(moveTo(o, o[o.length - 1], -5)[0], o[o.length - 1]);
+  assert.equal(moveTo(o, "pen", 3).length, o.length);
 });

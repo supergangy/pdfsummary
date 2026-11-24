@@ -1,6 +1,6 @@
 // 필기 화면: 도구 모음 + 쪽 그리기 + 자동 저장
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type Ref, type RefObject } from "react";
-import { ActivityIndicator, Alert, AppState, BackHandler, Image, Modal, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View, type HostInstance } from "react-native";
+import { ActivityIndicator, Alert, AppState, BackHandler, Image, Modal, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View, type HostInstance, type StyleProp, type ViewStyle } from "react-native";
 import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -8,7 +8,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { pageText } from "../../modules/pdf-pages";
 import { StylusView } from "../../modules/stylus";
 import { Button, floating, radius, styles as ui, type, useTheme, type Theme } from "../ui";
-import { clampPage, colorName, isHighlighterTap, justAfter, otherPage, pageBg, penSwap, swatchEdge, widthName, type BgCache, type SwapSaved } from "./editor-logic";
+import { clampPage, openingPage, colorName, isHighlighterTap, justAfter, otherPage, pageBg, penSwap, swatchEdge, widthName, type BgCache, type SwapSaved } from "./editor-logic";
 import { bounds, eraseFrom, fitHighlight, hitAlong, straighten, thin, type CharBox } from "./geometry";
 import { History, removal, type Op } from "./history";
 import {
@@ -18,6 +18,8 @@ import {
 import { pageImage } from "./pageImage";
 import { PageCanvas, type JumpCmd, type Selection, type ToolName, type ViewSpot, type ZoomCmd } from "./PageCanvas";
 import { PageGrid } from "./PageGrid";
+import { PageScrubber } from "./PageScrubber";
+import { loadLastPage, saveLastPage } from "./lastPage";
 import { loadPrefs, savePrefs, type Prefs } from "./prefs";
 import { clock, fadeStep, pageAt, seekFor, timedStrokeAt } from "./audioSync";
 import { PlayerBar, useLectureAudio } from "./LectureAudio";
@@ -26,7 +28,7 @@ import { lassoSelect, moved, scaled, snapShape } from "./shapes";
 import { STAMPS, STICKERS, type Sticker } from "./stickers";
 import { ToolIcon, type IconName } from "./ToolIcon";
 import { ToolPanel } from "./ToolPanel";
-import { clampFloat, dockAt, DOCKS, groupOf, itemLabel, moveItem, toolbarOrder, type ToolbarDock, type ToolbarItem } from "./toolbar";
+import { clampFloat, dockAt, DOCKS, groupOf, itemLabel, moveItem, moveTo, toolbarOrder, type ToolbarDock, type ToolbarItem } from "./toolbar";
 import type { SyncedStore } from "./sync/syncedStore";
 import { applyToInk, applyToNotebook } from "./sync/writes";
 
@@ -270,10 +272,16 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         if (alive) setLoadErr("노트를 열 수 없어요.");
         return;
       }
-      const [k, u, p] = await Promise.all([store.loadInk(n), n.hasPdf ? store.pdfUri(n.id) : Promise.resolve(null), loadPrefs()]);
+      const [k, u, p, lastId] = await Promise.all([
+        store.loadInk(n),
+        n.hasPdf ? store.pdfUri(n.id) : Promise.resolve(null),
+        loadPrefs(),
+        startPage === undefined ? loadLastPage(n.id).catch(() => null) : Promise.resolve(null),
+      ]);
       if (!alive) return;
       setNb(n);
-      setPi((i) => clampPage(i, n.pages.length)); // 그 사이 쪽이 줄었으면 마지막 쪽
+      // 요약에서 돌아오면 그 쪽, 아니면 지난번에 보던 쪽 (쪽 화면을 그리기 전에 정해야 그 쪽에서 열린다)
+      setPi(openingPage(n.pages, startPage, lastId));
       setInk(k);
       setPdfUri(u);
       setPrefs(p);
@@ -281,6 +289,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     return () => {
       alive = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store, id]);
 
   // ── 저장 ────────────────────────────────────────────────
@@ -289,6 +298,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     timer.current = null;
     const n = nbRef.current;
     if (!n) return;
+    const seen = n.pages[piRef.current]?.id;
+    if (seen) void saveLastPage(n.id, seen); // 다음에 열면 이 쪽부터
     const pages = [...dirty.current];
     dirty.current.clear();
     // 저장 순간의 최신 내용을 읽는다 (그 사이 다른 기기에서 온 필기를 덮지 않게)
@@ -1155,10 +1166,10 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     <Button kind="primary" small label="요약" accessibilityLabel="요약 만들기" onPress={quick} style={vertical ? sx.sumV : undefined} />
   );
   const shape = prefs.toolbarShape ?? "row";
-  /** 끌어서 옮기는 손잡이 */
-  const gripView = (
+  /** 끌어서 옮기는 손잡이 (맨 끝, 요약 단추와 붙지 않게 조금 띄운다 — 세로 줄이면 위로) */
+  const gripView = (vertical: boolean) => (
     <GestureDetector gesture={gripPan}>
-    <View collapsable={false} accessibilityRole="adjustable" accessibilityLabel="도구 모음 옮기기 (끌어서 왼쪽·오른쪽·위 끝에 놓으면 붙고, 가운데에 놓으면 떠 있어요)" hitSlop={6} style={sx.grip}>
+    <View collapsable={false} accessibilityRole="adjustable" accessibilityLabel="도구 모음 옮기기 (끌어서 왼쪽·오른쪽·위 끝에 놓으면 붙고, 가운데에 놓으면 플로팅)" hitSlop={6} style={[sx.grip, vertical ? sx.gripGapV : sx.gripGapH]}>
       <ToolIcon name="grip" color={t.muted} size={18} />
     </View>
     </GestureDetector>
@@ -1178,7 +1189,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
             {pageNav(true)}
             {moreBtn}
             {sumBtn(true)}
-            {gripView}
+            {gripView(true)}
           </View>
         </View>
       </GestureDetector>
@@ -1205,7 +1216,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
               {pageNav(false)}
               {moreBtn}
               {sumBtn(false)}
-              {gripView}
+              {gripView(false)}
             </View>
           </GestureDetector>
         </StylusView>
@@ -1248,6 +1259,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         tapOnly={listening && !!audio.cur}
         fade={audio.cur ? { rec: audio.cur.id, ms: fadeMs } : null}
       />
+      {nb.pages.length > 1 && !selection && !audio.cur && <PageScrubber count={nb.pages.length} index={pi} onSeek={(i) => showPage(i)} />}
       </View>
       {dock === "right" && sideStrip}
       </View>
@@ -1272,7 +1284,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
                   {pageNav(true)}
                   {moreBtn}
                   {sumBtn(true)}
-                  {gripView}
+                  {gripView(true)}
                 </>
               ) : shape === "two" ? (
                 <>
@@ -1289,7 +1301,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
                     </ScrollView>
                     {moreBtn}
                     {sumBtn(false)}
-                    {gripView}
+                    {gripView(false)}
                   </View>
                 </>
               ) : (
@@ -1301,7 +1313,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
                   {pageNav(false)}
                   {moreBtn}
                   {sumBtn(false)}
-                  {gripView}
+                  {gripView(false)}
                 </>
               )}
             </View>
@@ -1497,12 +1509,36 @@ function StickerSheet({ open, onClose, onStamp, onSticker }: { open: boolean; on
 /** 도구 설정 창(ToolPanel) 폭 — 오른쪽에 붙인 도구 모음 왼쪽에 놓을 때 */
 const PANEL_W = 368;
 
-/** 도구 모음 편집: 자리(위·왼쪽·오른쪽·떠 있게), 항목 순서(▲▼), 보이기 */
+/** 도구 모음 편집: 자리(위·왼쪽·오른쪽·플로팅), 항목 순서(꾹 눌러 끌기), 보이기 */
 function ToolbarDialog({ open, prefs, setP, onClose }: { open: boolean; prefs: Prefs; setP: (p: Partial<Prefs>) => void; onClose: () => void }) {
   const t = useTheme();
   const win = useWindowDimensions();
   const order = toolbarOrder(prefs.toolbar);
   const hidden = new Set(prefs.toolbarHidden);
+  // ── 순서 바꾸기: 줄을 꾹 누르면 집히고, 위아래로 끌면 다른 줄이 비켜 주고, 놓으면 그 자리에 ──
+  const [drag, setDrag] = useState<{ id: ToolbarItem; from: number; dy: number } | null>(null);
+  const rowH = useRef(52); // 한 줄 높이 (첫 줄을 재서 고친다)
+  const live = useRef({ order, setP, drag });
+  live.current = { order, setP, drag };
+  const targetOf = (d: { from: number; dy: number }, n: number) => Math.max(0, Math.min(n - 1, d.from + Math.round(d.dy / rowH.current)));
+  const dragApi = useRef({
+    start: (id: ToolbarItem) => {
+      const from = live.current.order.indexOf(id);
+      if (from >= 0) setDrag({ id, from, dy: 0 });
+    },
+    move: (dy: number) => setDrag((d) => (d ? { ...d, dy } : d)),
+    end: () => {
+      const { order: o, setP: set, drag: d } = live.current;
+      if (d) {
+        const to = targetOf(d, o.length);
+        if (to !== d.from) set({ toolbar: moveTo(o, d.id, to) });
+      }
+      setDrag(null);
+    },
+    cancel: () => setDrag(null),
+  }).current;
+  const to = drag ? targetOf(drag, order.length) : -1;
+  const view = drag ? moveTo(order, drag.id, to) : order;
   return (
     <Dialog open={open} title="도구 모음 편집" maxWidth={460} onClose={onClose}>
       <Text style={[type.label, { color: t.sub }]}>자리</Text>
@@ -1518,12 +1554,12 @@ function ToolbarDialog({ open, prefs, setP, onClose }: { open: boolean; prefs: P
       </View>
       {prefs.toolbarDock === "float" && (
         <>
-          <Text style={[type.label, { color: t.sub }]}>떠 있는 모양</Text>
+          <Text style={[type.label, { color: t.sub }]}>플로팅 모양</Text>
           <View style={sx.sizeRow}>
             {([["row", "한 줄"], ["two", "두 줄"], ["column", "세로"]] as const).map(([id, label]) => {
               const on = (prefs.toolbarShape ?? "row") === id;
               return (
-                <Pressable key={id} onPress={() => setP({ toolbarShape: id })} accessibilityRole="radio" accessibilityState={{ selected: on }} accessibilityLabel={`떠 있는 모양: ${label}`} style={[sx.sizeChip, { backgroundColor: on ? t.ink : t.sunken }]}>
+                <Pressable key={id} onPress={() => setP({ toolbarShape: id })} accessibilityRole="radio" accessibilityState={{ selected: on }} accessibilityLabel={`플로팅 모양: ${label}`} style={[sx.sizeChip, { backgroundColor: on ? t.ink : t.sunken }]}>
                   <Text style={{ color: on ? t.bg : t.sub, fontWeight: on ? "600" : "500" }}>{label}</Text>
                 </Pressable>
               );
@@ -1531,23 +1567,38 @@ function ToolbarDialog({ open, prefs, setP, onClose }: { open: boolean; prefs: P
           </View>
         </>
       )}
-      <Text style={[type.caption, { color: t.muted }]}>도구 모음 빈 곳을 꾹 누르거나 앞의 손잡이(⋮⋮)를 끌어 화면 왼쪽·오른쪽·위 끝에 놓으면 그쪽에 붙고, 가운데에 놓으면 떠 있어요.</Text>
+      <Text style={[type.caption, { color: t.muted }]}>도구 모음 빈 곳을 꾹 누르거나 맨 끝의 손잡이(⋮⋮)를 끌어 화면 왼쪽·오른쪽·위 끝에 놓으면 그쪽에 붙고, 가운데에 놓으면 플로팅(놓은 자리에 떠 있기)이 돼요.</Text>
       <Text style={[type.label, { color: t.sub, marginTop: 4 }]}>순서와 보이기</Text>
-      <ScrollView style={{ maxHeight: Math.max(160, win.height - 380) }}>
-        {order.map((id, i) => {
+      <Text style={[type.caption, { color: t.muted }]}>줄을 꾹 누른 채 위아래로 끌면 순서가 바뀌어요.</Text>
+      <ScrollView style={{ maxHeight: Math.max(160, win.height - 400) }} scrollEnabled={!drag}>
+        {view.map((id, i) => {
           const label = itemLabel(id);
           const shown = !hidden.has(id);
+          const held = drag?.id === id;
           return (
-            <View key={id} style={[sx.tbRow, { borderColor: t.lineSoft }]}>
+            <OrderRow
+              key={id}
+              id={id}
+              api={dragApi}
+              onHeight={i === 0 ? (h) => { if (h > 20) rowH.current = h; } : undefined}
+              style={[
+                sx.tbRow,
+                { borderColor: t.lineSoft, backgroundColor: t.bg },
+                held && drag && [sx.tbRowHeld, { borderColor: t.accent, transform: [{ translateY: drag.dy - (to - drag.from) * rowH.current }] }],
+              ]}
+              label={label}
+              onStep={(d) => setP({ toolbar: moveItem(order, id, d) })}
+            >
               <Text style={[type.body, { color: shown ? t.ink : t.muted, flex: 1 }]}>{label}</Text>
               <Switch
                 value={shown}
                 onValueChange={(v) => setP({ toolbarHidden: v ? prefs.toolbarHidden.filter((x) => x !== id) : [...prefs.toolbarHidden, id] })}
                 accessibilityLabel={`${label} 보이기`}
               />
-              <IconBtn icon="up" onPress={() => setP({ toolbar: moveItem(order, id, -1) })} disabled={i === 0} label={`${label} 앞으로`} />
-              <IconBtn icon="down" onPress={() => setP({ toolbar: moveItem(order, id, 1) })} disabled={i === order.length - 1} label={`${label} 뒤로`} />
-            </View>
+              <View style={sx.tbRowGrip}>
+                <ToolIcon name="grip" color={held ? t.accent : t.muted} size={18} />
+              </View>
+            </OrderRow>
           );
         })}
       </ScrollView>
@@ -1557,6 +1608,41 @@ function ToolbarDialog({ open, prefs, setP, onClose }: { open: boolean; prefs: P
         <Button kind="primary" label="닫기" onPress={onClose} />
       </View>
     </Dialog>
+  );
+}
+
+/** 도구 모음 편집의 한 줄: 꾹 누르면(0.3초) 집어서 위아래로 끈다.
+ *  화면 읽기 프로그램에서는 '앞으로'·'뒤로' 동작으로 한 칸씩 */
+function OrderRow({ id, api, onHeight, style, label, onStep, children }: {
+  id: ToolbarItem;
+  api: { start: (id: ToolbarItem) => void; move: (dy: number) => void; end: () => void; cancel: () => void };
+  onHeight?: (h: number) => void;
+  style: StyleProp<ViewStyle>;
+  label: string;
+  onStep: (d: -1 | 1) => void;
+  children: ReactNode;
+}) {
+  const pan = usePanGesture({
+    activateAfterLongPress: 300,
+    runOnJS: true,
+    onActivate: () => api.start(id),
+    onUpdate: (e) => api.move(e.translationY),
+    onDeactivate: () => api.end(),
+    onFinalize: () => api.cancel(),
+  });
+  return (
+    <GestureDetector gesture={pan}>
+      <View
+        collapsable={false}
+        style={style}
+        onLayout={onHeight ? (e) => onHeight(e.nativeEvent.layout.height) : undefined}
+        accessibilityLabel={`${label} 순서 (꾹 눌러 끌어 옮기기)`}
+        accessibilityActions={[{ name: "앞으로", label: "앞으로" }, { name: "뒤로", label: "뒤로" }]}
+        onAccessibilityAction={(e) => onStep(e.nativeEvent.actionName === "앞으로" ? -1 : 1)}
+      >
+        {children}
+      </View>
+    </GestureDetector>
   );
 }
 
@@ -1830,6 +1916,8 @@ const sx = StyleSheet.create({
   floatWrap: { position: "absolute", zIndex: 15 },
   floatBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 6, paddingVertical: 4, borderRadius: radius.xl },
   grip: { width: 22, height: 36, alignItems: "center", justifyContent: "center" },
+  gripGapH: { marginLeft: 14 },
+  gripGapV: { marginTop: 10 },
   // 끄는 동안 도구 모음을 다른 것들 위로 띄운다
   lifted: { zIndex: 40, elevation: 12, shadowColor: "#000", shadowOpacity: 0.22, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, opacity: 0.94 },
   dockZone: { position: "absolute", zIndex: 30, borderWidth: 2, borderStyle: "dashed", borderRadius: radius.md, alignItems: "center", justifyContent: "center", opacity: 0.9 },
@@ -1845,6 +1933,9 @@ const sx = StyleSheet.create({
   stamp: { borderWidth: 2, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 8 },
   stickerCell: { width: 64, height: 64, borderRadius: radius.md, alignItems: "center", justifyContent: "center" },
   tbRow: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 2, borderBottomWidth: StyleSheet.hairlineWidth },
+  // 집어 든 줄: 위로 떠 보이게 (테두리·그림자)
+  tbRowHeld: { zIndex: 10, elevation: 6, borderWidth: 1.5, borderRadius: 10, shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
+  tbRowGrip: { width: 36, height: 44, alignItems: "center", justifyContent: "center" },
   swatchesCol: { flexDirection: "column", alignItems: "center", gap: 2 },
   toolBtn: { width: 38, height: 36, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" },
   swatches: { flexDirection: "row", alignItems: "center", gap: 2 },

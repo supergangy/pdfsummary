@@ -87,6 +87,28 @@ export function itemMarker(chars: PdfChar[], k: number): number {
   return m ? m[0].length : 0;
 }
 
+/** 글자 차례로 i 다음에 j가 오는데(사이는 띄어쓰기·줄바꿈뿐) 쪽 위에서는 이어진 글이 아닌가:
+ *  글자 크기가 크게 다르거나(제목·표 머리), 같은 줄인데 멀리 떨어졌거나 높이가 다르거나,
+ *  다음 줄인데 바로 밑 줄이 아니거나(문단·표 칸이 바뀜) 앞 줄 끝보다 오른쪽에서 시작하면(옆 칸) 떨어진 것.
+ *  자리를 모르는 글자(상자 높이 0)는 예전처럼 이어진 것으로 본다. */
+function apart(chars: PdfChar[], i: number, j: number): boolean {
+  const A = chars[i], B = chars[j];
+  const ha = A[4] - A[2], hb = B[4] - B[2];
+  if (!(ha > 0 && hb > 0)) return false;
+  const h = Math.max(ha, hb);
+  if (h > 1.4 * Math.min(ha, hb)) return true;
+  let broke = false;
+  for (let k = i + 1; k < j; k++) if (chars[k][0] === "\n") broke = true;
+  const ca = (A[2] + A[4]) / 2, cb = (B[2] + B[4]) / 2;
+  if (!broke || Math.abs(ca - cb) < 0.5 * h) {
+    // 같은 줄로 이어짐: 높이가 같고, 오른쪽으로 너무 멀리 건너뛰지 않고, 왼쪽으로 크게 돌아가지 않는다
+    return Math.abs(ca - cb) >= 0.5 * h || B[1] - A[3] > 3 * h || B[1] < A[1] - 0.5 * h;
+  }
+  // 다음 줄로: 바로 밑 줄이고(줄 사이가 줄 높이보다 좁고), 새 줄은 앞 줄 끝보다 왼쪽에서 시작한다
+  const gap = B[2] - A[4];
+  return gap < -0.3 * h || gap > h || B[1] >= A[3];
+}
+
 /** [a, b] 글자가 든 문장 (마침표·물음표·느낌표·줄 첫머리 번호에서 끊음, 너무 길면 자름).
  *  before 끝과 after 처음의 띄어쓰기는 원문 그대로 둔다 — 낱말 가운데부터 칠해도 "사용자[가 …자]원"처럼 붙어 나오게. */
 export function sentenceAround(chars: PdfChar[], a: number, b: number) {
@@ -100,10 +122,32 @@ export function sentenceAround(chars: PdfChar[], a: number, b: number) {
   const end = (k: number) => /[.!?。]/.test(chars[k]?.[0] ?? "") && (k + 1 >= chars.length || isSpace(chars[k + 1][0])) && !inMarker(k);
   // 다음 줄이 새 문제·보기 번호로 시작하면 그 앞에서 끊는다 (보기에는 마침표가 없어 다음 문제 번호까지 딸려 왔다)
   const nextItem = (k: number) => chars[k + 1]?.[0] === "\n" && itemMarker(chars, k + 2) > 0;
+  // 글자 차례로는 이어져도 쪽 위 자리로는 떨어진 곳(다른 표 칸·코드 상자·제목)에서도 끊는다.
+  // 태블릿에서 글자 차례는 글자 인식 덩어리 차례라, 밑줄 친 문장 앞뒤에 옆 표·코드 글이 뒤섞여 붙었다
+  const solidAfter = (k: number) => {
+    while (k < chars.length && isSpace(chars[k][0])) k++;
+    return k;
+  };
+  const solidBefore = (k: number) => {
+    while (k >= 0 && isSpace(chars[k][0])) k--;
+    return k;
+  };
   let s = a;
-  while (s > 0 && !end(s - 1) && !itemMarker(chars, s) && a - s < 200) s--;
+  while (s > 0 && !end(s - 1) && !itemMarker(chars, s) && a - s < 200) {
+    if (!isSpace(chars[s - 1][0])) {
+      const n = solidAfter(s);
+      if (n <= a && apart(chars, s - 1, n)) break;
+    }
+    s--;
+  }
   let e = b;
-  while (e < chars.length - 1 && !end(e) && !nextItem(e) && e - b < 200) e++;
+  while (e < chars.length - 1 && !end(e) && !nextItem(e) && e - b < 200) {
+    if (!isSpace(chars[e + 1][0])) {
+      const p = solidBefore(e);
+      if (p >= b && apart(chars, p, e + 1)) break;
+    }
+    e++;
+  }
   return { before: flat(chars, s, a - 1).trimStart(), mark: join(chars, a, b), after: flat(chars, b + 1, e).trimEnd() };
 }
 

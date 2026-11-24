@@ -146,7 +146,21 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
       await page.waitForTimeout(500);
     };
     await editBar();
-    await page.getByLabel("지우개 앞으로").click();
+    // 순서: 지우개 줄을 꾹 눌러 한 줄 위(형광펜 자리)로 끌어 놓는다 (위아래 화살표는 없앴다)
+    {
+      const row = await page.getByLabel("지우개 순서 (꾹 눌러 끌어 옮기기)").boundingBox();
+      const hlRow = await page.getByLabel("형광펜 순서 (꾹 눌러 끌어 옮기기)").boundingBox();
+      if ((await page.getByLabel("지우개 앞으로").count()) !== 0) fail("도구 모음 편집에 위아래 화살표가 남아 있음");
+      const x = row.x + row.width * 0.3, y = row.y + row.height / 2;
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.waitForTimeout(600);
+      await page.mouse.move(x, y - (row.y - hlRow.y) * 0.5, { steps: 5 });
+      await page.mouse.move(x, y - (row.y - hlRow.y), { steps: 5 });
+      await page.waitForTimeout(200);
+      await page.mouse.up();
+      await page.waitForTimeout(400);
+    }
     await page.getByLabel("올가미 보이기").click();
     await page.getByLabel("도구 모음 자리: 왼쪽").click();
     await closeEdit();
@@ -163,7 +177,8 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     const gripEnd = async (vertical, what) => {
       const g = await page.getByLabel(/^도구 모음 옮기기/).boundingBox();
       const sum = await page.getByLabel("요약 만들기").boundingBox();
-      if (vertical ? !(g.y > sum.y + sum.height - 2) : !(g.x > sum.x + sum.width - 2)) fail(`${what}: 손잡이가 맨 끝(요약 단추 ${vertical ? "밑" : "오른쪽"})에 있지 않음`);
+      // 요약 단추와 붙지 않게 조금 띄운다 (사용자 요청: "너무 붙어 있어")
+      if (vertical ? !(g.y > sum.y + sum.height + 6) : !(g.x > sum.x + sum.width + 10)) fail(`${what}: 손잡이가 맨 끝(요약 단추 ${vertical ? "밑" : "오른쪽"})에 띄어서 있지 않음 (손잡이 ${g.x.toFixed(0)},${g.y.toFixed(0)} · 요약 끝 ${(sum.x + sum.width).toFixed(0)},${(sum.y + sum.height).toFixed(0)})`);
     };
     await gripEnd(true, "왼쪽에 붙인 도구 모음");
     await hoverOn(eraserBtn);
@@ -203,7 +218,7 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await gripEnd(false, "떠 있는 도구 모음");
     // 떠 있는 모양 '두 줄': 도구가 두 줄로 (되돌리기는 아랫줄)
     await editBar();
-    await page.getByLabel("떠 있는 모양: 두 줄").click();
+    await page.getByLabel("플로팅 모양: 두 줄").click();
     await closeEdit();
     eB = await eraserBtn.boundingBox();
     const undoB = await page.getByLabel("되돌리기").boundingBox();
@@ -221,8 +236,8 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     eB = await eraserBtn.boundingBox();
     if (!(eB.x < 60)) fail(`도구 모음을 꾹 눌러 왼쪽 끝으로 끌었는데 왼쪽에 붙지 않음 (지우개 x ${eB.x.toFixed(0)})`);
     await editBar();
-    await page.getByLabel("도구 모음 자리: 떠 있게").click();
-    await page.getByLabel("떠 있는 모양: 한 줄").click();
+    await page.getByLabel("도구 모음 자리: 플로팅").click();
+    await page.getByLabel("플로팅 모양: 한 줄").click();
     await closeEdit();
     // 접기: 지금 도구(펜)와 펼치기만 남고, 펼치면 다시 다 보인다
     await page.getByLabel("도구 모음 접기").click();
@@ -236,7 +251,7 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
     await closeEdit();
     eB = await eraserBtn.boundingBox(), hB = await hlBtn.boundingBox();
     if (!(eB.x > hB.x && eB.y < 60) || (await lassoBtn.count()) !== 1) fail("'처음대로'로 도구 모음이 처음 모습(위, 기본 순서, 올가미 보임)으로 돌아오지 않음");
-    console.log("✓ 이름표: 펜 단추 가운데 밑·색 이름 / 도구 모음 편집: 순서·숨기기·왼쪽에 붙이기(이름표는 옆에)·끄는 동안 따라오기·손잡이로 오른쪽·떠 있게(두 줄)·꾹 눌러 옮기기·윗줄 없애기·접기·처음대로");
+    console.log("✓ 이름표: 펜 단추 가운데 밑·색 이름 / 도구 모음 편집: 순서·숨기기·왼쪽에 붙이기(이름표는 옆에)·끄는 동안 따라오기·손잡이로 오른쪽·플로팅(두 줄)·꾹 눌러 옮기기·윗줄 없애기·접기·처음대로");
     await page.mouse.move(x0, y0);
     await page.mouse.down();
     for (let i = 1; i <= 20; i++) await page.mouse.move(x0 + i * 10, y0 + (i % 2 ? 15 : 0), { steps: 2 });
@@ -695,6 +710,36 @@ print(json.dumps([len(ys), (max(ys) - min(ys)) / k if ys else 0]))`, liveShot], 
     await page.getByLabel(/한 번 더 누르면 펜 설정/).click();
     await page.getByLabel("이전 쪽").click();
     await page.waitForTimeout(600);
+
+    // ── 아래쪽 쪽 이동 막대: 누르거나 끌면 그 쪽으로 / 닫았다 다시 열면 마지막에 보던 쪽에서 ──
+    {
+      const bb = await page.getByLabel(/^쪽 이동 막대/).boundingBox();
+      if (!bb) fail("아래쪽 쪽 이동 막대가 없음");
+      const midY = bb.y + bb.height / 2;
+      await page.mouse.click(bb.x + bb.width - 2, midY);
+      await page.waitForTimeout(800);
+      const all = Number((await pageNo()).split(" / ")[1]);
+      if (!(all >= 2) || (await pageNo()) !== `${all} / ${all}`) fail("쪽 이동 막대 오른쪽 끝을 눌렀는데 마지막 쪽으로 가지 않음: " + (await pageNo()));
+      await page.mouse.move(bb.x + bb.width - 2, midY);
+      await page.mouse.down();
+      await page.mouse.move(bb.x + 2, midY, { steps: 10 });
+      await page.mouse.up();
+      await page.waitForTimeout(800);
+      if ((await pageNo()) !== `1 / ${all}`) fail("쪽 이동 막대를 왼쪽 끝으로 끌었는데 첫 쪽으로 가지 않음: " + (await pageNo()));
+      // 마지막 쪽을 보다가 닫고 다시 열면 그 쪽에서
+      await page.mouse.click(bb.x + bb.width - 2, midY);
+      await page.waitForTimeout(800);
+      await page.getByLabel("노트 목록으로").click();
+      await page.getByLabel("book 열기").first().click();
+      await canvas.waitFor({ timeout: 20000 });
+      await page.waitForTimeout(1500);
+      if ((await pageNo()) !== `${all} / ${all}`) fail("닫았다 다시 열었는데 마지막에 보던 쪽이 아님: " + (await pageNo()));
+      // 요약 시험을 위해 첫 쪽으로
+      const bb2 = await page.getByLabel(/^쪽 이동 막대/).boundingBox();
+      await page.mouse.click(bb2.x + 2, bb2.y + bb2.height / 2);
+      await page.waitForTimeout(800);
+      console.log(`✓ 쪽 이동 막대: 오른쪽 끝 → ${all}쪽, 왼쪽으로 끌기 → 1쪽 / 닫았다 열면 마지막에 보던 ${all}쪽에서`);
+    }
 
     await page.getByLabel("요약 만들기").click();
     // 먼저 기기에서 바로 만든 요약 (서버 없이): PDF 글자층에서 칠한 글자를 읽는다

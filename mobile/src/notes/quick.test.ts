@@ -109,6 +109,28 @@ test("question and choice numbers at the start of a line bound the sentence ('1.
   assert.deepEqual(sentenceAround(mid, 6, 8), { before: "", mark: "그리고", after: " 다음은 넷이다." });
 });
 
+test("the sentence stays inside its own block (tablet: table cells and code boxes were glued around an underline)", () => {
+  // 글자 차례: 큰 제목 → 본문 두 줄 → 옆 표 칸 → 아래 코드 상자 (태블릿의 글자 인식 덩어리 차례처럼 뒤섞임)
+  const big = (text: string, x: number, y: number): PdfChar[] => [...text].map((c, i) => [c, x + i * 20, y, x + (i + 1) * 20, y + 24] as PdfChar);
+  const nl = (x: number, y: number, h = 12): PdfChar => ["\n", x, y, x, y + h];
+  const chars: PdfChar[] = [
+    ...big("개념 및 배경", 40, 40), nl(180, 40, 24),
+    ...line("네트워크 공격은 모두 계층별", 40, 80), nl(190, 80),
+    ...line("취약점을 이용하므로", 40, 96), nl(140, 96),
+    ...line("TTL 필드", 400, 60), nl(460, 60), // 오른쪽 표 칸 (위쪽)
+    ...line("arp -a 캐시 조회", 40, 300), // 한참 아래 코드 상자
+  ];
+  const text = chars.map((c) => c[0]).join("");
+  const k = text.indexOf("공격은");
+  const s = sentenceAround(chars, k, k + 2);
+  assert.equal(s.before, "네트워크 ");
+  assert.equal(s.mark, "공격은");
+  assert.equal(s.after, " 모두 계층별 취약점을 이용하므로"); // 바로 밑 줄까지만, 표 칸·코드는 안 붙는다
+  // 상자 높이를 모르는 글자는 예전처럼 마침표까지 이어 본다
+  const flatChars = line("앞 문장. 칠한 말 뒤 문장.").map((c) => [c[0], c[1], 0, c[3], 0] as PdfChar);
+  assert.equal(sentenceAround(flatChars, 6, 7).after, " 말 뒤 문장.");
+});
+
 test("multi-line handwriting is split into lines (top to bottom, strokes in writing order)", async () => {
   const { splitInkLines } = await import("./quick.ts");
   const st = (id: string, x: number, y: number, w = 12, h = 14): Stroke => ({ id, tool: "pen", color: "#000000", width: 2, pts: [x, y, 0.5, x + w, y + h, 0.5] });

@@ -15,6 +15,28 @@ export function clampPage(i: number | undefined, count: number): number {
   return Math.max(0, Math.min(count - 1, Math.floor(i)));
 }
 
+/** 아래쪽 쪽 이동 막대: 막대 위 x(막대 폭 w 안)가 가리키는 쪽 번호 (0부터). 양 끝은 첫 쪽·마지막 쪽 */
+export function scrubIndex(x: number, w: number, count: number): number {
+  if (count <= 1 || !(w > 0)) return 0;
+  return Math.max(0, Math.min(count - 1, Math.round((x / w) * (count - 1))));
+}
+
+/** 노트마다 마지막에 보던 쪽: 이 노트를 맨 뒤(가장 최근)로 넣고, 너무 많으면 오래된 것부터 뺀다 */
+export function rememberPage(map: Readonly<Record<string, string>>, note: string, page: string, max = 300): Record<string, string> {
+  const keys = Object.keys(map).filter((k) => k !== note);
+  const out: Record<string, string> = {};
+  for (const k of keys.slice(Math.max(0, keys.length - (max - 1)))) out[k] = map[k];
+  out[note] = page;
+  return out;
+}
+
+/** 처음 열 쪽: 요약에서 돌아오면 그 쪽, 아니면 마지막에 보던 쪽(그 쪽이 아직 있으면), 없으면 첫 쪽 */
+export function openingPage(pages: readonly { id: string }[], startPage: number | undefined, lastId: string | null): number {
+  if (startPage !== undefined) return clampPage(startPage, pages.length);
+  const i = lastId ? pages.findIndex((p) => p.id === lastId) : -1;
+  return i >= 0 ? i : 0;
+}
+
 /** 되돌리기·다시 하기가 바꾼 쪽이 지금 보는 쪽과 다르면 그 쪽 번호(0부터). 같은 쪽이거나 없는 쪽이면 -1 */
 export function otherPage(pages: { id: string }[], current: string | undefined, changed: string | undefined): number {
   if (!changed || changed === current) return -1;

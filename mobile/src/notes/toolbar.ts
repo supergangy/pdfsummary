@@ -24,7 +24,7 @@ export const DOCKS: { id: ToolbarDock; label: string }[] = [
   { id: "top", label: "위" },
   { id: "left", label: "왼쪽" },
   { id: "right", label: "오른쪽" },
-  { id: "float", label: "떠 있게" },
+  { id: "float", label: "플로팅" }, // 사용자 요청으로 '떠 있게' → '플로팅'
 ];
 
 export function itemLabel(id: ToolbarItem): string {
@@ -50,6 +50,14 @@ export function moveItem(order: readonly ToolbarItem[], id: ToolbarItem, delta: 
   const i = out.indexOf(id), j = i + delta;
   if (i < 0 || j < 0 || j >= out.length) return out;
   [out[i], out[j]] = [out[j], out[i]];
+  return out;
+}
+
+/** 꾹 눌러 끌어 옮기기: id를 to번째 자리로 (나머지는 순서 그대로 밀린다) */
+export function moveTo(order: readonly ToolbarItem[], id: ToolbarItem, to: number): ToolbarItem[] {
+  const out = order.filter((x) => x !== id);
+  if (out.length === order.length) return [...order];
+  out.splice(Math.max(0, Math.min(out.length, Math.round(to))), 0, id);
   return out;
 }
 

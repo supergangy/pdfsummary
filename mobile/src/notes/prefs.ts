@@ -30,6 +30,7 @@ export type Prefs = {
   stylusSeen: boolean;
   flow: PageFlow; // 쪽 넘기기: 좌우(한 쪽씩 딱 맞춰) / 위아래(이어서)
   twoPages: boolean; // 두 쪽씩 보기
+  snapPages: boolean; // 좌우 넘기기에서 손을 떼면 쪽에 딱 맞추기 (기본 꺼짐: 놓은 자리 그대로, 사용자 요청)
   toolbar: string[]; // 도구 모음 순서 (toolbar.ts의 항목 id, 비면 기본 순서)
   toolbarHidden: string[]; // 도구 모음에서 숨긴 항목
   toolbarDock: ToolbarDock; // 도구 모음 자리: 위·왼쪽·오른쪽·떠 있게
@@ -62,6 +63,7 @@ export const DEFAULT_PREFS: Prefs = {
   stylusSeen: false,
   flow: "h",
   twoPages: false,
+  snapPages: false,
   toolbar: [],
   toolbarHidden: [],
   toolbarDock: "top",

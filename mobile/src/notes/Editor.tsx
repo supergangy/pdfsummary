@@ -1298,6 +1298,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         jump={jump}
         flow={prefs.flow}
         two={prefs.twoPages}
+        snap={prefs.snapPages}
         hidden={hidden}
         tool={tool}
         color={color}
@@ -1445,6 +1446,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
               <MenuItem label="좌우로 넘기기 (한 쪽씩)" checked={prefs.flow === "h"} onPress={() => { setMenu(false); setP({ flow: "h" }); }} />
               <MenuItem label="위아래로 넘기기 (이어서)" checked={prefs.flow === "v"} onPress={() => { setMenu(false); setP({ flow: "v" }); }} />
               <MenuItem label="두 쪽씩 보기" checked={prefs.twoPages} onPress={() => { setMenu(false); setP({ twoPages: !prefs.twoPages }); }} />
+              <MenuItem label="넘길 때 쪽에 딱 맞추기" checked={prefs.snapPages} onPress={() => { setMenu(false); setP({ snapPages: !prefs.snapPages }); }} />
               <MenuSep />
               <MenuItem label="＋ 뒤에 빈 쪽 (같은 속지)" onPress={() => addPage()} />
               <MenuItem label="＋ 뒤에 줄 쪽" onPress={() => addPage("lined")} />

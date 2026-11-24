@@ -54,6 +54,8 @@ type Props = {
   jump: JumpCmd;
   flow: PageFlow; // 좌우로 넘기기 / 위아래로 이어 보기
   two: boolean; // 두 쪽씩 보기
+  /** 넘길 때 쪽에 딱 맞추기 (꺼져 있으면 놓은 자리에 그대로 — 쪽 안으로 튕겨 들어가지 않는다) */
+  snap?: boolean;
   hidden: Set<string>; // 지우는 중이라 잠깐 감춘 획
   tool: ToolName;
   color: string;
@@ -115,6 +117,10 @@ export function PageCanvas(props: Props) {
   const docW = useSharedValue(L.w);
   const docH = useSharedValue(L.h);
   const flowV = useSharedValue(flow === "v");
+  const snapSV = useSharedValue(!!props.snap);
+  useEffect(() => {
+    snapSV.value = !!props.snap;
+  }, [props.snap, snapSV]);
   const transform = useDerivedValue(() => [{ translateX: tx.value }, { translateY: ty.value }, { scale: scale.value }]);
 
   const cb = useRef(props);
@@ -224,13 +230,14 @@ export function PageCanvas(props: Props) {
     const cx = vw.value / 2, cy = vh.value / 2;
     const ax = (cx - tx.value) / scale.value, ay = (cy - ty.value) / scale.value;
     let [x, y] = clampXY(s, cx - ax * s, cy - ay * s, docW.value, docH.value, vw.value, vh.value);
-    // 좌우 넘기기: 문서 전체가 아니라 지금 쪽(묶음) 안으로 — 쪽이 화면보다 작으면 가운데에
-    // (문서 전체로 맞추면 첫 쪽에서 줄였을 때 쪽이 왼쪽 끝에 붙었다)
+    // 좌우 넘기기: 쪽이 화면보다 작아지면 지금 쪽을 가운데에 (문서 전체로 맞추면 첫 쪽에서 줄였을 때 쪽이 왼쪽 끝에 붙었다).
+    // 쪽에 맞추기를 켰으면 크게 볼 때도 지금 쪽 안에 가둔다
     if (!flowV.value) {
       const sp = spreads.value;
       const si = nearestSpread(sp, (cx - x) / s, (cy - y) / s);
       const sx0 = sp[si * 4], sw = sp[si * 4 + 2] * s;
-      x = sw + MARGIN * 2 <= vw.value ? (vw.value - sw) / 2 - sx0 * s : Math.min(MARGIN - sx0 * s, Math.max(vw.value - sw - sx0 * s - MARGIN, x));
+      if (sw + MARGIN * 2 <= vw.value) x = (vw.value - sw) / 2 - sx0 * s;
+      else if (snapSV.value) x = Math.min(MARGIN - sx0 * s, Math.max(vw.value - sw - sx0 * s - MARGIN, x));
     }
     scale.value = s;
     tx.value = x;
@@ -379,7 +386,8 @@ export function PageCanvas(props: Props) {
     "worklet";
     const s = scale.value, W = vw.value, H = vh.value;
     let xLo: number, xHi: number;
-    if (!flowV.value) {
+    // 쪽에 맞추기를 켰을 때만 지금 쪽(묶음) 안에 가둔다. 꺼져 있으면 문서 전체 안에서 놓은 자리 그대로
+    if (!flowV.value && snapSV.value) {
       const si = centerSpread();
       const ax = spreads.value[si * 4], aw = spreads.value[si * 4 + 2] * s;
       if (aw + MARGIN * 2 <= W) xLo = xHi = (W - aw) / 2 - ax * s;
@@ -427,7 +435,7 @@ export function PageCanvas(props: Props) {
   /** 오른쪽(가로 넘김이면 아래) 위치 막대를 끌다가 놓았을 때: 좌우 넘기기 맞춤 배율이면 가까운 쪽에 딱 맞춘다 */
   const scrubEnd = () => {
     "worklet";
-    if (!flowV.value) {
+    if (!flowV.value && snapSV.value) {
       const s = scale.value, W = vw.value;
       const si = centerSpread();
       const ax = spreads.value[si * 4], aw = spreads.value[si * 4 + 2] * s;
@@ -483,7 +491,7 @@ export function PageCanvas(props: Props) {
     axis.value = 0;
     const si = centerSpread();
     startSpread.value = si;
-    paging.value = !flowV.value && spreads.value[si * 4 + 2] * scale.value + MARGIN * 2 <= vw.value + 1;
+    paging.value = snapSV.value && !flowV.value && spreads.value[si * 4 + 2] * scale.value + MARGIN * 2 <= vw.value + 1;
   };
 
   const one = usePanGesture({

@@ -734,11 +734,17 @@ print(json.dumps([len(ys), (max(ys) - min(ys)) / k if ys else 0]))`, liveShot], 
       await canvas.waitFor({ timeout: 20000 });
       await page.waitForTimeout(1500);
       if ((await pageNo()) !== `${all} / ${all}`) fail("닫았다 다시 열었는데 마지막에 보던 쪽이 아님: " + (await pageNo()));
-      // 요약 시험을 위해 첫 쪽으로
-      const bb2 = await page.getByLabel(/^쪽 이동 막대/).boundingBox();
-      await page.mouse.click(bb2.x + 2, bb2.y + bb2.height / 2);
+      // 쪽 번호를 넣어 바로 가기 ('N / 전체'를 누르면 창): 숫자가 아니면 안내, 숫자면 그 쪽으로 (요약 시험을 위해 1쪽으로)
+      await page.getByLabel(/^쪽 번호로 가기/).click();
+      await page.getByLabel("갈 쪽 번호").fill("하나");
+      await page.getByText("이동", { exact: true }).click();
+      await page.getByText(/숫자로 넣어 주세요/).waitFor({ timeout: 3000 });
+      await page.getByLabel("갈 쪽 번호").fill("1");
+      await page.getByLabel("갈 쪽 번호").press("Enter");
+      await page.getByLabel("갈 쪽 번호").waitFor({ state: "detached", timeout: 3000 });
       await page.waitForTimeout(800);
-      console.log(`✓ 쪽 이동 막대: 오른쪽 끝 → ${all}쪽, 왼쪽으로 끌기 → 1쪽 / 닫았다 열면 마지막에 보던 ${all}쪽에서`);
+      if ((await pageNo()) !== `1 / ${all}`) fail("쪽 번호 1을 넣었는데 1쪽으로 가지 않음: " + (await pageNo()));
+      console.log(`✓ 쪽 이동 막대: 오른쪽 끝 → ${all}쪽, 왼쪽으로 끌기 → 1쪽 / 닫았다 열면 마지막에 보던 ${all}쪽에서 / 쪽 번호 넣어 가기`);
     }
 
     await page.getByLabel("요약 만들기").click();

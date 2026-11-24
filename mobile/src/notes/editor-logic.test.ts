@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { clampPage, openingPage, rememberPage, scrubIndex, isHighlighterTap, justAfter, otherPage, pageBg, penDoubleClick, penSwap, previewPts, previewScale, reach, ro, swatchEdge, type BgCache, type SwapSaved, colorName, widthName } from "./editor-logic.ts";
+import { clampPage, parsePageInput, openingPage, rememberPage, scrubIndex, isHighlighterTap, justAfter, otherPage, pageBg, penDoubleClick, penSwap, previewPts, previewScale, reach, ro, swatchEdge, type BgCache, type SwapSaved, colorName, widthName } from "./editor-logic.ts";
 import { History } from "./history.ts";
 import { insertPage, removePage, type Ink, type Notebook, type Stroke } from "./model.ts";
 
@@ -181,4 +181,16 @@ test("마지막에 보던 쪽 기억: 다시 열면 그 쪽, 요약에서 돌아
   let big: Record<string, string> = {};
   for (let i = 0; i < 5; i++) big = rememberPage(big, "n" + i, "p", 3);
   assert.deepEqual(Object.keys(big), ["n2", "n3", "n4"]);
+});
+
+test("쪽 번호 입력해서 가기: 숫자만, 범위 밖은 첫·마지막 쪽으로", () => {
+  assert.equal(parsePageInput("45", 92), 44);
+  assert.equal(parsePageInput(" 45쪽 ", 92), 44);
+  assert.equal(parsePageInput("４５", 92), 44); // 전각 숫자
+  assert.equal(parsePageInput("p.7", 92), 6);
+  assert.equal(parsePageInput("200", 92), 91);
+  assert.equal(parsePageInput("0", 92), 0);
+  assert.equal(parsePageInput("", 92), null);
+  assert.equal(parsePageInput("마흔", 92), null);
+  assert.equal(parsePageInput("4-5", 92), null);
 });

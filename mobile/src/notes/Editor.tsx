@@ -8,7 +8,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { pageText } from "../../modules/pdf-pages";
 import { StylusView } from "../../modules/stylus";
 import { Button, floating, radius, styles as ui, type, useTheme, type Theme } from "../ui";
-import { clampPage, openingPage, colorName, isHighlighterTap, justAfter, otherPage, pageBg, penSwap, swatchEdge, widthName, type BgCache, type SwapSaved } from "./editor-logic";
+import { clampPage, openingPage, parsePageInput, colorName, isHighlighterTap, justAfter, otherPage, pageBg, penSwap, swatchEdge, widthName, type BgCache, type SwapSaved } from "./editor-logic";
 import { bounds, eraseFrom, fitHighlight, hitAlong, straighten, thin, type CharBox } from "./geometry";
 import { History, removal, type Op } from "./history";
 import {
@@ -186,6 +186,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const floatSizeRef = useRef(floatSize);
   floatSizeRef.current = floatSize;
   const [tbEdit, setTbEdit] = useState(false); // 도구 모음 편집 창
+  const [goOpen, setGoOpen] = useState(false); // 쪽 번호를 넣어 그 쪽으로 가는 창
   /** 도구 모음 집어 옮기기: 시작·움직임·놓기 (손잡이 끌기와 도구 모음 꾹 누르기가 함께 쓴다) */
   const tbDrag = useMemo(() => {
     const last = { x: 0, y: 0, x0: 0, y0: 0, dock: "" };
@@ -1259,7 +1260,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         tapOnly={listening && !!audio.cur}
         fade={audio.cur ? { rec: audio.cur.id, ms: fadeMs } : null}
       />
-      {nb.pages.length > 1 && !selection && !audio.cur && <PageScrubber count={nb.pages.length} index={pi} onSeek={(i) => showPage(i)} />}
+      {nb.pages.length > 1 && !selection && !audio.cur && <PageScrubber count={nb.pages.length} index={pi} onSeek={(i) => showPage(i)} onAskPage={() => setGoOpen(true)} />}
       </View>
       {dock === "right" && sideStrip}
       </View>
@@ -1390,6 +1391,16 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         </Pressable>
       </Modal>
 
+      <GoToPageDialog
+        open={goOpen}
+        count={nb.pages.length}
+        current={pi}
+        onClose={() => setGoOpen(false)}
+        onGo={(i) => {
+          setGoOpen(false);
+          showPage(i);
+        }}
+      />
       <ToolbarDialog open={tbEdit} prefs={prefs} setP={setP} onClose={() => setTbEdit(false)} />
       <Modal visible={insertMenu} transparent animationType="fade" onRequestClose={() => setInsertMenu(false)}>
         <Pressable style={[sx.menuBack, { backgroundColor: popBackdrop(t) }]} onPress={() => setInsertMenu(false)}>
@@ -1722,6 +1733,53 @@ function TextDialog({ open, initial, size, editing, onCancel, onSave }: { open: 
         <View style={{ flex: 1 }} />
         <Button label="취소" onPress={onCancel} />
         <Button kind="primary" label="넣기" onPress={() => onSave(v, sz)} />
+      </View>
+    </Dialog>
+  );
+}
+
+/** 쪽 번호를 넣어 그 쪽으로 바로 가기 (아래쪽 쪽 이동 막대의 'N / 전체'를 누르면) */
+function GoToPageDialog({ open, count, current, onClose, onGo }: { open: boolean; count: number; current: number; onClose: () => void; onGo: (i: number) => void }) {
+  const t = useTheme();
+  const [v, setV] = useState("");
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    if (open) {
+      setV("");
+      setErr("");
+    }
+  }, [open]);
+  const go = () => {
+    const i = parsePageInput(v, count);
+    if (i === null) {
+      setErr(`1부터 ${count}까지 숫자로 넣어 주세요.`);
+      return;
+    }
+    onGo(i);
+  };
+  return (
+    <Dialog open={open} title="쪽으로 가기" maxWidth={360} onClose={onClose}>
+      <Text style={[type.caption, { color: t.muted }]}>{`지금 ${current + 1}쪽 · 전체 ${count}쪽`}</Text>
+      <TextInput
+        value={v}
+        onChangeText={(x) => {
+          setV(x);
+          setErr("");
+        }}
+        autoFocus
+        keyboardType="number-pad"
+        returnKeyType="go"
+        onSubmitEditing={go}
+        accessibilityLabel="갈 쪽 번호"
+        placeholder={`1 ~ ${count}`}
+        placeholderTextColor={t.muted}
+        style={[ui.input, { borderColor: err ? t.bad : t.line, color: t.ink, backgroundColor: t.card, fontSize: 20, textAlign: "center" }]}
+      />
+      {!!err && <Text style={[type.caption, { color: t.bad }]}>{err}</Text>}
+      <View style={sx.actions}>
+        <View style={{ flex: 1 }} />
+        <Button label="취소" onPress={onClose} />
+        <Button kind="primary" label="이동" onPress={go} />
       </View>
     </Dialog>
   );

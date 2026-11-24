@@ -1,11 +1,11 @@
 // 아래쪽 쪽 이동 막대: 막대를 누르거나 끌면 그 쪽으로 바로 간다 (긴 노트를 빨리 넘기기).
 import { useRef, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
 import { floating, useTheme } from "../ui";
 import { scrubIndex } from "./editor-logic";
 
-export function PageScrubber({ count, index, onSeek }: { count: number; index: number; onSeek: (i: number) => void }) {
+export function PageScrubber({ count, index, onSeek, onAskPage }: { count: number; index: number; onSeek: (i: number) => void; onAskPage: () => void }) {
   const t = useTheme();
   const width = useRef(1);
   const [held, setHeld] = useState<number | null>(null); // 끄는 동안 손가락이 가리키는 쪽
@@ -39,7 +39,16 @@ export function PageScrubber({ count, index, onSeek }: { count: number; index: n
   return (
     <View pointerEvents="box-none" style={sx.wrap}>
       <View style={[floating(t), sx.bar]}>
-        <Text style={[sx.num, { color: held !== null ? t.accent : t.sub }]}>{`${cur + 1} / ${count}`}</Text>
+        {/* 쪽 번호를 누르면 번호를 넣어 바로 가는 창 */}
+        <Pressable
+          onPress={onAskPage}
+          hitSlop={6}
+          accessibilityRole="button"
+          accessibilityLabel={`쪽 번호로 가기 (지금 ${cur + 1}쪽, 전체 ${count}쪽)`}
+          style={({ pressed }) => [sx.numBtn, { backgroundColor: pressed ? t.lineSoft : t.sunken }]}
+        >
+          <Text style={[sx.num, { color: held !== null ? t.accent : t.sub }]}>{`${cur + 1} / ${count}`}</Text>
+        </Pressable>
         <GestureDetector gesture={pan}>
           <View
             collapsable={false}
@@ -65,7 +74,8 @@ export function PageScrubber({ count, index, onSeek }: { count: number; index: n
 const sx = StyleSheet.create({
   wrap: { position: "absolute", left: 0, right: 0, bottom: 14, alignItems: "center", zIndex: 20 },
   bar: { flexDirection: "row", alignItems: "center", gap: 12, width: "62%", minWidth: 280, maxWidth: 620, height: 44, borderRadius: 22, paddingLeft: 16, paddingRight: 22 },
-  num: { minWidth: 70, fontSize: 14, fontWeight: "700", fontVariant: ["tabular-nums"] },
+  numBtn: { height: 32, paddingHorizontal: 12, borderRadius: 16, justifyContent: "center", marginLeft: -8 },
+  num: { minWidth: 62, textAlign: "center", fontSize: 14, fontWeight: "700", fontVariant: ["tabular-nums"] },
   hit: { flex: 1, height: 44, justifyContent: "center" },
   track: { height: 4, borderRadius: 2 },
   fill: { position: "absolute", left: 0, height: 4, borderRadius: 2 },

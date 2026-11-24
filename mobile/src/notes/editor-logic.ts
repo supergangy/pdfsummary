@@ -21,6 +21,13 @@ export function scrubIndex(x: number, w: number, count: number): number {
   return Math.max(0, Math.min(count - 1, Math.round((x / w) * (count - 1))));
 }
 
+/** 쪽 번호 입력 → 쪽 번호(0부터). 숫자가 아니면 null, 범위 밖이면 첫·마지막 쪽으로 (전각 숫자·'쪽'·띄어쓰기는 받아 준다) */
+export function parsePageInput(text: string, count: number): number | null {
+  const t = text.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace(/\s+|쪽|p\.?/gi, "");
+  if (!/^\d{1,6}$/.test(t) || count < 1) return null;
+  return Math.max(0, Math.min(count - 1, Number(t) - 1));
+}
+
 /** 노트마다 마지막에 보던 쪽: 이 노트를 맨 뒤(가장 최근)로 넣고, 너무 많으면 오래된 것부터 뺀다 */
 export function rememberPage(map: Readonly<Record<string, string>>, note: string, page: string, max = 300): Record<string, string> {
   const keys = Object.keys(map).filter((k) => k !== note);

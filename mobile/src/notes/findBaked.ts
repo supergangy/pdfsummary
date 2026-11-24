@@ -3,7 +3,7 @@
 import { AlphaType, ColorType, Skia } from "@shopify/react-native-skia";
 
 import { pageText } from "../../modules/pdf-pages";
-import { charsIn, COLOR_INFO, findBakedHighlights, type BakedMark, type ColorKey } from "./bakedHighlights";
+import { charsIn, COLOR_INFO, findBakedHighlights, foundColors, type BakedMark, type ColorKey } from "./bakedHighlights";
 import type { Notebook } from "./model";
 import { rasterPage } from "./pageRaster";
 import { highlightItemsFromChars, type QuickItem, type QuickSummary } from "./quick";
@@ -41,18 +41,9 @@ export async function scanBaked(nb: Notebook, pdfUri: string, onProgress: (done:
   return { pages, scanned: done, total: todo.length };
 }
 
-/** 찾은 색과 개수 (많은 순) */
-export function bakedColors(scan: BakedScan): { key: ColorKey; count: number; pages: number }[] {
-  const by = new Map<ColorKey, { count: number; pages: Set<number> }>();
-  for (const [i, ms] of scan.pages) {
-    for (const m of ms) {
-      const e = by.get(m.color) ?? { count: 0, pages: new Set<number>() };
-      e.count++;
-      e.pages.add(i);
-      by.set(m.color, e);
-    }
-  }
-  return [...by].map(([key, e]) => ({ key, count: e.count, pages: e.pages.size })).sort((a, b) => b.count - a.count);
+/** 찾은 색과 개수 (사람이 칠한 것 같은 색이 앞, 거의 모든 쪽에 있는 색은 뒤) */
+export function bakedColors(scan: BakedScan) {
+  return foundColors(scan.pages, scan.scanned);
 }
 
 /** 고른 색의 형광펜 밑 글자를 읽어 요약에 더한다 (글자를 못 읽은 형광펜은 뺀다) */

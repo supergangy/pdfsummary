@@ -61,3 +61,14 @@ test("칠한 상자 안의 글자", () => {
   const chars: PdfChar[] = [["가", 0, 0, 10, 10], [" ", 10, 0, 15, 10], ["나", 15, 0, 25, 10], ["다", 100, 0, 110, 10]];
   assert.deepEqual(charsIn(chars, [[0, 0, 30, 10]]), [0, 2]);
 });
+
+test("찾은 색: 거의 모든 쪽에 나오는 색(책에 인쇄된 파랑 상자)은 뒤로, 기본은 사람이 칠한 것 같은 색", async () => {
+  const { foundColors } = await import("./bakedHighlights.ts");
+  const m = (color: "blue" | "yellow") => ({ rect: [0, 0, 1, 1] as [number, number, number, number], parts: [], color });
+  const pages = new Map<number, ReturnType<typeof m>[]>();
+  for (let i = 0; i < 10; i++) pages.set(i, [m("blue"), m("blue"), m("blue")]);
+  pages.get(2)!.push(m("yellow"));
+  pages.get(5)!.push(m("yellow"));
+  const cs = foundColors(pages, 10);
+  assert.deepEqual(cs.map((c) => [c.key, c.count, c.pages, c.printed]), [["yellow", 2, 2, false], ["blue", 30, 10, true]]);
+});

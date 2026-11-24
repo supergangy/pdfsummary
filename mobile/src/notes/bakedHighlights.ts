@@ -228,3 +228,22 @@ export function charsIn(chars: PdfChar[], parts: Box[]): number[] {
   });
   return out;
 }
+
+export type FoundColor = { key: ColorKey; count: number; pages: number; printed: boolean };
+
+/** 찾은 색과 개수. 살펴본 쪽의 절반 넘게 나오는 색은 책에 인쇄된 색(머리 띠·그림 번호 상자 등)일 가능성이 높아
+ *  printed로 표시하고 뒤로 보낸다 — 기본으로 고르는 색은 맨 앞(사람이 칠한 것 같은 색 중 가장 많은 것) */
+export function foundColors(pages: Map<number, BakedMark[]>, scanned: number): FoundColor[] {
+  const by = new Map<ColorKey, { count: number; pages: Set<number> }>();
+  for (const [i, ms] of pages) {
+    for (const m of ms) {
+      const e = by.get(m.color) ?? { count: 0, pages: new Set<number>() };
+      e.count++;
+      e.pages.add(i);
+      by.set(m.color, e);
+    }
+  }
+  return [...by]
+    .map(([key, e]) => ({ key, count: e.count, pages: e.pages.size, printed: scanned >= 6 && e.pages.size / scanned > 0.5 }))
+    .sort((a, b) => Number(a.printed) - Number(b.printed) || b.count - a.count);
+}

@@ -249,7 +249,7 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary, onOpenNot
                     </View>
                     <View style={[s.swatch, { backgroundColor: COLOR_INFO[c.key].hex }]} />
                     <Text style={[type.body, { color: t.ink, flex: 1 }]}>{COLOR_INFO[c.key].name}</Text>
-                    <Text style={[type.caption, { color: t.muted }]}>{`${c.count}곳 · ${c.pages}쪽`}</Text>
+                    <Text style={[type.caption, { color: t.muted, textAlign: "right" }]}>{`${c.count}곳 · ${c.pages}쪽`}{c.printed ? "\n거의 모든 쪽 — 책에 인쇄된 색일 수 있어요" : ""}</Text>
                   </Pressable>
                 );
               })}

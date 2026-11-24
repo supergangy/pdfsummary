@@ -642,6 +642,71 @@ print(json.dumps([len(ys), (max(ys) - min(ys)) / k if ys else 0]))`, liveShot], 
     }
     if (!texts.some((x) => x.includes("기질과 구조가 비슷하여"))) fail("나만의 노트에 칠한 문장이 없음");
     console.log("✓ 나만의 노트: 고르고 색 뜻·메모를 고쳐 새 노트로 (제목·쪽·칠한 글·문장·메모)");
+
+    // ── 사진·스티커·붙여넣기 ──
+    await page.reload();
+    await page.getByText("＋ 새 노트").waitFor({ timeout: 20000 });
+    await page.getByText("＋ 새 노트").click();
+    await page.getByLabel("새 노트 이름").fill("사진 노트");
+    await page.getByText("만들기", { exact: true }).click();
+    await canvas.waitFor({ timeout: 20000 });
+    await page.waitForTimeout(1500);
+    // 빨간 40×30 PNG (사진 대신)
+    const pngPath = path.join(TMP, "red.png");
+    const pngB64 = execFileSync("python3", ["-c", String.raw`
+import sys, zlib, struct, base64
+w, h = 40, 30
+raw = b"".join(b"\x00" + b"\xe0\x20\x20" * w for _ in range(h))
+def ch(t, d): return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+png = b"\x89PNG\r\n\x1a\n" + ch(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + ch(b"IDAT", zlib.compress(raw)) + ch(b"IEND", b"")
+open(sys.argv[1], "wb").write(png); print(base64.b64encode(png).decode())`, pngPath], { encoding: "utf8" }).trim();
+    const images = async () => (await allStrokes(page)).filter((st) => st.tool === "image");
+    await page.getByLabel("사진·스티커 넣기").click();
+    const [fcImg] = await Promise.all([page.waitForEvent("filechooser"), page.getByText("사진 고르기 (갤러리)").click()]);
+    await fcImg.setFiles(pngPath);
+    await page.waitForTimeout(1500);
+    let imgs = await images();
+    if (imgs.length !== 1 || !String(imgs[0].img).startsWith("data:image/")) fail(`사진을 골랐는데 쪽에 붙지 않음 (${imgs.length}개)`);
+    const w0 = imgs[0].pts[3] - imgs[0].pts[0];
+    await page.getByLabel("고른 것 크게").click();
+    await page.waitForTimeout(900);
+    imgs = await images();
+    const w1 = imgs[0].pts[3] - imgs[0].pts[0];
+    if (Math.abs(w1 / w0 - 1.25) > 0.02) fail(`'크게'를 눌렀는데 사진이 1.25배가 아님 (${w0.toFixed(1)} → ${w1.toFixed(1)})`);
+    // 스티커: 도장 '중요', 그림 '별'
+    await page.getByLabel("사진·스티커 넣기").click();
+    await page.getByText("스티커", { exact: true }).click();
+    await page.getByLabel("도장 스티커: 중요").click();
+    await page.waitForTimeout(900);
+    const stamp = (await allStrokes(page)).find((st) => st.stamp);
+    if (!stamp || stamp.text !== "중요") fail("도장 스티커 '중요'가 들어가지 않음");
+    await canvas.getByText("중요").waitFor({ timeout: 5000 });
+    await page.getByLabel("사진·스티커 넣기").click();
+    await page.getByText("스티커", { exact: true }).click();
+    await page.getByLabel("그림 스티커: 별").click();
+    await page.waitForTimeout(900);
+    imgs = await images();
+    if (imgs.length !== 2 || !String(imgs[1].img).startsWith("data:image/png")) fail("그림 스티커 '별'이 PNG 그림으로 들어가지 않음");
+    // 웹은 Ctrl+V(붙여넣기)로 복사한 그림도
+    await page.evaluate((b64) => {
+      const bin = atob(b64);
+      const u = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+      const dt = new DataTransfer();
+      dt.items.add(new File([u], "copied.png", { type: "image/png" }));
+      document.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true }));
+    }, pngB64);
+    await page.waitForTimeout(1500);
+    if ((await images()).length !== 3) fail("복사한 그림을 붙여넣었는데 쪽에 붙지 않음");
+    // PDF로 내보내면 그림과 도장 글이 들어간다
+    await page.getByLabel("더 보기").click();
+    const [dl2] = await Promise.all([page.waitForEvent("download"), page.getByText("PDF로 내보내기 (필기 포함)").click()]);
+    const out2 = path.join(TMP, "photos.pdf");
+    await dl2.saveAs(out2);
+    const pdfInfo = execFileSync("python3", ["-c", "import sys, pymupdf; p = pymupdf.open(sys.argv[1])[0]; print(len(set(x[0] for x in p.get_images()))); print(p.get_text())", out2], { encoding: "utf8" });
+    if (Number(pdfInfo.trim().split(/\s+/)[0]) < 2 || !pdfInfo.includes("중요")) fail("내보낸 PDF에 사진·스티커가 없음: " + pdfInfo.slice(0, 80));
+    console.log("✓ 사진 고르기·크게, 도장·그림 스티커, Ctrl+V 붙여넣기, PDF 내보내기에 사진·도장");
+
     if (errors.length) fail("페이지 오류: " + errors.join(" | "));
   } catch (e) {
     await page.screenshot({ path: path.join(TMP, "failure.png") }).catch(() => {});

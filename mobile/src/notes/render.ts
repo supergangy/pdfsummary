@@ -1,11 +1,27 @@
 // 획·속지를 Skia 그림(Picture)으로. 필기 화면과 쪽 모아보기가 함께 쓴다.
-import { BlendMode, PaintStyle, Skia, StrokeCap, StrokeJoin, createPicture, type SkPath } from "@shopify/react-native-skia";
+import { BlendMode, FilterMode, MipmapMode, PaintStyle, Skia, StrokeCap, StrokeJoin, createPicture, type SkImage, type SkPath } from "@shopify/react-native-skia";
 
 import { strokeDraw, type StrokeDraw } from "./geometry";
 import type { Page, Stroke } from "./model";
 
 /** 획 객체마다 그리는 방법과 경로를 기억한다 (옮기거나 바꾼 획은 새 객체라 다시 만든다) */
 export type PathCache = WeakMap<Stroke, { draw: StrokeDraw; path: SkPath } | null>;
+
+/** 쪽에 붙인 사진·그림 스티커를 푼 그림 (획 객체마다 한 번만 푼다) */
+const images = new WeakMap<Stroke, SkImage | null>();
+export function strokeImage(s: Stroke): SkImage | null {
+  if (!images.has(s)) {
+    let img: SkImage | null = null;
+    try {
+      const b64 = s.img?.slice(s.img.indexOf(",") + 1);
+      if (b64) img = Skia.Image.MakeImageFromEncoded(Skia.Data.fromBase64(b64));
+    } catch {
+      img = null;
+    }
+    images.set(s, img);
+  }
+  return images.get(s) ?? null;
+}
 
 export function inkPicture(strokes: Stroke[], hidden: Set<string>, w: number, h: number, cache: PathCache) {
   const get = (s: Stroke) => {
@@ -39,6 +55,16 @@ export function inkPicture(strokes: Stroke[], hidden: Set<string>, w: number, h:
       }
       c.drawPath(path, paint);
     };
+    // 사진·그림 스티커가 맨 밑 (그 위에 칠하고 쓸 수 있게), 그다음 형광펜, 맨 위에 글씨
+    const ip = Skia.Paint();
+    ip.setAntiAlias(true);
+    for (const s of strokes) {
+      if (s.tool !== "image" || hidden.has(s.id)) continue;
+      const img = strokeImage(s);
+      if (!img) continue;
+      const [x0, y0, , x1, y1] = s.pts;
+      c.drawImageRectOptions(img, Skia.XYWHRect(0, 0, img.width(), img.height()), Skia.XYWHRect(x0, y0, x1 - x0, y1 - y0), FilterMode.Linear, MipmapMode.Linear, ip);
+    }
     // 형광펜은 글씨 밑에 깔리게 먼저
     for (const s of strokes) if (s.tool === "highlighter" && !hidden.has(s.id)) paintOne(s);
     for (const s of strokes) if (s.tool === "pen" && !hidden.has(s.id)) paintOne(s);

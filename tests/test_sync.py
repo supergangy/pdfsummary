@@ -118,3 +118,16 @@ def test_http_flow(server, tmp_path, monkeypatch):  # noqa: F811
     assert call(server, "/api/sync/info", code=None, headers=H)[0] == 403
     app._SYNC.close()
     monkeypatch.setattr(app, "_SYNC", None)
+
+
+def test_pull_splits_big_ops(store):
+    """사진을 붙인 쪽처럼 작업 내용이 크면 한 번에 다 주지 않고 나눠 준다 (적어도 하나씩은)."""
+    sid = space_id(store.create_space())
+    big = {"t": "stroke", "id": "x", "v": {"img": "A" * 6000}}
+    store.push(sid, "A", [op("cccccc1", big), op("cccccc2", big), op("cccccc3", big)])
+    r = store.pull(sid, 0, max_bytes=10000)
+    assert [o["seq"] for o in r["ops"]] == [1] and r["more"]
+    r = store.pull(sid, r["last"], max_bytes=100)
+    assert [o["seq"] for o in r["ops"]] == [2] and r["more"]
+    r = store.pull(sid, r["last"])
+    assert [o["seq"] for o in r["ops"]] == [3] and not r["more"]

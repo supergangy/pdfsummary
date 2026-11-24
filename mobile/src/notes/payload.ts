@@ -13,7 +13,8 @@ export function notePayload(nb: Notebook, ink: Ink): NotePayload {
       w: p.w,
       h: p.h,
       ...(p.pdf !== undefined ? { pdf: p.pdf } : {}),
-      strokes: (ink[p.id] ?? []).map((s) => ({ tool: s.tool, color: s.color, width: s.width, pts: s.pts, ...(s.text !== undefined ? { text: s.text } : {}) })),
+      // 붙인 사진·그림 스티커는 요약에 쓰지 않으므로 보내지 않는다
+      strokes: (ink[p.id] ?? []).filter((s) => s.tool !== "image").map((s) => ({ tool: s.tool, color: s.color, width: s.width, pts: s.pts, ...(s.text !== undefined ? { text: s.text } : {}) })),
     })),
   };
 }

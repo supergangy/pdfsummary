@@ -360,3 +360,20 @@ test("pdf hash: the streaming function is used (file never read into JS); withou
   assert.equal(store2.engine.state.pdfSha[nb2.id], undefined);
   assert.equal(await store2.pdfBytes(nb2.id), null, "엔진이 올릴 때도 null");
 });
+
+test("사진처럼 큰 획은 작업을 나눠 보내고 다른 기기에 그대로 간다", async () => {
+  const server = new FakeServer();
+  const A = await device(server), B = await device(server);
+  A.engine.opBytes = 3000;
+  A.engine.pushBytes = 7000;
+  const nb = blankNotebook("사진", "plain", 1);
+  await A.store.create(nb);
+  const img = (id: string): Stroke => ({ id, tool: "image", color: "#000000", width: 0, pts: [0, 0, 0, 100, 80, 0], img: "data:image/jpeg;base64," + "A".repeat(2000) });
+  await A.store.savePage(nb.id, nb.pages[0].id, [img("i1"), img("i2"), img("i3"), img("i4")]);
+  for (const op of A.engine.state.outbox) assert.ok(JSON.stringify(op.w).length <= 3000 || op.w.length === 1, "작업 하나가 너무 큼");
+  assert.ok(A.engine.state.outbox.length >= 4);
+  await settle(A, B, A, B);
+  const got = await B.store.loadInk((await B.store.load(nb.id))!);
+  assert.deepEqual((got[nb.pages[0].id] ?? []).map((s) => s.id).sort(), ["i1", "i2", "i3", "i4"]);
+  assert.equal(got[nb.pages[0].id][0].img?.length, img("x").img!.length);
+});

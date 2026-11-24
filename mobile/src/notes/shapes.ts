@@ -19,8 +19,8 @@ export function inside(x: number, y: number, poly: number[]): boolean {
 function lassoPoints(s: Stroke, step = 3): number[] {
   const p = s.pts, out: number[] = [];
   if (p.length < 3) return out;
-  if (s.tool === "text" && p.length === 6) {
-    // 글상자는 상자 안을 고르게 채운 점으로
+  if ((s.tool === "text" || s.tool === "image") && p.length === 6) {
+    // 글상자·사진은 상자 안을 고르게 채운 점으로
     const nx = Math.max(1, Math.min(40, Math.ceil((p[3] - p[0]) / 4))), ny = Math.max(1, Math.min(12, Math.ceil((p[4] - p[1]) / 4)));
     for (let i = 0; i <= nx; i++) for (let j = 0; j <= ny; j++) out.push(p[0] + ((p[3] - p[0]) * i) / nx, p[1] + ((p[4] - p[1]) * j) / ny);
     return out;
@@ -70,6 +70,16 @@ export function moved(s: Stroke, dx: number, dy: number): Stroke {
     pts[i + 1] = Math.round((pts[i + 1] + dy) * 100) / 100;
   }
   return { ...s, pts };
+}
+
+/** 고른 것 크게·작게: (cx, cy)를 가운데로 k배. 펜·형광펜 굵기와 글자 크기도 같이 */
+export function scaled(s: Stroke, k: number, cx: number, cy: number): Stroke {
+  const pts = s.pts.slice();
+  for (let i = 0; i < pts.length; i += 3) {
+    pts[i] = Math.round((cx + (pts[i] - cx) * k) * 100) / 100;
+    pts[i + 1] = Math.round((cy + (pts[i + 1] - cy) * k) * 100) / 100;
+  }
+  return { ...s, pts, width: s.tool === "image" ? s.width : Math.round(s.width * k * 100) / 100 };
 }
 
 // ── 도형 펴기 ──────────────────────────────────────────────────────────

@@ -59,6 +59,9 @@ export class SyncEngine {
   private wake: (() => void) | null = null;
   private abort: AbortController | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 한 작업의 내용 한도·한 번에 보내는 양 (시험에서 작게 바꾼다) */
+  opBytes = 2_500_000;
+  pushBytes = 24_000_000;
 
   constructor(fs: Fs, target: SyncTarget, transport: Transport, state: SyncState, onStatus?: (s: SyncStatus) => void) {
     this.fs = fs;
@@ -108,12 +111,25 @@ export class SyncEngine {
     return this.lock(async () => {
       const ws = writes.filter((w) => !(w.t !== "folder" && this.state.gone[w.nb]));
       if (!ws.length) return;
-      for (let i = 0; i < ws.length; i += MAX_WRITES_PER_OP) {
-        const part = ws.slice(i, i + MAX_WRITES_PER_OP);
+      // 한 작업은 쓰기 400개·내용 opBytes까지 (사진을 붙인 획은 커서 서버의 작업당 4MB 한도를 넘지 않게)
+      const parts: Write[][] = [];
+      let cur: Write[] = [], size = 0;
+      for (const w of ws) {
+        const n = JSON.stringify(w).length;
+        if (cur.length && (cur.length >= MAX_WRITES_PER_OP || size + n > this.opBytes)) {
+          parts.push(cur);
+          cur = [];
+          size = 0;
+        }
+        cur.push(w);
+        size += n;
+      }
+      if (cur.length) parts.push(cur);
+      parts.forEach((part, i) => {
         const nb = part.find((w) => w.t !== "folder") as { nb: string } | undefined;
         this.state.outbox.push({ cid: newId(), ...(nb ? { nb: nb.nb } : {}), w: part, ...(i === 0 && blobs.length ? { blobs } : {}) });
         for (const w of part) this.state.pending[wkey(w)] = (this.state.pending[wkey(w)] ?? 0) + 1;
-      }
+      });
       for (const w of ws) if (w.t === "nb" && w.v === null) this.state.gone[w.nb] = true;
       await this.persist();
       this.setStatus({ state: "syncing" });
@@ -123,7 +139,18 @@ export class SyncEngine {
 
   /** 보낼 함을 서버로 (원본 PDF가 딸린 작업이면 PDF부터 올린다). 보낸 작업 수. */
   async pushOnce(max = 50): Promise<number> {
-    const batch = await this.lock(async () => this.state.outbox.slice(0, max));
+    // 한 번에 보내는 양도 pushBytes까지 (서버의 보내기 한도 40MB 안으로, 적어도 하나는)
+    const batch = await this.lock(async () => {
+      const out: OutOp[] = [];
+      let size = 0;
+      for (const op of this.state.outbox.slice(0, max)) {
+        const n = JSON.stringify(op.w).length;
+        if (out.length && size + n > this.pushBytes) break;
+        out.push(op);
+        size += n;
+      }
+      return out;
+    });
     if (!batch.length) return 0;
     // 네트워크를 기다리는 동안에도 이 기기의 저장은 막히지 않게 잠그지 않는다
     for (const op of batch) {

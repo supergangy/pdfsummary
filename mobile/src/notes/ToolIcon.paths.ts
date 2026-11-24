@@ -1,7 +1,7 @@
 // 도구 아이콘 모양 (24×24 칸의 SVG 경로). 기기는 Skia로(ToolIcon.tsx), 웹은 SVG로(ToolIcon.web.tsx) 그린다.
 export type IconName =
   | "pen" | "highlighter" | "eraser" | "lasso" | "text" | "settings" | "finger" | "hand" | "undo" | "redo"
-  | "back" | "prev" | "next" | "more" | "minus" | "plus" | "fit" | "close" | "shapes" | "line" | "sliders" | "grip" | "up" | "down" | "shrink" | "grow";
+  | "back" | "prev" | "next" | "more" | "minus" | "plus" | "fit" | "close" | "shapes" | "line" | "sliders" | "grip" | "up" | "down" | "shrink" | "grow" | "image";
 
 /** 24×24 칸의 SVG 경로. stroke=선으로, fill=채워서 */
 export const PATHS: Record<IconName, { d: string; fill?: boolean }> = {
@@ -30,6 +30,7 @@ export const PATHS: Record<IconName, { d: string; fill?: boolean }> = {
   up: { d: "M6 15 L12 9 L18 15" },
   shrink: { d: "M13 6 L7 12 L13 18 M19 6 L13 12 L19 18" },
   grow: { d: "M11 6 L17 12 L11 18 M5 6 L11 12 L5 18" },
+  image: { d: "M4 5 H20 V19 H4 Z M4 15.5 L9 10.5 L14 15.5 L16 13.5 L20 17.5 M15.5 7.5 A1.6 1.6 0 1 0 15.51 7.5" },
   down: { d: "M6 9 L12 15 L18 9" },
 };
 

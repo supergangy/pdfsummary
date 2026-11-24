@@ -75,7 +75,12 @@ type Props = {
   onPenDouble?: () => void; // S펜 옆 단추를 펜을 띄운 채 두 번 눌렀을 때
   onShown?: (pageId: string) => void; // 화면을 옮겨 가운데 쪽(묶음)이 바뀌었을 때
   onVisible?: (first: number, last: number) => void; // 화면 근처에 있는 쪽 번호 범위 (바탕 그림 미리 불러오기)
+  /** 지금 보이는 곳을 묻는 함수를 채워 준다: 지금 쪽 기준 화면 가운데(쪽 좌표)와 보이는 폭·높이 — 사진·스티커를 그 자리에 넣으려고 */
+  viewRef?: { current: (() => ViewSpot | null) | null };
 };
+
+/** 지금 쪽에서 화면 가운데 자리(쪽 좌표, 쪽 안으로 당김)와 화면에 보이는 폭·높이(쪽 좌표) */
+export type ViewSpot = { page: string; x: number; y: number; w: number; h: number };
 
 export function PageCanvas(props: Props) {
   const { pages, ink, active, jump, flow, two, hidden, tool, color, width, fingerDraw, zoom } = props;
@@ -114,6 +119,19 @@ export function PageCanvas(props: Props) {
     const p = cb.current.pages.find((x) => x.id === cb.current.active) ?? cb.current.pages[0];
     if (p) cb.current.onViewWidth?.(s * p.w);
   }, []);
+
+  if (props.viewRef) {
+    props.viewRef.current = () => {
+      const s = scale.value, W = vw.value, H = vh.value;
+      const ps = cb.current.pages;
+      const ai = Math.max(0, ps.findIndex((p) => p.id === cb.current.active));
+      const R = LRef.current.rects;
+      if (!W || !ps[ai]) return null;
+      const ox = R[ai * 4], oy = R[ai * 4 + 1], pwid = R[ai * 4 + 2], phei = R[ai * 4 + 3];
+      const cx = (W / 2 - tx.value) / s - ox, cy = (H / 2 - ty.value) / s - oy;
+      return { page: ps[ai].id, x: Math.max(0, Math.min(pwid, cx)), y: Math.max(0, Math.min(phei, cy)), w: W / s, h: H / s };
+    };
+  }
 
   /** 이 묶음이 화면 위쪽에 오게 (가로로 화면보다 좁으면 가운데, 넓으면 왼쪽 끝) */
   const place = useCallback((si: number, s: number, W: number, H: number) => {
@@ -860,7 +878,19 @@ function TextLayer({ strokes, hidden, page, ox, oy, tx, ty, scale, dx, dy }: {
   if (!texts.length) return null;
   return (
     <Animated.View pointerEvents="none" style={[{ position: "absolute", left: 0, top: 0, width: page.w, height: page.h, transformOrigin: "0 0" }, style]}>
-      {texts.map((s) => (
+      {texts.map((s) => s.stamp ? (
+        // 도장 스티커: 둥근 테두리 + 옅은 바탕 + 굵은 글
+        <View
+          key={s.id}
+          style={{
+            position: "absolute", left: s.pts[0], top: s.pts[1], width: s.pts[3] - s.pts[0], height: s.pts[4] - s.pts[1],
+            borderRadius: s.width * 0.45, borderWidth: Math.max(1.5, s.width * 0.1), borderColor: s.color, backgroundColor: s.color + "1F",
+            alignItems: "center", justifyContent: "center",
+          }}
+        >
+          <Text allowFontScaling={false} numberOfLines={1} style={{ fontSize: s.width, fontWeight: "700", color: s.color }}>{s.text}</Text>
+        </View>
+      ) : (
         <Text
           key={s.id}
           allowFontScaling={false} // 기기의 '글자 크기' 설정에 따라 커지면 저장된 글상자(글에 맞춘 폭)보다 넓어진다

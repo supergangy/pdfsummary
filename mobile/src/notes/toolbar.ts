@@ -1,7 +1,7 @@
 // 필기 화면 도구 모음: 무엇을 어떤 순서로 보일지, 어디에 붙일지 (사용자가 '도구 모음 편집'에서 바꾼다).
 // 화면 그리기는 Editor.tsx. 여기는 계산만 (시험: toolbar.test.ts)
 
-export type ToolbarItem = "pen" | "highlighter" | "eraser" | "lasso" | "text" | "colors" | "widths" | "finger" | "zoom" | "undo";
+export type ToolbarItem = "pen" | "highlighter" | "eraser" | "lasso" | "text" | "insert" | "colors" | "widths" | "finger" | "zoom" | "undo";
 /** 도구 모음 자리: 위(쪽 번호 줄 안) · 왼쪽 · 오른쪽 · 떠 있게(끌어서 아무 데나) */
 export type ToolbarDock = "top" | "left" | "right" | "float";
 
@@ -11,6 +11,7 @@ export const TOOLBAR_ITEMS: { id: ToolbarItem; label: string }[] = [
   { id: "eraser", label: "지우개" },
   { id: "lasso", label: "올가미" },
   { id: "text", label: "글상자" },
+  { id: "insert", label: "사진·스티커 넣기" },
   { id: "colors", label: "색" },
   { id: "widths", label: "굵기·직선·도형 펴기" },
   { id: "finger", label: "손가락 쓰기/이동" },
@@ -54,7 +55,7 @@ export function moveItem(order: readonly ToolbarItem[], id: ToolbarItem, delta: 
 /** 나눔 줄 묶음: 도구(펜~글상자)는 한 무리, 나머지는 저마다 한 무리.
  *  (따로 있던 '도구 설정' 단추는 뺐다: 고른 도구를 한 번 더 누르면 같은 창이 뜬다) */
 export function groupOf(id: ToolbarItem): string {
-  return id === "pen" || id === "highlighter" || id === "eraser" || id === "lasso" || id === "text" ? "tools" : id;
+  return id === "pen" || id === "highlighter" || id === "eraser" || id === "lasso" || id === "text" || id === "insert" ? "tools" : id;
 }
 
 /** 손잡이를 끌어 놓은 자리(화면 기준)로 붙일 곳: 맨 위 줄 근처 → 위, 왼쪽·오른쪽 끝 → 그쪽, 그 밖 → 떠 있게 */

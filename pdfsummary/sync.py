@@ -26,6 +26,7 @@ from typing import Optional
 MAX_OPS_PER_PUSH = 500
 MAX_OP_BYTES = 4 * 1024 * 1024
 MAX_PULL = 2000
+MAX_PULL_BYTES = 16 * 1024 * 1024  # 한 번에 돌려줄 작업 내용의 합 (쪽에 붙인 사진이 많으면 커지므로)
 CID = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 SHA = re.compile(r"^[0-9a-f]{64}$")
 
@@ -148,7 +149,7 @@ class SyncStore:
             c.notify_all()
         return seqs
 
-    def pull(self, sid: str, since: int, wait: float = 0, limit: int = MAX_PULL) -> dict:
+    def pull(self, sid: str, since: int, wait: float = 0, limit: int = MAX_PULL, max_bytes: int = MAX_PULL_BYTES) -> dict:
         """since 뒤의 작업들. 없으면 wait초까지 기다렸다가 새 작업이 생기면 바로 돌려준다."""
         deadline = time.monotonic() + max(0.0, min(wait, 55.0))
         c = self._cond(sid)
@@ -163,6 +164,15 @@ class SyncStore:
                 c.wait(timeout=min(5.0, max(0.05, deadline - time.monotonic())))
         more = len(rows) > limit
         rows = rows[:limit]
+        # 내용이 너무 크면 앞쪽만 (적어도 하나는) 돌려주고 나머지는 다음에
+        total, keep = 0, 0
+        for r in rows:
+            total += len(r[4])
+            if keep and total > max_bytes:
+                break
+            keep += 1
+        if keep < len(rows):
+            rows, more = rows[:keep], True
         ops = [{"seq": s, "cid": cid, "device": dev, "ts": ts, **json.loads(body)} for s, cid, dev, ts, body in rows]
         return {"ops": ops, "last": ops[-1]["seq"] if ops else since, "more": more}
 

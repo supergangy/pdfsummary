@@ -1,7 +1,8 @@
 // 필기 노트의 데이터 모양. 좌표는 모두 '쪽 좌표'(PDF 포인트, 1pt = 1/72인치)로 저장해서
 // 화면 크기·확대와 상관없이 같고, PDF로 내보내거나 요약 서버로 보낼 때 그대로 쓴다.
 
-export type InkTool = "pen" | "highlighter" | "text";
+/** image: 쪽에 붙인 사진·그림 스티커 (pts는 글상자처럼 [왼쪽, 위, 0, 오른쪽, 아래, 0]) */
+export type InkTool = "pen" | "highlighter" | "text" | "image";
 
 /** 펜 종류 (없으면 만년필 — 예전 노트 그대로) */
 export type PenBrush = "ballpoint" | "fountain" | "calligraphy" | "pencil" | "brush";
@@ -18,6 +19,8 @@ export type Stroke = {
   brush?: PenBrush; // 펜만
   dash?: LineDash; // 펜만
   opacity?: number; // 형광펜만 (0~1, 없으면 HIGHLIGHT_OPACITY)
+  img?: string; // 사진·그림 스티커만: 그림 자체 (data:image/jpeg|png;base64,…). 줄여서 넣으므로 동기화 쓰기 하나에 같이 간다
+  stamp?: boolean; // 글상자 중 '도장 스티커'(중요·암기 등): 둥근 테두리 + 옅은 바탕으로 그린다
 };
 
 export const PENS: { id: PenBrush; label: string; hint: string }[] = [
@@ -149,8 +152,10 @@ export function parseStrokes(raw: unknown): Stroke[] {
   if (!Array.isArray(raw)) return [];
   return raw.filter(
     (s): s is Stroke =>
-      !!s && typeof s.id === "string" && (s.tool === "pen" || s.tool === "highlighter" || (s.tool === "text" && typeof s.text === "string" && s.pts?.length === 6)) &&
-      typeof s.color === "string" && s.width > 0 && Array.isArray(s.pts) && s.pts.length >= 3 && s.pts.length % 3 === 0,
+      !!s && typeof s.id === "string" &&
+      (s.tool === "pen" || s.tool === "highlighter" || (s.tool === "text" && typeof s.text === "string" && s.pts?.length === 6) ||
+        (s.tool === "image" && typeof s.img === "string" && s.img.startsWith("data:image/") && s.pts?.length === 6)) &&
+      typeof s.color === "string" && (s.tool === "image" || s.width > 0) && Array.isArray(s.pts) && s.pts.length >= 3 && s.pts.length % 3 === 0,
   );
 }
 
@@ -185,4 +190,17 @@ export function makeTextBox(id: string, x: number, y: number, text: string, size
   const left = Math.max(0, Math.min(x, pageW - 18 - w));
   const h = textBoxHeight(text, size, w);
   return { id, tool: "text", color, width: size, pts: [left, y, 0, left + w, y + h, 0], text };
+}
+
+/** 쪽에 사진·그림 스티커 붙이기: (x, y) 왼쪽 위, w×h 크기 (쪽 좌표) */
+export function makeImage(id: string, x: number, y: number, w: number, h: number, img: string): Stroke {
+  return { id, tool: "image", color: "#000000", width: 0, pts: [x, y, 0, x + w, y + h, 0], img };
+}
+
+/** 도장 스티커 ('중요', '암기' 등): (cx, cy) 가운데에, 글 길이에 맞춘 둥근 상자. 글상자(text)라 PDF에도 글로 들어간다 */
+export function makeStamp(id: string, cx: number, cy: number, text: string, color: string, size = 18): Stroke {
+  const w = Math.ceil(textLineWidth(text, size) + size * 1.6);
+  const h = Math.ceil(size * 1.9);
+  const x = cx - w / 2, y = cy - h / 2;
+  return { id, tool: "text", color, width: size, pts: [x, y, 0, x + w, y + h, 0], text, stamp: true };
 }

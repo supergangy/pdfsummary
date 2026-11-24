@@ -138,3 +138,23 @@ test("text boxes keep every glyph shape in the exported PDF", async () => {
     assert.ok([...text].some((c, i) => c !== " " && glyphs[i].path.commands.length > 0), "빈 모양이 아님");
   }
 });
+
+// 검은 10×10 PNG (사진 대신)
+const BLACK_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAIAAAACUFjqAAAADklEQVR4nGNgGAUMJAMAATYAAayrjKgAAAAASUVORK5CYII=";
+
+test("붙인 사진은 그 자리에 그림으로, 도장 스티커는 글로 들어간다", async () => {
+  const { readFileSync } = await import("node:fs");
+  const font = new Uint8Array(readFileSync(new URL("../../assets/fonts/NanumGothic-Regular.ttf", import.meta.url)));
+  const { makeImage, makeStamp } = await import("./model.ts");
+  const nb = blankNotebook("사진", "plain", 1);
+  const p = nb.pages[0];
+  const ink = { [p.id]: [makeImage("i", 100, 100, 120, 80, BLACK_PNG), makeImage("j", 300, 300, 50, 50, BLACK_PNG), makeStamp("s", 200, 500, "중요", "#D7263D")] };
+  const pdf = await buildPdf(nb, ink, null, font);
+  assert.deepEqual(inkAt(pdf, 0, [[160, 140], [325, 325], [160, 250]]), [true, true, false]);
+  const dir = mkdtempSync(join(tmpdir(), "nb-"));
+  const f = join(dir, "s.pdf");
+  writeFileSync(f, pdf);
+  const out = execFileSync("python3", ["-c", "import sys, pymupdf; p = pymupdf.open(sys.argv[1])[0]; print(len(set(x[0] for x in p.get_images()))); print(p.get_text())", f], { encoding: "utf8" });
+  assert.equal(out.trim().split(/\s+/)[0], "1", "같은 그림은 한 번만 넣는다");
+  assert.match(out, /중요/);
+});

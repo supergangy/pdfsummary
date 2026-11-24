@@ -67,7 +67,7 @@ export type StrokeDraw =
   | { kind: "line"; d: string; width: number; alpha: number; cap: "butt" | "round"; dash?: [number, number]; multiply: boolean };
 
 export function strokeDraw(s: Stroke): StrokeDraw | null {
-  if (s.tool === "text") return null; // 글상자는 글자로 따로 그린다
+  if (s.tool === "text" || s.tool === "image") return null; // 글상자는 글자로, 사진은 그림으로 따로 그린다
   if (s.tool === "highlighter") {
     return { kind: "line", d: polylineSvg(s), width: s.width, alpha: s.opacity ?? HIGHLIGHT_OPACITY, cap: "butt", multiply: true };
   }
@@ -119,7 +119,7 @@ export function strokeSvg(s: Stroke): string {
 const r = (v: number) => Math.round(v * 100) / 100;
 
 export function bounds(s: Stroke): Box {
-  if (s.tool === "text") return [s.pts[0], s.pts[1], s.pts[3], s.pts[4]];
+  if (s.tool === "text" || s.tool === "image") return [s.pts[0], s.pts[1], s.pts[3], s.pts[4]]; // 글상자·사진은 상자
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (let i = 0; i < s.pts.length; i += 3) {
     const x = s.pts[i], y = s.pts[i + 1];
@@ -143,7 +143,7 @@ function segDist2(px: number, py: number, ax: number, ay: number, bx: number, by
 
 /** (x, y)를 반지름 radius인 지우개로 문질렀을 때 이 획에 닿는지. */
 export function hits(s: Stroke, x: number, y: number, radius: number): boolean {
-  if (s.tool === "text") {
+  if (s.tool === "text" || s.tool === "image") {
     const [x0, y0, x1, y1] = [s.pts[0], s.pts[1], s.pts[3], s.pts[4]];
     return x >= x0 - radius && x <= x1 + radius && y >= y0 - radius && y <= y1 + radius;
   }
@@ -248,7 +248,7 @@ function densify(pts: number[], step: number): number[] {
 /** 지우개가 (x0,y0)→(x1,y1)로 지나간 자리(반지름 r)를 획에서 지운다.
  *  안 닿았으면 null, 닿았으면 남은 조각들(없으면 [] = 통째로 지워짐). 조각은 makeId로 새 id를 받는다. */
 export function eraseFrom(s: Stroke, x0: number, y0: number, x1: number, y1: number, r: number, makeId: () => string): Stroke[] | null {
-  if (s.tool === "text") return hitAlong([s], x0, y0, x1, y1, r).length ? [] : null;
+  if (s.tool === "text" || s.tool === "image") return hitAlong([s], x0, y0, x1, y1, r).length ? [] : null;
   const reach = r + s.width / 2;
   const b = bounds(s);
   if (Math.max(x0, x1) < b[0] - r || Math.min(x0, x1) > b[2] + r || Math.max(y0, y1) < b[1] - r || Math.min(y0, y1) > b[3] + r) return null;

@@ -1,6 +1,6 @@
 // 필기 화면: 도구 모음 + 쪽 그리기 + 자동 저장
 import { createContext, Fragment, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type Ref, type RefObject } from "react";
-import { ActivityIndicator, Alert, AppState, BackHandler, Modal, PanResponder, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View, type HostInstance } from "react-native";
+import { ActivityIndicator, Alert, AppState, BackHandler, Image, Modal, PanResponder, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, TextInput, useWindowDimensions, View, type HostInstance } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { pageText } from "../../modules/pdf-pages";
@@ -10,14 +10,16 @@ import { clampPage, colorName, isHighlighterTap, justAfter, otherPage, pageBg, p
 import { bounds, eraseFrom, fitHighlight, hitAlong, straighten, thin, type CharBox } from "./geometry";
 import { History, removal, type Op } from "./history";
 import {
-  HIGHLIGHT_COLORS, HIGHLIGHT_OPACITY, HIGHLIGHT_WIDTHS, PEN_COLORS, PEN_WIDTHS, PENS, TEXT_SIZES, insertPage, makeTextBox, newId, removePage,
+  HIGHLIGHT_COLORS, HIGHLIGHT_OPACITY, HIGHLIGHT_WIDTHS, PEN_COLORS, PEN_WIDTHS, PENS, TEXT_SIZES, insertPage, makeImage, makeStamp, makeTextBox, newId, removePage,
   type Ink, type Notebook, type Paper, type Stroke,
 } from "./model";
 import { pageImage } from "./pageImage";
-import { PageCanvas, type JumpCmd, type Selection, type ToolName, type ZoomCmd } from "./PageCanvas";
+import { PageCanvas, type JumpCmd, type Selection, type ToolName, type ViewSpot, type ZoomCmd } from "./PageCanvas";
 import { PageGrid } from "./PageGrid";
 import { loadPrefs, savePrefs, type Prefs } from "./prefs";
-import { lassoSelect, moved, snapShape } from "./shapes";
+import { clipboardPicture, fileToDataUri, pickPhoto, shrinkDataUri, stickerPicture, type Picture } from "./insertImage";
+import { lassoSelect, moved, scaled, snapShape } from "./shapes";
+import { STAMPS, STICKERS, type Sticker } from "./stickers";
 import { ToolIcon, type IconName } from "./ToolIcon";
 import { ToolPanel } from "./ToolPanel";
 import { clampFloat, dockAt, DOCKS, groupOf, itemLabel, moveItem, toolbarOrder, type ToolbarDock, type ToolbarItem } from "./toolbar";
@@ -453,7 +455,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
   const onErase = useCallback((phase: 0 | 1 | 2, x: number, y: number, r: number, pageId: string) => {
     const page = phase === 0 ? activate(pageId) : nbRef.current?.pages.find((q) => q.id === pageId);
     if (!page || !prefs) return;
-    const canErase = (s: Stroke) => !prefs.eraserHlOnly || s.tool === "highlighter";
+    // 사진·그림 스티커는 지우개로 지우지 않는다 (올가미로 골라 지우기) — 그 위에 쓴 필기만 지워지게
+    const canErase = (s: Stroke) => s.tool !== "image" && (!prefs.eraserHlOnly || s.tool === "highlighter");
     if (phase === 0) {
       erased.current = new Set();
       lastErase.current = [x, y];
@@ -595,6 +598,12 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     touch(pid);
     bump((x) => x + 1);
   };
+  /** 고른 것 크게·작게 (고른 상자 가운데를 기준으로) */
+  const resizeSelected = (k: number) => {
+    if (!selection) return;
+    const [x0, y0, x1, y1] = selection.box;
+    replaceSelected((s) => scaled(s, k, (x0 + x1) / 2, (y0 + y1) / 2));
+  };
   const onMoveSelection = useCallback((dx: number, dy: number) => {
     if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
     replaceSelected((s) => moved(s, dx, dy));
@@ -623,7 +632,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     if (justAfter(Date.now(), menuClosedAt.current)) return; // 메뉴를 두 번 누른 둘째 누름은 넘긴다
     const page = activate(pageId);
     if (!page) return;
-    const hit = [...(inkRef.current[page.id] ?? [])].reverse().find((s) => s.tool === "text" && hitAlong([s], x, y, x, y, 2).length);
+    const hit = [...(inkRef.current[page.id] ?? [])].reverse().find((s) => s.tool === "text" && !s.stamp && hitAlong([s], x, y, x, y, 2).length); // 도장 스티커는 글상자 고치기에서 뺀다
     setTextEdit(hit ? { page: page.id, x: hit.pts[0], y: hit.pts[1], stroke: hit } : { page: page.id, x, y });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -752,6 +761,87 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
     onQuick(nbRef.current ?? nb, inkRef.current, piRef.current);
   };
 
+  // ── 사진·스티커 넣기 ───────────────────────────────────
+  // 화면 가운데(지금 쪽)에 넣고 바로 올가미로 골라 둔다 → 끌어서 옮기거나 '크게·작게'
+  const viewRef = useRef<(() => ViewSpot | null) | null>(null);
+  const [insertMenu, setInsertMenu] = useState(false);
+  const [stickerSheet, setStickerSheet] = useState(false);
+  const addObjects = (pageId: string, strokes: Stroke[]) => {
+    setInk((k) => hist.current.run(k, { kind: "add", page: pageId, strokes }));
+    touch(pageId);
+    bump((x) => x + 1);
+    activate(pageId);
+    setP({ tool: "lasso" });
+    setSelection({ page: pageId, ids: new Set(strokes.map((x) => x.id)), box: selBox(strokes) });
+  };
+  /** 지금 보는 곳 (지금 쪽, 쪽 좌표). 화면을 모르면 쪽 가운데 */
+  const spot = (): { pg: { id: string; w: number; h: number }; x: number; y: number; w: number; h: number } | null => {
+    const n = nbRef.current;
+    const v = viewRef.current?.();
+    const pg = (v && n?.pages.find((x) => x.id === v.page)) || n?.pages[piRef.current];
+    if (!pg) return null;
+    return v ? { pg, x: v.x, y: v.y, w: Math.min(v.w, pg.w), h: Math.min(v.h, pg.h) } : { pg, x: pg.w / 2, y: pg.h / 2, w: pg.w, h: pg.h };
+  };
+  /** 그림 넣기: 보이는 곳의 절반 안에 들어가는 크기로 (fixed면 그 폭으로) */
+  const placePicture = (pic: Picture, fixed?: number) => {
+    const at = spot();
+    if (!at) return;
+    const k = fixed ? fixed / pic.w : Math.min((at.w * 0.5) / pic.w, (at.h * 0.5) / pic.h, (at.pg.w * 0.8) / pic.w);
+    const w = Math.round(pic.w * k * 10) / 10, h = Math.round(pic.h * k * 10) / 10;
+    const x = Math.max(0, Math.min(at.pg.w - w, at.x - w / 2)), y = Math.max(0, Math.min(at.pg.h - h, at.y - h / 2));
+    addObjects(at.pg.id, [makeImage(newId(), x, y, w, h, pic.uri)]);
+  };
+  const insertPhoto = async () => {
+    setInsertMenu(false);
+    try {
+      const pic = await pickPhoto();
+      if (pic) placePicture(pic);
+    } catch (e) {
+      say((e as Error).message);
+    }
+  };
+  const insertPaste = async () => {
+    setInsertMenu(false);
+    try {
+      const pic = await clipboardPicture();
+      if (pic) placePicture(pic);
+      else say("복사한 사진이 없어요. 사진을 길게 눌러 '복사'한 뒤 다시 해 보세요.");
+    } catch (e) {
+      say(`붙여넣지 못했어요: ${(e as Error).message}`);
+    }
+  };
+  const insertSticker = (st: Sticker) => {
+    setStickerSheet(false);
+    const pic = stickerPicture(st);
+    const at = spot();
+    if (pic && at) placePicture(pic, Math.min(64, at.w * 0.2));
+  };
+  const insertStamp = (text: string, color: string) => {
+    setStickerSheet(false);
+    const at = spot();
+    if (at) addObjects(at.pg.id, [makeStamp(newId(), at.x, at.y, text, color)]);
+  };
+  // 웹: Ctrl+V로 복사한 그림 붙여넣기 (글 쓰는 칸 안에서는 그 칸에)
+  const pasteRef = useRef(placePicture);
+  pasteRef.current = placePicture;
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const onPaste = (e: Event) => {
+      const ev = e as ClipboardEvent;
+      const el = ev.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      const file = [...(ev.clipboardData?.items ?? [])].find((i) => i.type.startsWith("image/"))?.getAsFile();
+      if (!file) return;
+      ev.preventDefault();
+      void fileToDataUri(file).then((u) => {
+        const pic = shrinkDataUri(u);
+        if (pic) pasteRef.current(pic);
+      });
+    };
+    globalThis.addEventListener?.("paste", onPaste);
+    return () => globalThis.removeEventListener?.("paste", onPaste);
+  }, []);
+
   // 키보드(웹·키보드 달린 태블릿의 웹판): Ctrl+Z 되돌리기, Ctrl+Shift+Z·Ctrl+Y 다시 하기. 글 쓰는 칸 안에서는 그 칸의 되돌리기를 그대로 둔다
   const keys = useRef({ undo, redo });
   keys.current = { undo, redo };
@@ -855,6 +945,8 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         return <ToolBtn ref={toolRef("lasso")} icon="lasso" label="올가미" on={tool === "lasso"} onPress={() => pick("lasso")} hint="둘러싸서 고르고 옮기기, 한 번 더 누르면 설정" />;
       case "text":
         return <ToolBtn ref={toolRef("text")} icon="text" label="글상자" on={tool === "text"} onPress={() => setP({ tool: "text" })} hint="쪽을 누르면 글을 써 넣어요" />;
+      case "insert":
+        return <IconBtn icon="image" onPress={() => setInsertMenu(true)} label="사진·스티커 넣기" />;
       case "colors":
         if (tool === "text") {
           return (
@@ -1019,6 +1111,7 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
         onPenDouble={onPenDouble}
         onShown={onShown}
         onVisible={onVisible}
+        viewRef={viewRef}
       />
       </View>
       {dock === "right" && sideStrip}
@@ -1055,6 +1148,9 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
               <Swatch key={c} color={c} edge={edge} onPress={() => replaceSelected((s) => ({ ...s, color: c }))} label={`고른 것 색 ${c}`} />
             ))}
           </View>
+          <Divider />
+          <TextBtn label="작게" onPress={() => resizeSelected(0.8)} label2="고른 것 작게" />
+          <TextBtn label="크게" onPress={() => resizeSelected(1.25)} label2="고른 것 크게" />
           <Divider />
           <TextBtn label="지우기" danger onPress={deleteSelected} label2="고른 것 지우기" />
           <IconBtn glyph="✕" onPress={() => setSelection(null)} label="고르기 끝내기" />
@@ -1105,6 +1201,18 @@ export function Editor({ store, id, onClose, onExport, onSummarize, onQuick, sta
       </Modal>
 
       <ToolbarDialog open={tbEdit} prefs={prefs} setP={setP} onClose={() => setTbEdit(false)} />
+      <Modal visible={insertMenu} transparent animationType="fade" onRequestClose={() => setInsertMenu(false)}>
+        <Pressable style={[sx.menuBack, { backgroundColor: popBackdrop(t) }]} onPress={() => setInsertMenu(false)}>
+          <Pressable style={[floating(t), sx.menu, sx.insertMenu]} onPress={() => {}}>
+            <View style={sx.menuList}>
+              <MenuItem label="사진 고르기 (갤러리)" onPress={() => void insertPhoto()} />
+              <MenuItem label="붙여넣기 (복사한 사진)" onPress={() => void insertPaste()} />
+              <MenuItem label="스티커" onPress={() => { setInsertMenu(false); setStickerSheet(true); }} />
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+      <StickerSheet open={stickerSheet} onClose={() => setStickerSheet(false)} onStamp={insertStamp} onSticker={insertSticker} />
       <ToolPanel open={panel} at={panelAt} prefs={prefs} setP={setP} onClearPage={clearPage} onClose={() => setPanel(false)} viewScale={viewPx.current ? viewPx.current / page.w : undefined} />
       <RenameDialog value={renaming} onDone={rename} />
       <TextDialog
@@ -1153,6 +1261,58 @@ function TipBubble({ label, r, side, maxX }: { label: string; r: number[]; side:
     >
       <Text style={[type.caption, { color: t.bg }]}>{label}</Text>
     </View>
+  );
+}
+
+/** 스티커 고르기: 도장(중요·암기 …)과 그림(별·체크 …) */
+function StickerSheet({ open, onClose, onStamp, onSticker }: { open: boolean; onClose: () => void; onStamp: (text: string, color: string) => void; onSticker: (s: Sticker) => void }) {
+  const t = useTheme();
+  // 그림 스티커 미리 보기는 창을 처음 열 때 한 번만 만든다
+  const [pics, setPics] = useState<Record<string, string>>({});
+  useEffect(() => {
+    if (!open || Object.keys(pics).length) return;
+    const out: Record<string, string> = {};
+    for (const st of STICKERS) {
+      const p = stickerPicture(st, 120);
+      if (p) out[st.id] = p.uri;
+    }
+    setPics(out);
+  }, [open, pics]);
+  return (
+    <Dialog open={open} title="스티커" maxWidth={520} onClose={onClose}>
+      <Text style={[type.label, { color: t.sub }]}>도장</Text>
+      <View style={sx.stickerWrap}>
+        {STAMPS.map((st) => (
+          <Pressable
+            key={st.text}
+            onPress={() => onStamp(st.text, st.color)}
+            accessibilityRole="button"
+            accessibilityLabel={`도장 스티커: ${st.text}`}
+            style={({ pressed }) => [sx.stamp, { borderColor: st.color, backgroundColor: st.color + "1F", opacity: pressed ? 0.6 : 1 }]}
+          >
+            <Text style={{ color: st.color, fontWeight: "700", fontSize: 15 }}>{st.text}</Text>
+          </Pressable>
+        ))}
+      </View>
+      <Text style={[type.label, { color: t.sub, marginTop: 8 }]}>그림</Text>
+      <View style={sx.stickerWrap}>
+        {STICKERS.map((st) => (
+          <Pressable
+            key={st.id}
+            onPress={() => onSticker(st)}
+            accessibilityRole="button"
+            accessibilityLabel={`그림 스티커: ${st.label}`}
+            style={({ pressed }) => [sx.stickerCell, { backgroundColor: t.sunken, opacity: pressed ? 0.6 : 1 }]}
+          >
+            {pics[st.id] ? <Image source={{ uri: pics[st.id] }} style={{ width: 44, height: 44 }} /> : null}
+          </Pressable>
+        ))}
+      </View>
+      <View style={sx.actions}>
+        <View style={{ flex: 1 }} />
+        <Button label="닫기" onPress={onClose} />
+      </View>
+    </Dialog>
   );
 }
 
@@ -1472,6 +1632,10 @@ const sx = StyleSheet.create({
   floatBar: { flexDirection: "row", alignItems: "center", paddingHorizontal: 6, paddingVertical: 4, borderRadius: radius.xl },
   grip: { width: 22, height: 36, alignItems: "center", justifyContent: "center" },
   ghost: { position: "absolute", zIndex: 30, width: 140, height: 44, borderRadius: radius.md, borderWidth: 2, borderStyle: "dashed", alignItems: "center", justifyContent: "center" },
+  insertMenu: { alignSelf: "center" },
+  stickerWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  stamp: { borderWidth: 2, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 8 },
+  stickerCell: { width: 64, height: 64, borderRadius: radius.md, alignItems: "center", justifyContent: "center" },
   tbRow: { flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 2, borderBottomWidth: StyleSheet.hairlineWidth },
   swatchesCol: { flexDirection: "column", alignItems: "center", gap: 2 },
   toolBtn: { width: 38, height: 36, borderRadius: radius.pill, alignItems: "center", justifyContent: "center" },

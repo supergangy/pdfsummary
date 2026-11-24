@@ -1,7 +1,7 @@
 // 필기를 넣은 PDF 만들기 (기기 안에서, 인터넷 없이). 원본 PDF 쪽 위에 획을 벡터로 그린다.
 // 쪽 좌표(화면에 보이는 대로, 왼쪽 위가 0)를 PDF 사용자 좌표(왼쪽 아래가 0, 자르기 상자·회전 반영)로 바꾼다.
 import fontkit from "@pdf-lib/fontkit";
-import { BlendMode, LineCapStyle, PDFDocument, degrees, rgb, type PDFFont, type PDFPage } from "pdf-lib";
+import { BlendMode, LineCapStyle, PDFDocument, degrees, rgb, type PDFFont, type PDFImage, type PDFPage } from "pdf-lib";
 
 import { penOutline, strokeDraw } from "./geometry.ts";
 import { type Ink, type Notebook, type Paper, type Stroke } from "./model.ts";
@@ -82,6 +82,41 @@ function drawText(page: PDFPage, s: Stroke, crop: Box, rot: number, font: PDFFon
   });
 }
 
+/** data:image/...;base64,… → 바이트 (Node·기기 모두에서 되게 직접 푼다) */
+export function dataUriBytes(uri: string): Uint8Array {
+  const b64 = uri.slice(uri.indexOf(",") + 1).replace(/[^A-Za-z0-9+/]/g, "");
+  const T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const out = new Uint8Array(Math.floor((b64.length * 3) / 4));
+  let n = 0, bits = 0, acc = 0;
+  for (const ch of b64) {
+    acc = (acc << 6) | T.indexOf(ch);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      out[n++] = (acc >> bits) & 255;
+    }
+  }
+  return out.subarray(0, n);
+}
+
+/** 사진·그림 스티커: 상자 왼쪽 아래를 기준으로 쪽 회전만큼 돌려 그린다 */
+function drawImageBox(page: PDFPage, img: PDFImage, s: Stroke, crop: Box, rot: number) {
+  const [x0, y0, , x1, y1] = s.pts;
+  const [X, Y] = toUser(x0, y1, crop, rot);
+  page.drawImage(img, { x: X, y: Y, width: x1 - x0, height: y1 - y0, rotate: degrees(((rot % 360) + 360) % 360) });
+}
+
+/** 도장 스티커: 테두리 + 옅은 바탕 상자, 가운데에 굵게 글 */
+function drawStamp(page: PDFPage, s: Stroke, crop: Box, rot: number, font: PDFFont) {
+  const [x0, y0, , x1, y1] = s.pts;
+  const box = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  page.drawSvgPath(svgUser(box, crop, rot, true), { x: 0, y: 0, color: hex(s.color), opacity: 0.12, borderColor: hex(s.color), borderWidth: Math.max(1, s.width * 0.1) });
+  const text = s.text ?? "";
+  const tw = font.widthOfTextAtSize(text, s.width);
+  const [X, Y] = toUser(x0 + (x1 - x0 - tw) / 2, (y0 + y1) / 2 + s.width * 0.36, crop, rot);
+  page.drawText(text, { x: X, y: Y, size: s.width, font, color: hex(s.color), rotate: degrees(((rot % 360) + 360) % 360) });
+}
+
 function drawPaper(page: PDFPage, paper: Paper | undefined, w: number, h: number) {
   if (!paper || paper === "plain") return;
   if (paper === "lined") {
@@ -114,6 +149,19 @@ export async function buildPdf(nb: Notebook, ink: Ink, source: Uint8Array | null
   const src = source ? await PDFDocument.load(source, { ignoreEncryption: true, updateMetadata: false }) : null;
   const wanted = nb.pages.map((p) => (p.pdf !== undefined && src && p.pdf < src.getPageCount() ? p.pdf : -1));
   const copied = src ? await out.copyPages(src, wanted.filter((i) => i >= 0)) : [];
+  // 사진은 같은 그림이면 한 번만 넣는다
+  const embedded = new Map<string, PDFImage | null>();
+  for (const ss of Object.values(ink)) {
+    for (const s of ss) {
+      if (s.tool !== "image" || !s.img || embedded.has(s.img)) continue;
+      try {
+        const bytes = dataUriBytes(s.img);
+        embedded.set(s.img, s.img.startsWith("data:image/png") ? await out.embedPng(bytes) : await out.embedJpg(bytes));
+      } catch {
+        embedded.set(s.img, null); // 못 읽는 그림은 빼고 만든다
+      }
+    }
+  }
   let k = 0;
   nb.pages.forEach((p, i) => {
     let page: PDFPage;
@@ -127,10 +175,14 @@ export async function buildPdf(nb: Notebook, ink: Ink, source: Uint8Array | null
     const crop = page.getCropBox();
     const rot = page.getRotation().angle;
     const strokes = ink[p.id] ?? [];
-    // 형광펜을 먼저(글씨 밑에)
+    // 사진이 맨 밑, 그다음 형광펜(글씨 밑에), 글씨, 글상자·도장
+    for (const s of strokes) {
+      const img = s.tool === "image" && s.img ? embedded.get(s.img) : null;
+      if (img) drawImageBox(page, img, s, crop, rot);
+    }
     for (const s of strokes) if (s.tool === "highlighter") drawStroke(page, s, crop, rot);
     for (const s of strokes) if (s.tool === "pen") drawStroke(page, s, crop, rot);
-    if (font) for (const s of strokes) if (s.tool === "text" && s.text) drawText(page, s, crop, rot, font);
+    if (font) for (const s of strokes) if (s.tool === "text" && s.text) (s.stamp ? drawStamp : drawText)(page, s, crop, rot, font);
   });
   return out.save();
 }

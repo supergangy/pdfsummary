@@ -620,6 +620,11 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     await page.getByLabel(/^글상자 \(/).click();
     await page.getByLabel(/한 번 더 누르면 펜 설정/).click();
     await viewOpt(/^두 쪽씩 보기/);
+    // 움직일 때 보이는 '지금 쪽' 표시: 두 쪽 보기에서는 화면 가운데가 두 쪽 사이 틈이라 예전엔 '1 / N'에 멈춰 있었다
+    {
+      const spot = (await page.getByLabel(/^지금 .*쪽, 전체/).first().textContent()) ?? "";
+      if (!/^1–2 \/ \d+$/.test(spot)) fail(`두 쪽 보기의 지금 쪽 표시가 '1–2 / N'이 아님: '${spot}'`);
+    }
     // 두 쪽(1·2쪽)이 화면 폭에 나란히: 오른쪽 쪽에 쓰면 2쪽, 왼쪽 쪽에 쓰면 1쪽에 들어가고 쪽 번호도 따라간다
     const s2 = Math.min((b2.width - 24) / (2 * info.w + 24), 6);
     const rightX = b2.x + 12 + (info.w * 1.5 + 24) * s2, leftX = b2.x + 12 + info.w * 0.5 * s2, topY = b2.y + 12 + 120 * s2;
@@ -637,7 +642,7 @@ print(json.dumps([dark(*q) for q in json.loads(sys.argv[2])]))`, out, probe], { 
     await page.getByLabel("되돌리기").click();
     await page.waitForTimeout(800);
     await viewOpt(/^두 쪽씩 보기/); // 끄기
-    console.log("✓ 두 쪽씩 보기: 오른쪽 쪽에 쓰면 2쪽에, 왼쪽 쪽에 쓰면 1쪽에 (쪽 번호도 따라감)");
+    console.log("✓ 두 쪽씩 보기: 오른쪽 쪽에 쓰면 2쪽에, 왼쪽 쪽에 쓰면 1쪽에 (쪽 번호도 따라감, 지금 쪽 표시 1–2)");
 
     await viewOpt(/^위아래로 넘기기/);
     await page.getByLabel("이전 쪽").click().catch(() => {});

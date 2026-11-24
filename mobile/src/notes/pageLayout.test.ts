@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { docLayout, nearestSpread, pageAt, pagesIn, pageTurnTarget, PAGE_GAP } from "./pageLayout.ts";
+import { docLayout, nearestSpread, pageAt, pagesIn, pageTurnTarget, spotLabel, PAGE_GAP } from "./pageLayout.ts";
 
 const A4 = { w: 595, h: 842 };
 const rect = (r: number[], i: number) => r.slice(i * 4, i * 4 + 4);
@@ -74,4 +74,19 @@ test("좌우 넘기기: 빠르게 밀면 한 쪽 넘고, 천천히 놓으면 가
   assert.equal(pageTurnTarget(3, 3, 0, 10, -0.1), 3);
   assert.equal(pageTurnTarget(9, 9, -900, 10), 9);
   assert.equal(pageTurnTarget(0, 0, 900, 10), 0);
+});
+
+test("지금 쪽 표시: 두 쪽 보기에서 화면 가운데가 두 쪽 사이 틈이어도 번호가 따라간다", () => {
+  const L = docLayout(Array.from({ length: 12 }, () => A4), "v", true);
+  const step = 842 + PAGE_GAP;
+  const midX = 595 + PAGE_GAP / 2; // 왼쪽·오른쪽 쪽 사이 틈 (기기에서 '1 / 92'에 멈춰 있던 자리)
+  assert.equal(pageAt(L.rects, midX, step * 3 + 400), -1);
+  const si = nearestSpread(L.spreads, midX, step * 3 + 400);
+  assert.equal(spotLabel(L, si, 0, 12), "7–8 / 12");
+  // 한 쪽씩 보기, 혼자 남은 마지막 쪽, 아직 모를 때
+  const one = docLayout(Array.from({ length: 5 }, () => A4), "v", false);
+  assert.equal(spotLabel(one, 2, 0, 5), "3 / 5");
+  const odd = docLayout(Array.from({ length: 5 }, () => A4), "v", true);
+  assert.equal(spotLabel(odd, 2, 0, 5), "5 / 5");
+  assert.equal(spotLabel(one, -1, 3, 5), "4 / 5");
 });

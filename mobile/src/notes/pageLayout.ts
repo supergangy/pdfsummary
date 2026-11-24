@@ -89,6 +89,14 @@ export function nearestSpread(spreads: number[], x: number, y: number): number {
   return best;
 }
 
+/** 움직이는 동안 보이는 '3 / 12' — 두 쪽이 나란한 묶음이면 '3–4 / 12'. 묶음을 아직 모르면 지금 쓰는 쪽 */
+export function spotLabel(L: Pick<DocLayout, "spreadPages">, spread: number, activeIdx: number, count: number): string {
+  const a = spread >= 0 ? L.spreadPages[spread * 2] : undefined;
+  const b = spread >= 0 ? L.spreadPages[spread * 2 + 1] : undefined;
+  if (a === undefined || b === undefined) return `${Math.min(Math.max(0, activeIdx), count - 1) + 1} / ${count}`;
+  return a === b ? `${a + 1} / ${count}` : `${a + 1}–${b + 1} / ${count}`;
+}
+
 /** 이 네모(문서 좌표)에 걸치는 쪽 번호 범위 [처음, 끝]. 하나도 없으면 [-1, -1] */
 export function pagesIn(rects: number[], x0: number, y0: number, x1: number, y1: number): [number, number] {
   "worklet";

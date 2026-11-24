@@ -21,7 +21,7 @@ import { useTheme } from "../ui";
 import { penDoubleClick } from "./editor-logic";
 import { straighten } from "./geometry";
 import type { Ink, LineDash, Page, Stroke } from "./model";
-import { docLayout, nearestSpread, pageAt, pagesIn, pageTurnTarget, type DocLayout, type PageFlow } from "./pageLayout";
+import { docLayout, nearestSpread, pageAt, pagesIn, pageTurnTarget, spotLabel, type DocLayout, type PageFlow } from "./pageLayout";
 import { inkPicture, paperPicture, usePaperFont, type Fade, type PathCache } from "./render";
 
 export type ToolName = "pen" | "highlighter" | "eraser" | "lasso" | "text";
@@ -257,13 +257,15 @@ export function PageCanvas(props: Props) {
   });
 
   // ── 지금 어디쯤인지: 움직이는 동안 오른쪽(가로 넘김이면 아래)에 막대와 '3 / 12' ──
-  const [spotPage, setSpotPage] = useState(activeIdx);
+  // 화면 가운데에서 가장 가까운 묶음(한 쪽 또는 나란한 두 쪽)으로 센다.
+  // (가운데 점이 든 쪽으로 세면 두 쪽 보기에서는 가운데가 두 쪽 사이 틈이라 번호가 1에 멈춰 있었다)
+  const [spotSpread, setSpotSpread] = useState(-1);
   useAnimatedReaction(() => {
     const s = scale.value, W = vw.value, H = vh.value;
     if (!W || !H) return -1;
-    return pageAt(rects.value, (W / 2 - tx.value) / s, (H / 2 - ty.value) / s);
+    return nearestSpread(spreads.value, (W / 2 - tx.value) / s, (H / 2 - ty.value) / s);
   }, (cur, prev) => {
-    if (cur >= 0 && cur !== prev) scheduleOnRN(setSpotPage, cur);
+    if (cur >= 0 && cur !== prev) scheduleOnRN(setSpotSpread, cur);
   });
 
   // ── 입력 ────────────────────────────────────────────────
@@ -743,7 +745,7 @@ export function PageCanvas(props: Props) {
         {selIdx >= 0 && sel ? (
           <TextLayer strokes={selStrokes.filter((s) => sel.ids.has(s.id))} hidden={hidden} page={pages[selIdx]} ox={selX} oy={selY} tx={tx} ty={ty} scale={scale} dx={dragX} dy={dragY} />
         ) : null}
-        <ScrollSpot tx={tx} ty={ty} scale={scale} vw={vw} vh={vh} docW={docW} docH={docH} vertical={flow === "v"} moving={moving} label={`${Math.min(spotPage, pages.length - 1) + 1} / ${pages.length}`} />
+        <ScrollSpot tx={tx} ty={ty} scale={scale} vw={vw} vh={vh} docW={docW} docH={docH} vertical={flow === "v"} moving={moving} label={spotLabel(L, spotSpread, activeIdx, pages.length)} />
       </View>
     </GestureDetector>
     </StylusView>

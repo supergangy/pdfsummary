@@ -197,3 +197,21 @@ test("a short flat line or a dot with no text under it is a mark, not handwritin
   assert.deepEqual(items.map((i) => i.kind), ["mark", "mark"]);
   assert.match(quickHtml({ title: "t", pages: [{ page: 0, items }] }), /표시 2/);
 });
+
+test("요약을 글로 (복사·카톡·메모 앱으로): 쪽마다, 칠한 부분은 【 】, 글 없는 표시는 빼고", async () => {
+  const { quickText } = await import("./quick.ts");
+  const chars = line("효소는 촉매이다. 경쟁적 저해제는 결합한다.");
+  const hl = S("h", "highlighter", [152, 106, 0.5, 218, 106, 0.5], 12, "#FFE14D");
+  const memo: Stroke = { id: "m", tool: "text", color: "#000000", width: 16, pts: [0, 300, 0, 100, 330, 0], text: "시험에\n나옴" };
+  const dot = S("d", "pen", [400, 400, 0.5, 403, 401, 0.5]);
+  const items = analyzePage(4, [hl, memo, dot], chars);
+  const text = quickText({ title: "생물", overview: "효소 이야기", pages: [{ page: 4, items }] });
+  assert.equal(text, ["생물 요약", "형광펜 1 · 메모 1", "", "개요: 효소 이야기", "", "[5쪽]", "• 【경쟁적 저해제】는 결합한다.", "• 메모: 시험에 나옴"].join("\n"));
+  assert.match(quickText({ title: "빈", pages: [] }), /필기한 부분이 없어요/);
+});
+
+test("서버 요약(Markdown)을 글로: 그림·굵게·HTML 꼬리표 빼기, ==강조==는 【 】", async () => {
+  const { markdownText } = await import("./quick.ts");
+  const md = "# 생물\n\n\n\n## 1장\n- **효소**는 ==촉매==다 <mark>x</mark>\n- ![손글씨](img/a.png)\n";
+  assert.equal(markdownText(md), "# 생물\n\n## 1장\n- 효소는 【촉매】다 x\n- (그림)");
+});

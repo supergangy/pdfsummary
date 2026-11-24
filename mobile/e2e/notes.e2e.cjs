@@ -88,7 +88,7 @@ print(json.dumps({'w': p.rect.width, 'h': p.rect.height, 'r': [r.x0, r.y0, r.x1,
 
   // 녹음 시험용 가짜 마이크 (허락 창 없이)
   const browser = await chromium.launch({ args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"] });
-  const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, acceptDownloads: true, permissions: ["microphone"] });
+  const ctx = await browser.newContext({ viewport: { width: 1180, height: 820 }, acceptDownloads: true, permissions: ["microphone", "clipboard-read", "clipboard-write"] });
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -774,12 +774,23 @@ print(json.dumps([len(ys), (max(ys) - min(ys)) / k if ys else 0]))`, liveShot], 
     if (!quick.includes("경쟁적 저해제")) fail("기기에서 만든 요약에 칠한 글자가 없음");
     if (!/<mark[^>]*>경쟁적 저해제<\/mark>/.test(quick)) fail("기기 요약에서 칠한 부분이 강조되지 않음");
     if (!quick.includes("기질과 구조가 비슷하여")) fail("기기 요약에 앞뒤 문장이 없음");
-    console.log("✓ 기기에서 바로 요약: 칠한 글자와 그 문장");
+    // 복사: 붙여 넣기 좋은 글 (칠한 부분은 【 】) / 공유: 글로·PDF로·웹페이지로
+    await page.getByLabel("요약 글 복사").click();
+    await page.getByText(/요약 글을 복사했어요/).waitFor({ timeout: 5000 });
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    if (!copied.includes("【경쟁적 저해제】") || !/[1쪽]/.test(copied)) fail("요약 복사: 칠한 부분이 【 】로 든 글이 아님: " + copied.slice(0, 120));
+    await page.getByLabel("요약 공유").click();
+    for (const o of ["글로 보내기", "PDF로 보내기", "웹페이지(HTML)로 보내기"]) if (!(await page.getByLabel(o, { exact: true }).count())) fail("요약 공유 창에  + o + 이 없음");
+    const [dlq] = await Promise.all([page.waitForEvent("download"), page.getByLabel("웹페이지(HTML)로 보내기", { exact: true }).click()]);
+    const qhtml = path.join(TMP, "quick.html");
+    await dlq.saveAs(qhtml);
+    if (!fs.readFileSync(qhtml, "utf8").includes("경쟁적 저해제")) fail("요약을 웹페이지로 보냈는데 내용이 없음");
+    console.log("✓ 기기에서 바로 요약: 칠한 글자와 그 문장 / 복사(【 】 표시)·공유 창(글·PDF·웹페이지)");
     await page.getByText("서버로 자세히", { exact: true }).click();
     await page.getByText(/“경쟁적 저해제”/).waitFor({ timeout: 30000 });
     if (await page.getByText(/기질 특이성/).count()) fail("책에 인쇄된 강조가 내 형광펜 색으로 잡힘");
     await page.getByText("요약 만들기", { exact: true }).click();
-    await page.getByText("공유 (HTML)").waitFor({ timeout: 90000 });
+    await page.getByLabel("요약 공유").waitFor({ timeout: 90000 });
     await page.waitForTimeout(1000);
     let found = false;
     for (const f of page.frames()) {
@@ -788,7 +799,13 @@ print(json.dumps([len(ys), (max(ys) - min(ys)) / k if ys else 0]))`, liveShot], 
       } catch {}
     }
     if (!found) fail("요약 결과에 칠한 글자가 없음");
-    console.log("✓ PDF 노트: 형광펜 → 요약 결과에 '경쟁적 저해제'");
+    await page.getByLabel("요약 글 복사").click();
+    await page.getByText(/요약 글을 복사했어요/).waitFor({ timeout: 10000 });
+    if (!(await page.evaluate(() => navigator.clipboard.readText())).includes("경쟁적 저해제")) fail("서버 요약 복사에 칠한 글자가 없음");
+    await page.getByLabel("요약 공유").click();
+    if (!(await page.getByLabel("Markdown·이미지 (zip)", { exact: true }).count())) fail("서버 요약 공유 창에 Markdown 묶음이 없음");
+    await page.getByText("닫기", { exact: true }).last().click();
+    console.log("✓ PDF 노트: 형광펜 → 요약 결과에 '경쟁적 저해제' / 서버 요약 복사·공유 창");
 
     // ── 나만의 노트: 기기 요약을 다듬어 새 노트로 ──
     await page.getByText("노트로", { exact: true }).click();

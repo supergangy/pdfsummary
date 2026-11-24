@@ -21,6 +21,8 @@ import { buildPdf, needsKoreanFont } from "./src/notes/exportPdf";
 import { koreanFont } from "./src/notes/fontBytes";
 import { bigPdfMessage } from "./src/notes/net-errors";
 import { shareNotePdf } from "./src/notes/exportNote";
+import { SummaryShare } from "./src/notes/SummaryShare";
+import { markdownText } from "./src/notes/quick";
 import { deviceFs } from "./src/notes/fs";
 import { importPdf } from "./src/notes/importPdf";
 import { Library } from "./src/notes/Library";
@@ -306,7 +308,6 @@ function Main({ note, onBack, startWithSettings }: { note?: NoteInput; onBack: (
   const [job, setJob] = useState<{ id: string; state?: JobState } | null>(null);
   const [html, setHtml] = useState<string | null>(null);
   const [runErr, setRunErr] = useState("");
-  const [sharing, setSharing] = useState<string | null>(null);
   const colorsReq = useRef(0);
   const [device, setDevice] = useState<DeviceAi.DeviceAiStatus | null>(null);
   const [deviceProg, setDeviceProg] = useState<{ done: number; total: number; title: string; download?: number | null } | null>(null);
@@ -496,20 +497,6 @@ function Main({ note, onBack, startWithSettings }: { note?: NoteInput; onBack: (
     }
   }
 
-  async function share(file: "요약.html" | "요약.zip") {
-    if (!job) return;
-    setSharing(file);
-    try {
-      const stem = (main?.info?.name ?? "요약").replace(/\.pdf$/i, "");
-      await shareResult(settings, job.id, file, stem);
-    } catch (e) {
-      if (Platform.OS === "web") setRunErr((e as Error).message);
-      else Alert.alert("공유하지 못했어요", (e as Error).message);
-    } finally {
-      setSharing(null);
-    }
-  }
-
   // ── 결과 화면 ────────────────────────────────────────────
   if (html && job) {
     return (
@@ -521,8 +508,14 @@ function Main({ note, onBack, startWithSettings }: { note?: NoteInput; onBack: (
             <Button kind="link" label={note ? "노트로" : "노트 목록"} onPress={onBack} />
           </View>
           <View style={s.resultActions}>
-            <Button small label="Markdown·이미지 (zip)" onPress={() => share("요약.zip")} busy={sharing === "요약.zip"} />
-            <Button small label="공유 (HTML)" onPress={() => share("요약.html")} busy={sharing === "요약.html"} />
+            {/* 복사 · 공유(글로·PDF로·웹페이지로·Markdown 묶음) */}
+            <SummaryShare
+              name={`${(main?.info?.name ?? "요약").replace(/.pdf$/i, "")} 요약`}
+              text={async () => markdownText(await client.resultText(job.id, "요약.md"))}
+              html={() => html}
+              extra={[{ label: "Markdown·이미지 (zip)", hint: "노션·옵시디언에 넣기 좋은 묶음", run: () => shareResult(settings, job.id, "요약.zip", (main?.info?.name ?? "요약").replace(/.pdf$/i, "")) }]}
+              onMessage={(m) => setNotice(m)}
+            />
           </View>
         </View>
         {!!notice && (

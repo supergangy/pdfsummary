@@ -401,6 +401,43 @@ export function overviewPrompt(q: QuickSummary, limit = 1600): { instructions: s
   };
 }
 
+// ── 글(복사·카톡·메모 앱으로 보내기) ───────────────────────────────────
+
+/** 요약을 그대로 붙여 넣을 수 있는 글로. 칠한(표시한) 부분은 【 】로 감싼다 */
+export function quickText(q: QuickSummary): string {
+  const count = (k: QuickKind) => q.pages.reduce((n, p) => n + p.items.filter((i) => i.kind === k).length, 0);
+  const stats = (["highlight", "underline", "circle", "handwriting", "memo"] as QuickKind[]).filter((k) => count(k)).map((k) => `${LABEL[k]} ${count(k)}`).join(" · ");
+  const out = [`${q.title} 요약`];
+  if (stats) out.push(stats);
+  if (q.overview) out.push("", `개요: ${q.overview}`);
+  for (const { page, items } of q.pages) {
+    const lines: string[] = [];
+    for (const it of items) {
+      let t: string;
+      if (it.sentence && it.text) t = `${it.sentence.before}【${it.sentence.mark}】${it.sentence.after}`.trim();
+      else if (it.kind === "memo") t = `메모: ${it.text}`;
+      else if (it.kind === "handwriting") t = it.text ? `손글씨: ${it.text}` : "손글씨 (그림)";
+      else if (it.text) t = it.text;
+      else continue; // 글이 없는 표시(점·짧은 줄)는 뺀다
+      lines.push(`• ${t.replace(/\s*\n\s*/g, " ")}`);
+    }
+    if (lines.length) out.push("", `[${page + 1}쪽]`, ...lines);
+  }
+  if (out.length <= 2) out.push("", "필기한 부분이 없어요.");
+  return out.join("\n");
+}
+
+/** 서버 요약(Markdown)을 붙여 넣기 좋은 글로: 그림은 '(그림)', 굵게·강조 기호와 HTML 꼬리표는 뺀다 */
+export function markdownText(md: string): string {
+  return md
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, "(그림)")
+    .replace(/<[^>\n]+>/g, "")
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/==([^=\n]+)==/g, "【$1】")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 // ── HTML ──────────────────────────────────────────────────────────────
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);

@@ -11,8 +11,8 @@ import { Bar, Button, Hint, type, useTheme } from "../ui";
 import { tooSoon } from "./app-nav";
 import type { Ink, Notebook } from "./model";
 import { MyNoteMaker } from "./MyNoteMaker";
-import { overviewPrompt, quickHtml, quickSummary, type QuickSummary, splitInkLines } from "./quick";
-import { shareFile } from "./shareFile";
+import { overviewPrompt, quickHtml, quickSummary, quickText, type QuickSummary, splitInkLines } from "./quick";
+import { SummaryShare } from "./SummaryShare";
 import type { NoteStore } from "./store";
 
 type Props = { nb: Notebook; ink: Ink; store: NoteStore; onBack: () => void; onServerSummary: () => void; onOpenNote: (id: string) => void };
@@ -139,7 +139,14 @@ export function QuickScreen({ nb, ink, store, onBack, onServerSummary, onOpenNot
           {inkAvailable && ink2 === "downloadable" && hwCount > 0 && (
             <Button small label="손글씨 인식 켜기 (약 20MB)" onPress={getInkModel} disabled={!!prog} />
           )}
-          <Button small label="공유 (HTML)" onPress={() => void shareFile(html, `${nb.title} 요약.html`, "text/html")} disabled={!q} />
+          {/* 복사 · 공유(글로·PDF로·웹페이지로) */}
+          <SummaryShare
+            name={`${nb.title} 요약`}
+            text={() => (q ? quickText(q) : "")}
+            html={() => html}
+            disabled={!q}
+            onMessage={(m, bad) => (bad ? setErr(m) : setNote(m))}
+          />
           <Button small label="서버로 자세히" onPress={serverSummary} />
           {/* 손글씨를 다 읽은 뒤에 (읽는 중에 만들면 메모가 빠진다) */}
           <Button small kind="primary" label="나만의 노트" onPress={() => setMaking(true)} disabled={!q || !!prog} />
